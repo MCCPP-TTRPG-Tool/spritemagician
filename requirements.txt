@@ -6,11 +6,12 @@ requests>=2.31.0
 pillow>=10.0.0
 numpy<2
 
-# Diffusers with SVD support
-diffusers>=0.27.0
-transformers>=4.38.0
-accelerate>=0.27.0
-huggingface-hub>=0.21.0
+# Diffusers - pin to 0.25.1 to avoid torch.xpu AttributeError
+# Newer versions try to use Intel XPU which causes import errors
+diffusers==0.25.1
+transformers>=4.36.0,<4.39.0
+accelerate>=0.25.0,<0.28.0
+huggingface-hub>=0.20.0,<0.22.0
 
 # Video processing
 imageio>=2.31.0
