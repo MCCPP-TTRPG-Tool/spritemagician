@@ -1,5 +1,6 @@
 # RunPod Serverless Handler for SVD
-FROM runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel
+# Using CUDA 12.1 for better GPU compatibility (supports newer GPUs like A100, H100, RTX 4090)
+FROM runpod/pytorch:2.2.0-py3.10-cuda12.1.1-devel-ubuntu22.04
 
 WORKDIR /app
 
