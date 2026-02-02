@@ -1,5 +1,6 @@
 """
 RunPod Serverless Handler for Wan 2.5 Video Generation
+Supports base64 image uploads directly
 """
 import runpod
 import requests
