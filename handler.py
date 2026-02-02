@@ -78,7 +78,8 @@ def handler(event):
             }
         )
         
-        if response.status_code != 200:
+        # Replicate returns 201 (Created) for successful prediction creation, 200 for other success
+        if response.status_code not in [200, 201]:
             error_text = response.text
             try:
                 error_json = response.json()
