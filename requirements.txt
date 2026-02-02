@@ -1,12 +1,16 @@
+# RunPod SVD Handler Dependencies
+# Note: torch/torchvision are in the base image, don't reinstall
+
 runpod>=1.0.0
 requests>=2.31.0
 pillow>=10.0.0
+
+# Diffusers and dependencies
 diffusers>=0.27.0
 transformers>=4.40.0
 accelerate>=0.30.0
-torch>=2.1.0
-torchvision>=0.16.0
-opencv-python>=4.8.0
+
+# Video processing
 imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
-xformers>=0.0.23
+opencv-python-headless>=4.8.0

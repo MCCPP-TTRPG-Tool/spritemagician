@@ -1,100 +1,105 @@
-# RunPod Self-Hosting Setup
+# RunPod Self-Hosting Setup (SVD)
 
-## Quick Setup Steps
+## Overview
 
-### 1. Files Added to Your Repo
-- `handler.py` - RunPod serverless handler
-- `Dockerfile` - Container configuration
+This setup runs **Stable Video Diffusion (SVD)** locally on RunPod.
+- **No Replicate calls** - runs entirely on your GPU
+- **No per-generation costs** - pay only for GPU time
+- **Model pre-downloaded** - fast first request
 
-### 2. RunPod Configuration
+## Files
 
-Your endpoint is already created: `spritemagician` (ID: `59170siiz63kid`)
+- `handler.py` - RunPod serverless handler (runs SVD locally)
+- `Dockerfile` - Container with pre-downloaded model
+- `requirements.txt` - Python dependencies
 
-**Status:** Currently "Waiting for Build"
+## Setup Steps
 
-### 3. Environment Variables
+### 1. RunPod Endpoint
 
-Add these to your RunPod endpoint settings:
+Your endpoint: `spritemagician` (ID: `59170siiz63kid`)
 
-1. Go to your endpoint → **Settings** → **Environment Variables**
-2. Add:
-   - `REPLICATE_API_TOKEN` = Your Replicate API token (handler uses this for now)
-
-### 4. Get Your RunPod API Key
+### 2. Get RunPod API Key
 
 1. Go to RunPod → **Settings** → **API Keys**
 2. Create a new API key
 3. Copy it
 
-### 5. Update Your App's `.env`
+### 3. Update Your `.env`
 
 Add to your local `.env` file:
 
 ```env
-# RunPod Self-Hosting (use endpoint ID from RunPod dashboard)
 WAN_SELF_HOSTED_URL=59170siiz63kid
 RUNPOD_API_KEY=your_runpod_api_key_here
-
-# Still needed for handler (until we load model locally)
-REPLICATE_API_TOKEN=your_replicate_token
 ```
 
-### 6. Deploy
+### 4. Deploy
 
-1. **Commit and push** `handler.py` and `Dockerfile` to your GitHub repo
-2. RunPod will **auto-build** from your GitHub
-3. Wait for build to complete (check RunPod dashboard)
-4. Test generation in your app
+1. Push changes to GitHub
+2. RunPod auto-builds from GitHub
+3. Wait for build (5-10 minutes - model download included)
+4. Test in your app
 
-### 7. Test
+### 5. Test
 
-1. Select **Wan 2.5** model in your app
+1. Select **SVD (Self-Hosted)** in your app
 2. Generate an animation
 3. Check RunPod logs if issues occur
 
 ---
 
-## Current Setup (Proxy Mode)
+## GPU Requirements
 
-**Note:** The handler currently proxies to Replicate API. This still saves money because:
-- RunPod charges per second of compute (~$0.00019/s)
-- Replicate charges per API call (~$0.05/call)
-- **Savings:** ~88% cheaper
-
-## Future: True Self-Hosting
-
-To actually load the Wan 2.5 model locally (bigger savings, no Replicate needed):
-1. Update `handler.py` to load model weights
-2. Requires more GPU memory (48GB+ recommended)
-3. Slower cold starts but unlimited free generations
-
----
+- **Minimum**: 16GB VRAM (RTX 4080, A4000)
+- **Recommended**: 24GB VRAM (RTX 4090, A5000, L4)
+- **Best**: 48GB+ VRAM (A100, H100)
 
 ## Troubleshooting
 
-**Build fails?**
+### Build fails?
 - Check RunPod **Builds** tab for error logs
-- Verify `handler.py` and `Dockerfile` are in repo root
-- Ensure GitHub repo is connected correctly
+- Verify Dockerfile and handler.py are in repo root
 
-**Handler crashes?**
-- Check RunPod **Logs** tab for error messages
-- Verify `REPLICATE_API_TOKEN` is set in endpoint environment variables
-- Check that handler receives correct input format
+### Stuck on "Initializing"?
+- Model may still be loading
+- Check if GPU has enough VRAM
+- Check RunPod **Logs** tab for errors
 
-**Generation fails?**
-- Check RunPod endpoint **Logs** tab
-- Verify `REPLICATE_API_TOKEN` is valid
-- Check RunPod API key has correct permissions
-- Look for error messages in handler response
+### Out of VRAM?
+- Reduce `num_frames` (max 25)
+- Use a GPU with more VRAM
+- Model needs ~12GB VRAM minimum
 
-**No video returned?**
+### Generation timeout?
+- SVD takes 60-120s on 24GB GPU
+- Increase RunPod timeout setting
+- Check logs for specific errors
+
+### No video returned?
 - Check handler response in RunPod logs
-- Verify Replicate prediction completed successfully
-- Check that video URL is in response format
+- Video is returned as base64 data URL
+- Large videos may timeout
 
-**Common Issues:**
-- **"REPLICATE_API_TOKEN not set"** → Add token to RunPod endpoint environment variables
-- **"Image URL is required"** → Check input format matches handler expectations
-- **"Generation timed out"** → Replicate job took too long (increase timeout or check Replicate status)
+---
 
+## Performance
+
+| GPU | Generation Time |
+|-----|-----------------|
+| RTX 4090 (24GB) | ~60-90s |
+| A5000 (24GB) | ~60-90s |
+| A100 (80GB) | ~30-45s |
+| H100 (80GB) | ~20-30s |
+
+---
+
+## Cost Comparison
+
+| Method | Cost per Generation |
+|--------|---------------------|
+| Replicate SVD | ~$0.05 |
+| RunPod (24GB) | ~$0.02 |
+| RunPod (80GB) | ~$0.04 |
+
+**Savings**: 50-60% cheaper than Replicate
