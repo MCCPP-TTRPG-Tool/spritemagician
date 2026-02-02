@@ -12,7 +12,6 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { REPLICATE_API_TOKEN } from '$env/static/private';
 import { env } from '$env/dynamic/private';
 import { setProgress, clearProgress } from '$lib/utils/generationProgress.js';
 import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
@@ -101,7 +100,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			const response = await fetch('https://api.replicate.com/v1/predictions', {
 				method: 'POST',
 				headers: {
-					'Authorization': `Token ${REPLICATE_API_TOKEN}`,
+					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
 					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({
@@ -132,7 +131,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				await new Promise(resolve => setTimeout(resolve, 2000));
 
 				const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-					headers: { 'Authorization': `Token ${REPLICATE_API_TOKEN}` }
+					headers: { 'Authorization': `Token ${env.REPLICATE_API_TOKEN}` }
 				});
 
 				const status = await statusResponse.json();
@@ -266,7 +265,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		const response = await fetch(apiUrl, {
 			method: 'POST',
 			headers: {
-				'Authorization': `Token ${REPLICATE_API_TOKEN}`,
+				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
 				'Content-Type': 'application/json'
 			},
 			body: body
@@ -292,7 +291,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			
 			const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
 				headers: {
-					'Authorization': `Token ${REPLICATE_API_TOKEN}`
+					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 				}
 			});
 			
@@ -355,7 +354,7 @@ export async function POST({ request }) {
 			return json({ error: 'Reference image is required. Upload an image first.' }, { status: 400 });
 		}
 
-		if (!REPLICATE_API_TOKEN) {
+		if (!env.REPLICATE_API_TOKEN) {
 			return json({ error: 'Replicate API token not configured' }, { status: 500 });
 		}
 

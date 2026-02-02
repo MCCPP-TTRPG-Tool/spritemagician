@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { GEMINI_API_KEY } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { setProgress, clearProgress } from '$lib/utils/generationProgress.js';
 
 /**
@@ -80,7 +80,7 @@ CRITICAL RULES:
 
 At ${progressPercent}% through a "${prompt}" animation, the character should be in the ${phase}.`;
 
-					const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${GEMINI_API_KEY}`, {
+					const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
 						method: 'POST',
 						headers: {
 							'Content-Type': 'application/json'
@@ -198,7 +198,7 @@ export async function POST({ request }) {
 			return json({ error: 'Last frame is required for interpolation mode' }, { status: 400 });
 		}
 
-		if (!GEMINI_API_KEY) {
+		if (!env.GEMINI_API_KEY) {
 			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
 		}
 

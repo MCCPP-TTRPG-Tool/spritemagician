@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { REPLICATE_API_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 /**
  * List available image-to-video models on Replicate
@@ -87,7 +87,7 @@ export async function GET() {
 		try {
 			const response = await fetch(`https://api.replicate.com/v1/models/${model.model}`, {
 				headers: {
-					'Authorization': `Token ${REPLICATE_API_TOKEN}`
+					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 				}
 			});
 			

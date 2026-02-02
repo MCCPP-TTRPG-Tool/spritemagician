@@ -4,7 +4,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { REPLICATE_API_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 
 // rembg model for background removal
@@ -17,7 +17,7 @@ async function removeBackground(imageUrl) {
 	const response = await fetch('https://api.replicate.com/v1/predictions', {
 		method: 'POST',
 		headers: {
-			'Authorization': `Token ${REPLICATE_API_TOKEN}`,
+			'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
 			'Content-Type': 'application/json'
 		},
 		body: JSON.stringify({
@@ -45,7 +45,7 @@ async function removeBackground(imageUrl) {
 		
 		const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
 			headers: {
-				'Authorization': `Token ${REPLICATE_API_TOKEN}`
+				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 			}
 		});
 		
@@ -77,7 +77,7 @@ export async function POST({ request }) {
 			return json({ error: 'Images array is required' }, { status: 400 });
 		}
 
-		if (!REPLICATE_API_TOKEN) {
+		if (!env.REPLICATE_API_TOKEN) {
 			return json({ error: 'Replicate API token not configured' }, { status: 500 });
 		}
 

@@ -5,17 +5,17 @@
 import { json } from '@sveltejs/kit';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
-import { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY, FIREBASE_STORAGE_BUCKET } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 function initFirebase() {
 	if (getApps().length === 0) {
 		initializeApp({
 			credential: cert({
-				projectId: FIREBASE_PROJECT_ID,
-				clientEmail: FIREBASE_CLIENT_EMAIL,
-				privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+				projectId: env.FIREBASE_PROJECT_ID,
+				clientEmail: env.FIREBASE_CLIENT_EMAIL,
+				privateKey: env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n')
 			}),
-			storageBucket: FIREBASE_STORAGE_BUCKET || `${FIREBASE_PROJECT_ID}.firebasestorage.app`
+			storageBucket: env.FIREBASE_STORAGE_BUCKET || `${env.FIREBASE_PROJECT_ID}.firebasestorage.app`
 		});
 	}
 	return getStorage().bucket();

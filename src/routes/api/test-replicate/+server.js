@@ -8,7 +8,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { REPLICATE_API_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 // Known working models on Replicate
 const MODELS = {
@@ -29,7 +29,7 @@ const MODELS = {
  * Test Replicate API connection and model availability
  */
 export async function GET() {
-	if (!REPLICATE_API_TOKEN) {
+	if (!env.REPLICATE_API_TOKEN) {
 		return json({ error: 'REPLICATE_API_TOKEN not configured' }, { status: 500 });
 	}
 	
@@ -42,7 +42,7 @@ export async function GET() {
 		// Test API connection
 		const response = await fetch('https://api.replicate.com/v1/models', {
 			headers: {
-				'Authorization': `Token ${REPLICATE_API_TOKEN}`
+				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 			}
 		});
 		
@@ -61,7 +61,7 @@ export async function GET() {
 				
 				const modelResponse = await fetch(`https://api.replicate.com/v1/models/${modelPath}`, {
 					headers: {
-						'Authorization': `Token ${REPLICATE_API_TOKEN}`
+						'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 					}
 				});
 				
@@ -98,7 +98,7 @@ export async function GET() {
  * Test generation with a specific model
  */
 export async function POST({ request }) {
-	if (!REPLICATE_API_TOKEN) {
+	if (!env.REPLICATE_API_TOKEN) {
 		return json({ error: 'REPLICATE_API_TOKEN not configured' }, { status: 500 });
 	}
 	
@@ -117,7 +117,7 @@ export async function POST({ request }) {
 		const response = await fetch('https://api.replicate.com/v1/predictions', {
 			method: 'POST',
 			headers: {
-				'Authorization': `Token ${REPLICATE_API_TOKEN}`,
+				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`,
 				'Content-Type': 'application/json'
 			},
 			body: JSON.stringify({
@@ -143,7 +143,7 @@ export async function POST({ request }) {
 			
 			const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
 				headers: {
-					'Authorization': `Token ${REPLICATE_API_TOKEN}`
+					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
 				}
 			});
 			

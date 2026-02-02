@@ -6,7 +6,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { GEMINI_API_KEY, REPLICATE_API_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 export async function POST({ request }) {
 	try {
@@ -20,7 +20,7 @@ export async function POST({ request }) {
 			return json({ error: 'Pose description is required' }, { status: 400 });
 		}
 
-		if (!GEMINI_API_KEY) {
+		if (!env.GEMINI_API_KEY) {
 			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
 		}
 
@@ -67,7 +67,7 @@ IMPORTANT: If the new pose looks identical to the reference, you have FAILED. Th
 		console.log('Generating pose with Gemini (Nano Banana):', poseDescription);
 
 		// Call Gemini API
-		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${GEMINI_API_KEY}`, {
+		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json'
@@ -137,12 +137,12 @@ IMPORTANT: If the new pose looks identical to the reference, you have FAILED. Th
 		// Remove background for transparent pose using Replicate rembg
 		let finalImage = generatedImage;
 		
-		if (REPLICATE_API_TOKEN) {
+		if (env.REPLICATE_API_TOKEN) {
 			try {
 				const bgRemovalResponse = await fetch('https://api.replicate.com/v1/predictions', {
 					method: 'POST',
 					headers: {
-						'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
+						'Authorization': `Bearer ${env.REPLICATE_API_TOKEN}`,
 						'Content-Type': 'application/json'
 					},
 					body: JSON.stringify({
@@ -169,7 +169,7 @@ IMPORTANT: If the new pose looks identical to the reference, you have FAILED. Th
 						await new Promise(resolve => setTimeout(resolve, 1000));
 						
 						const statusResponse = await fetch(prediction.urls.get, {
-							headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
+							headers: { 'Authorization': `Bearer ${env.REPLICATE_API_TOKEN}` }
 						});
 						
 						if (statusResponse.ok) {
@@ -199,7 +199,7 @@ IMPORTANT: If the new pose looks identical to the reference, you have FAILED. Th
 				console.error('Background removal error:', bgError.message);
 			}
 		} else {
-			console.warn('REPLICATE_API_TOKEN not set, skipping background removal');
+			console.warn('env.REPLICATE_API_TOKEN not set, skipping background removal');
 		}
 
 		return json({ 

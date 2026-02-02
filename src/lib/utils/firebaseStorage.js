@@ -1,6 +1,6 @@
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
-import { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY, FIREBASE_STORAGE_BUCKET } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 
 let storage;
 
@@ -9,17 +9,22 @@ let storage;
  */
 function initFirebase() {
 	if (getApps().length === 0) {
-		if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+		const projectId = env.FIREBASE_PROJECT_ID;
+		const clientEmail = env.FIREBASE_CLIENT_EMAIL;
+		const privateKey = env.FIREBASE_PRIVATE_KEY;
+		const storageBucket = env.FIREBASE_STORAGE_BUCKET;
+
+		if (!projectId || !clientEmail || !privateKey) {
 			throw new Error('Firebase credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env');
 		}
 
 		initializeApp({
 			credential: cert({
-				projectId: FIREBASE_PROJECT_ID,
-				clientEmail: FIREBASE_CLIENT_EMAIL,
-				privateKey: FIREBASE_PRIVATE_KEY.replace(/\\n/g, '\n')
+				projectId,
+				clientEmail,
+				privateKey: privateKey.replace(/\\n/g, '\n')
 			}),
-			storageBucket: FIREBASE_STORAGE_BUCKET || `${FIREBASE_PROJECT_ID}.firebasestorage.app`
+			storageBucket: storageBucket || `${projectId}.firebasestorage.app`
 		});
 	}
 
