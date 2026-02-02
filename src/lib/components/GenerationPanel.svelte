@@ -41,6 +41,11 @@
 			description: '2D fantasy game sprite, melee attack animation, body twists with power, weight shifts forward, weapon swing motion, striking pose, facial expression shows aggression, combat action, powerful dynamic movement, lifelike attack motion, static camera, single attack cycle, game asset quality'
 		},
 		{ 
+			id: 'walk', 
+			name: 'Walking', 
+			description: '2D fantasy game sprite, walking cycle animation, side view facing right, smooth walking motion, legs alternate in natural stride, arms swing opposite to legs, body bobs gently up and down, weight shifts from foot to foot, consistent pace, smooth continuous movement, no jitter or spazzing, controlled motion, static camera, looping walk cycle, game asset quality'
+		},
+		{ 
 			id: 'hit', 
 			name: 'Take Damage', 
 			description: '2D fantasy game sprite, damage reaction animation, body recoils dramatically, flinching motion, pain expression on face, body staggers backward, lifelike reaction, natural flinch response, static camera, quick recovery, game asset quality'
@@ -58,9 +63,10 @@
 	];
 	
 	// Available video models (★ = can self-host)
-	let selectedModel = $state('wan25');
+	let selectedModel = $state('svd');
 	const videoModels = [
-		{ id: 'wan25', name: '★ Wan 2.5', speed: '30-60s', quality: 'Self-hostable' },
+		{ id: 'svd', name: '★ SVD (Self-Hosted)', speed: '60-120s', quality: 'No Replicate' },
+		{ id: 'wan25', name: 'Wan 2.5', speed: '30-60s', quality: 'Replicate' },
 		{ id: 'hailuo', name: 'Hailuo 2.3', speed: '20-40s', quality: 'Best quality' },
 		{ id: 'live2d', name: 'Live2D', speed: '20-40s', quality: '2D focused' },
 		{ id: 'ltxv', name: 'LTX Video', speed: '15-30s', quality: 'Not working' }
@@ -107,39 +113,52 @@
 						console.log(`Loop created: ${rawFrames.length} frames`);
 					}
 					
-					// Step 3: Remove backgrounds (if enabled)
+					// Step 3: Remove backgrounds (if enabled) - PARALLEL PROCESSING
 					let finalFrames = rawFrames;
 					
 					if (removeBackground) {
 						const totalFrames = rawFrames.length;
 						progress = { ...progress, message: `Removing backgrounds (0/${totalFrames})...` };
 						
-						const transparentFrames = [];
-						for (let i = 0; i < rawFrames.length; i++) {
-							progress = { ...progress, message: `Removing BG (${i + 1}/${totalFrames})...` };
+						// Process in parallel batches for speed
+						const batchSize = 5; // Process 5 frames at a time
+						const transparentFrames = new Array(totalFrames);
+						
+						for (let batchStart = 0; batchStart < totalFrames; batchStart += batchSize) {
+							const batchEnd = Math.min(batchStart + batchSize, totalFrames);
+							const batch = rawFrames.slice(batchStart, batchEnd);
 							
-							try {
-								const response = await fetch('/api/remove-background', {
+							progress = { ...progress, message: `Removing BG (${batchEnd}/${totalFrames})...` };
+							
+							// Process batch in parallel
+							const batchPromises = batch.map((frame, batchIndex) => {
+								const frameIndex = batchStart + batchIndex;
+								return fetch('/api/remove-background', {
 									method: 'POST',
 									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ images: [rawFrames[i]] })
-								});
-								
-								if (response.ok) {
-									const result = await response.json();
-									if (result.images && result.images[0]) {
-										transparentFrames.push(result.images[0]);
-									} else {
-										transparentFrames.push(rawFrames[i]);
+									body: JSON.stringify({ images: [frame] })
+								})
+								.then(response => {
+									if (response.ok) {
+										return response.json().then(result => ({
+											index: frameIndex,
+											image: result.images && result.images[0] ? result.images[0] : frame
+										}));
 									}
-								} else {
-									transparentFrames.push(rawFrames[i]);
-								}
-							} catch (bgError) {
-								console.error(`BG removal failed for frame ${i}:`, bgError);
-								transparentFrames.push(rawFrames[i]);
-							}
+									return { index: frameIndex, image: frame };
+								})
+								.catch(error => {
+									console.error(`BG removal failed for frame ${frameIndex}:`, error);
+									return { index: frameIndex, image: frame };
+								});
+							});
+							
+							const batchResults = await Promise.all(batchPromises);
+							batchResults.forEach(result => {
+								transparentFrames[result.index] = result.image;
+							});
 						}
+						
 						finalFrames = transparentFrames;
 					}
 						
@@ -204,9 +223,20 @@
 			const frameCount = Math.round(duration * project.fps);
 			
 			// Build prompt from pose preset
-			const posePrompt = selectedPose === 'custom' 
-				? prompt 
-				: posePresets.find(p => p.id === selectedPose)?.description || selectedPose;
+			let posePrompt;
+			if (selectedPose === 'custom') {
+				// For custom prompts, add context if it mentions walking
+				const lowerPrompt = prompt.toLowerCase();
+				if (lowerPrompt.includes('walk') || lowerPrompt.includes('stride') || lowerPrompt.includes('step')) {
+					// Enhance walking prompts with specific instructions
+					posePrompt = `2D fantasy game sprite, side view facing right, ${prompt}, smooth walking cycle, legs alternate in natural stride, arms swing opposite to legs, body bobs gently, weight shifts from foot to foot, consistent pace, smooth continuous movement, no jitter, no spazzing, controlled motion, static camera, looping animation, game asset quality`;
+				} else {
+					// General custom prompt with sprite context
+					posePrompt = `2D fantasy game sprite, side view facing right, ${prompt}, smooth motion, consistent character, no jitter, static camera, looping animation, game asset quality`;
+				}
+			} else {
+				posePrompt = posePresets.find(p => p.id === selectedPose)?.description || selectedPose;
+			}
 			
 			// Use animation endpoint
 			const response = await fetch('/api/generate-animation', {
@@ -294,7 +324,7 @@
 			<input
 				type="text"
 				bind:value={prompt}
-				placeholder="e.g., 'spinning attack', 'celebration dance'"
+				placeholder="e.g., 'walking cycle, smooth stride, legs alternate, arms swing naturally'"
 				class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
 			/>
 		</div>

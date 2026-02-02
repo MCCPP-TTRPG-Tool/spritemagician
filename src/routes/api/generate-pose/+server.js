@@ -1,16 +1,12 @@
 /**
- * Pose Generation using IP-Adapter on Replicate
+ * Pose Generation using Google Gemini (Nano Banana)
  * 
  * Takes a reference image and generates the same character in a new pose
- * Uses IP-Adapter for character consistency
+ * Uses Gemini's multimodal capabilities for character consistency
  */
 
 import { json } from '@sveltejs/kit';
-import { REPLICATE_API_TOKEN } from '$env/static/private';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
-
-// IP-Adapter SDXL for character-consistent generation
-const IP_ADAPTER_VERSION = 'lucataco/ip_adapter-sdxl:06db9db4f0f4d9d160f54e251c53bfbd84e57c55fe7c32ee55701aea57a4f927';
+import { GEMINI_API_KEY } from '$env/static/private';
 
 export async function POST({ request }) {
 	try {
@@ -24,95 +20,107 @@ export async function POST({ request }) {
 			return json({ error: 'Pose description is required' }, { status: 400 });
 		}
 
-		if (!REPLICATE_API_TOKEN) {
-			return json({ error: 'Replicate API token not configured' }, { status: 500 });
+		if (!GEMINI_API_KEY) {
+			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
 		}
 
-		// Upload reference image to Firebase for public URL
-		let imageUrl;
+		// Extract base64 from data URL if needed
+		let imageBase64 = referenceImage;
 		if (referenceImage.startsWith('data:')) {
-			imageUrl = await uploadImageToFirebase(referenceImage, `pose-ref-${Date.now()}.png`);
+			// Extract base64 part
+			const base64Index = referenceImage.indexOf(',');
+			if (base64Index !== -1) {
+				imageBase64 = referenceImage.substring(base64Index + 1);
+			}
 		} else {
-			imageUrl = referenceImage;
+			// If it's a URL, we'd need to download it first, but for now assume it's base64
+			return json({ error: 'Reference image must be a base64 data URL' }, { status: 400 });
 		}
-
-		console.log('Reference image URL:', imageUrl);
 
 		// Build the prompt for pose generation
-		const prompt = `2D game sprite, side view, facing right, ${poseDescription}, clean lines, game asset, centered, full body, white background`;
-		const negativePrompt = 'blurry, low quality, distorted, multiple characters, cropped, cut off';
+		const prompt = `Generate this exact character in a new pose: ${poseDescription}
 
-		console.log('Generating pose with IP-Adapter:', prompt);
+Requirements:
+- 2D game sprite style
+- Side view, facing right
+- Maintain the exact same appearance, colors, clothing, and style as the reference
+- Clean lines, game asset quality
+- Centered, full body visible
+- White background
+- Character consistency is critical`;
 
-		// Call IP-Adapter on Replicate
-		const response = await fetch('https://api.replicate.com/v1/predictions', {
+		console.log('Generating pose with Gemini (Nano Banana):', poseDescription);
+
+		// Call Gemini API
+		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${GEMINI_API_KEY}`, {
 			method: 'POST',
 			headers: {
-				'Authorization': `Token ${REPLICATE_API_TOKEN}`,
 				'Content-Type': 'application/json'
 			},
 			body: JSON.stringify({
-				version: IP_ADAPTER_VERSION.split(':')[1],
-				input: {
-					image: imageUrl,
-					prompt: prompt,
-					negative_prompt: negativePrompt,
-					num_outputs: 1,
-					guidance_scale: 7.5,
-					num_inference_steps: 30,
-					ip_adapter_scale: 0.8 // High value = more faithful to reference
+				contents: [{
+					parts: [
+						{ text: 'CHARACTER REFERENCE - Generate a new pose for this exact character:' },
+						{
+							inline_data: {
+								mime_type: 'image/png',
+								data: imageBase64
+							}
+						},
+						{ text: prompt }
+					]
+				}],
+				generationConfig: {
+					responseModalities: ['TEXT', 'IMAGE'],
+					imageConfig: {
+						aspectRatio: '1:1'
+					}
 				}
 			})
 		});
 
 		if (!response.ok) {
 			const errorText = await response.text();
-			console.error('IP-Adapter API error:', errorText);
-			return json({ error: `Replicate API error: ${response.status}` }, { status: 500 });
+			console.error('Gemini API error:', response.status, errorText);
+			let errorDetails = errorText;
+			try {
+				const errorJson = JSON.parse(errorText);
+				errorDetails = errorJson.error?.message || errorJson.message || errorText;
+			} catch (e) {
+				// Not JSON, use as-is
+			}
+			return json({ 
+				error: `Gemini API error: ${response.status}`, 
+				details: errorDetails 
+			}, { status: 500 });
 		}
 
-		const prediction = await response.json();
-		console.log('Prediction started:', prediction.id);
-
-		// Poll for completion
-		let result = prediction;
-		let attempts = 0;
-		const maxAttempts = 60; // 1 minute timeout
-
-		while ((result.status === 'starting' || result.status === 'processing') && attempts < maxAttempts) {
-			await new Promise(resolve => setTimeout(resolve, 1000));
-			
-			const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
-				headers: {
-					'Authorization': `Token ${REPLICATE_API_TOKEN}`
-				}
-			});
-			
-			result = await statusResponse.json();
-			attempts++;
-			console.log(`Poll ${attempts}: ${result.status}`);
-		}
-
-		if (result.status === 'failed') {
-			console.error('IP-Adapter failed:', result.error);
-			return json({ error: result.error || 'Generation failed' }, { status: 500 });
-		}
-
-		if (result.status !== 'succeeded') {
-			return json({ error: 'Generation timed out' }, { status: 500 });
-		}
-
-		// Get the output image URL
-		const outputUrl = Array.isArray(result.output) ? result.output[0] : result.output;
+		const result = await response.json();
 		
-		if (!outputUrl) {
-			return json({ error: 'No image generated' }, { status: 500 });
+		// Extract generated image from response
+		let generatedImage = null;
+		if (result.candidates && result.candidates[0] && result.candidates[0].content) {
+			const parts = result.candidates[0].content.parts;
+			for (const part of parts) {
+				if (part.inlineData && part.inlineData.data) {
+					generatedImage = `data:image/png;base64,${part.inlineData.data}`;
+					break;
+				} else if (part.inline_data && part.inline_data.data) {
+					generatedImage = `data:image/png;base64,${part.inline_data.data}`;
+					break;
+				}
+			}
 		}
 
-		console.log('Generated pose:', outputUrl);
+		if (!generatedImage) {
+			console.error('No image in Gemini response:', result);
+			return json({ error: 'No image generated. Gemini response: ' + JSON.stringify(result) }, { status: 500 });
+		}
+
+		console.log('Generated pose with Gemini');
 
 		return json({ 
-			image: outputUrl,
+			image: generatedImage,
 			pose: poseDescription
 		});
 

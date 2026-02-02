@@ -9,20 +9,53 @@
 	});
 	
 	let projectName = $state(project.projectName || 'Untitled Project');
+	let isSaving = $state(false);
+	let isLoading = $state(false);
+	let saveMessage = $state('');
 
-	function handleSave() {
-		projectStore.update(p => {
-			const updated = { ...p, projectName };
-			saveProject(updated);
-			return updated;
-		});
+	async function handleSave() {
+		isSaving = true;
+		saveMessage = '';
+		try {
+			projectStore.update(p => {
+				const updated = { ...p, projectName };
+				// Save will be async, but update store immediately
+				return updated;
+			});
+			
+			const updated = { ...project, projectName };
+			const result = await saveProject(updated);
+			
+			saveMessage = 'Saved!';
+			setTimeout(() => { saveMessage = ''; }, 2000);
+			
+			// Update store with projectId if returned
+			if (result.projectId) {
+				projectStore.update(p => ({ ...p, projectId: result.projectId, lastSaved: new Date().toISOString() }));
+			}
+		} catch (error) {
+			saveMessage = 'Error: ' + error.message;
+			console.error('Save error:', error);
+		} finally {
+			isSaving = false;
+		}
 	}
 
-	function handleLoad() {
-		const saved = loadProject();
-		if (saved) {
-			projectStore.set(saved);
-			projectName = saved.projectName || 'Untitled Project';
+	async function handleLoad() {
+		isLoading = true;
+		try {
+			const saved = await loadProject();
+			if (saved) {
+				projectStore.set(saved);
+				projectName = saved.projectName || 'Untitled Project';
+			} else {
+				alert('No saved project found');
+			}
+		} catch (error) {
+			alert('Failed to load project: ' + error.message);
+			console.error('Load error:', error);
+		} finally {
+			isLoading = false;
 		}
 	}
 
@@ -53,19 +86,24 @@
 			placeholder="Project name"
 		/>
 		<button
-			class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600"
+			class="px-2 py-1 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50"
 			onclick={handleSave}
-			title="Save"
+			disabled={isSaving}
+			title="Save to Firebase"
 		>
-			💾
+			{isSaving ? '⏳' : '💾'}
 		</button>
 		<button
-			class="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
+			class="px-2 py-1 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-50"
 			onclick={handleLoad}
-			title="Load"
+			disabled={isLoading}
+			title="Load from Firebase"
 		>
-			📂
+			{isLoading ? '⏳' : '📂'}
 		</button>
+		{#if saveMessage}
+			<span class="text-xs text-green-600">{saveMessage}</span>
+		{/if}
 	</div>
 	<div class="flex gap-2">
 		<button

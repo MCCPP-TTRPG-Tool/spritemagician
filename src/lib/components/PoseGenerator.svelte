@@ -56,7 +56,8 @@
 			const data = await response.json();
 			
 			if (!response.ok) {
-				throw new Error(data.error || 'Generation failed');
+				const errorMsg = data.error || data.details || 'Generation failed';
+				throw new Error(errorMsg);
 			}
 			
 			lastGenerated = {

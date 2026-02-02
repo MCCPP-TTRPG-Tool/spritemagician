@@ -41,6 +41,11 @@ const MODELS = {
 		name: 'Wan 2.5 I2V',
 		version: '1b29bbbbfdbc25bba2294de3acd2b58b82e5b623f183880cdb37d76133d80f00',
 		speed: 'medium'
+	},
+	svd: {
+		name: 'Stable Video Diffusion (Self-Hosted)',
+		version: 'local',
+		speed: 'slow'
 	}
 };
 
@@ -51,15 +56,19 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	const model = MODELS[modelId] || MODELS.minimax;
 	
 	try {
-		// Check if using self-hosted Wan 2.5 - skip Firebase upload for this
-		if (modelId === 'wan25' && WAN_SELF_HOSTED_URL) {
-			console.log('Using self-hosted Wan 2.5 endpoint:', WAN_SELF_HOSTED_URL);
+		// SVD MUST use self-hosted endpoint (no Replicate fallback)
+		if (modelId === 'svd') {
+			if (!WAN_SELF_HOSTED_URL) {
+				throw new Error('SVD requires WAN_SELF_HOSTED_URL to be configured. SVD is self-hosted only (no Replicate).');
+			}
+			const modelName = 'SVD';
+			console.log(`Using self-hosted ${modelName} endpoint (NO REPLICATE):`, WAN_SELF_HOSTED_URL);
 			
 			setProgress(jobId, {
 				currentFrame: 0,
 				totalFrames: frameCount,
 				status: 'processing',
-				message: 'Calling self-hosted Wan 2.5...'
+				message: `Calling self-hosted ${modelName}...`
 			});
 
 			// For self-hosted, send base64 directly (no Firebase upload needed)
@@ -92,7 +101,8 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 					input: {
 						image: imageToSend, // Send base64 data URL directly
 						prompt: prompt || 'subtle motion',
-						num_frames: Math.round(frameCount * 2.5)
+						num_frames: Math.round(frameCount * 2.5),
+						model: modelId // Pass model ID so handler knows which model to use
 					}
 				})
 			});
@@ -109,8 +119,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			
 			let videoUrl = null;
 			
-			// Check for async job ID
-			if (jobResult.id && (jobResult.status === 'IN_QUEUE' || jobResult.status === 'IN_PROGRESS')) {
+			// Check for async job ID (RunPod serverless format)
+			// RunPod can return: {id: "...", status: "IN_QUEUE"} or direct result
+			const isAsync = jobResult.id && (
+				jobResult.status === 'IN_QUEUE' || 
+				jobResult.status === 'IN_PROGRESS' ||
+				jobResult.status === 'QUEUED' ||
+				!jobResult.output  // No output means it's async
+			);
+			
+			if (isAsync) {
 				// Async - poll RunPod for status
 				const runpodJobId = jobResult.id;
 				const endpointId = WAN_SELF_HOSTED_URL.startsWith('http') 
@@ -118,7 +136,9 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 					: WAN_SELF_HOSTED_URL;
 				
 				let attempts = 0;
-				const maxAttempts = 300;
+				const maxAttempts = 300; // 10 minutes max (300 * 2s)
+				let lastStatus = 'IN_QUEUE';
+				let stuckInQueueCount = 0;
 				
 				while (attempts < maxAttempts) {
 					await new Promise(resolve => setTimeout(resolve, 2000));
@@ -134,21 +154,54 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 					
 					const statusResult = await statusResponse.json();
 					
-					if (statusResult.status === 'COMPLETED') {
-						const output = statusResult.output;
-						videoUrl = output?.video || output?.videoUrl || output?.output;
-						break;
+					// Handle different RunPod status formats
+					const currentStatus = statusResult.status || statusResult.jobStatus || 'UNKNOWN';
+					
+					// Check if stuck in queue for too long
+					if (currentStatus === 'IN_QUEUE' || currentStatus === 'QUEUED') {
+						if (currentStatus === lastStatus) {
+							stuckInQueueCount++;
+							// If stuck in queue for more than 2 minutes (60 attempts), something's wrong
+							if (stuckInQueueCount > 60) {
+								console.error('Job stuck in queue for too long:', statusResult);
+								throw new Error(`Job stuck in ${currentStatus} for ${stuckInQueueCount * 2}s. Check RunPod logs.`);
+							}
+						} else {
+							stuckInQueueCount = 0;
+						}
+						lastStatus = currentStatus;
 					}
 					
-					if (statusResult.status === 'FAILED') {
-						throw new Error(statusResult.error || 'Generation failed');
+					if (currentStatus === 'COMPLETED' || currentStatus === 'SUCCESS') {
+						const output = statusResult.output || statusResult;
+						videoUrl = output?.video || output?.videoUrl || output?.output || statusResult.video;
+						
+						// If still no video URL, check the full response
+						if (!videoUrl && statusResult.output) {
+							console.log('Full RunPod output:', JSON.stringify(statusResult.output, null, 2));
+						}
+						
+						if (videoUrl) {
+							break;
+						}
+					}
+					
+					if (currentStatus === 'FAILED' || currentStatus === 'ERROR') {
+						const errorMsg = statusResult.error || statusResult.errorMessage || statusResult.output?.error || 'Generation failed';
+						console.error('RunPod job failed:', statusResult);
+						throw new Error(errorMsg);
+					}
+					
+					// Log status for debugging
+					if (attempts % 10 === 0) {
+						console.log(`RunPod status check ${attempts}:`, currentStatus, statusResult);
 					}
 					
 					setProgress(jobId, {
 						currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
 						totalFrames: frameCount,
 						status: 'processing',
-						message: `Self-hosted: ${statusResult.status}... (${attempts * 2}s)`
+						message: `Self-hosted: ${currentStatus}... (${attempts * 2}s)`
 					});
 					
 					attempts++;

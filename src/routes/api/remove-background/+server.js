@@ -81,24 +81,26 @@ export async function POST({ request }) {
 			return json({ error: 'Replicate API token not configured' }, { status: 500 });
 		}
 
-		const results = [];
-
-		for (let i = 0; i < images.length; i++) {
-			let imageUrl = images[i];
+		// Process images in parallel for speed
+		const processImage = async (image, index) => {
+			let imageUrl = image;
 			
 			// If base64, upload to Firebase first
 			if (imageUrl.startsWith('data:')) {
-				imageUrl = await uploadImageToFirebase(imageUrl, `rembg-input-${Date.now()}-${i}.png`);
+				imageUrl = await uploadImageToFirebase(imageUrl, `rembg-input-${Date.now()}-${index}.png`);
 			}
 
 			try {
 				const transparentUrl = await removeBackground(imageUrl);
-				results.push(transparentUrl);
+				return transparentUrl;
 			} catch (error) {
-				console.error(`Failed to remove background from image ${i}:`, error);
-				results.push(null); // Mark as failed
+				console.error(`Failed to remove background from image ${index}:`, error);
+				return null; // Mark as failed
 			}
-		}
+		};
+
+		// Process all images in parallel
+		const results = await Promise.all(images.map((img, i) => processImage(img, i)));
 
 		return json({ images: results });
 
