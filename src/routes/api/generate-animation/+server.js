@@ -224,11 +224,12 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			};
 		} else if (modelId === 'wan22') {
 			// Wan 2.2 i2v-fast - PrunaAI optimized, cheapest option
-			// MINIMUM 81 frames required
+			// Frame range: 81-121
+			const wanFrames = Math.min(121, Math.max(81, frameCount));
 			input = {
 				prompt: prompt || 'subtle motion, minimal movement',
 				image: imageUrl,
-				num_frames: Math.max(81, frameCount * 3), // Minimum 81 frames
+				num_frames: wanFrames,
 				fps: fps
 			};
 		} else if (modelId === 'wan25') {
