@@ -108,21 +108,28 @@ export async function extractFrames(url, numFrames = 8) {
 		throw new Error('No URL provided');
 	}
 	
-	const lowerUrl = url.toLowerCase();
+	// Handle array of URLs (some models return multiple outputs)
+	const videoUrl = Array.isArray(url) ? url[0] : url;
+	
+	if (!videoUrl || typeof videoUrl !== 'string') {
+		throw new Error('Invalid URL format');
+	}
+	
+	const lowerUrl = videoUrl.toLowerCase();
 	
 	if (lowerUrl.includes('.gif')) {
 		// For GIFs, we need a specialized parser
 		// For now, treat as single image and duplicate
-		const frames = await extractFramesFromGif(url, numFrames);
+		const frames = await extractFramesFromGif(videoUrl, numFrames);
 		return frames;
 	} else if (lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov')) {
-		return await extractFramesFromVideo(url, numFrames);
+		return await extractFramesFromVideo(videoUrl, numFrames);
 	} else {
 		// Try video first, fall back to image
 		try {
-			return await extractFramesFromVideo(url, numFrames);
+			return await extractFramesFromVideo(videoUrl, numFrames);
 		} catch {
-			return await extractFramesFromGif(url, numFrames);
+			return await extractFramesFromGif(videoUrl, numFrames);
 		}
 	}
 }

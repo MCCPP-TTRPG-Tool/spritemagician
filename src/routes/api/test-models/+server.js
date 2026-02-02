@@ -6,6 +6,7 @@ import { REPLICATE_API_TOKEN } from '$env/static/private';
  */
 export async function GET() {
 	const models = [
+		// Current models
 		{
 			id: 'video01live',
 			name: 'Minimax Video-01 Live',
@@ -14,7 +15,7 @@ export async function GET() {
 			speed: 'Fast (20-40s)',
 			quality: 'High',
 			consistency: 'Excellent',
-			notes: 'Designed for Live2D/animation - BEST FOR SPRITES'
+			notes: 'Designed for Live2D/animation'
 		},
 		{
 			id: 'wan25',
@@ -26,15 +27,46 @@ export async function GET() {
 			consistency: 'Good',
 			notes: 'Alibaba latest model'
 		},
+		// New models to try
 		{
-			id: 'minimax',
-			name: 'Minimax Video-01',
-			model: 'minimax/video-01',
+			id: 'hailuo',
+			name: 'Hailuo 2.3',
+			model: 'minimax/hailuo-2.3',
+			version: null,
+			speed: 'Fast (20-40s)',
+			quality: 'Very High',
+			consistency: 'Excellent',
+			notes: 'Newest Minimax model'
+		},
+		{
+			id: 'ltxv',
+			name: 'LTX Video',
+			model: 'lightricks/ltx-video',
+			version: null,
+			speed: 'Fast (15-30s)',
+			quality: 'High',
+			consistency: 'Good',
+			notes: 'Lightricks fast video'
+		},
+		{
+			id: 'cogvideox',
+			name: 'CogVideoX-5B I2V',
+			model: 'fofr/cogvideox-5b',
 			version: null,
 			speed: 'Medium (30-60s)',
 			quality: 'Very High',
+			consistency: 'Excellent',
+			notes: 'Character consistency focused'
+		},
+		{
+			id: 'animatediff',
+			name: 'AnimateDiff Lightning',
+			model: 'lucataco/animate-diff-lightning',
+			version: null,
+			speed: 'Fast (10-20s)',
+			quality: 'Medium',
 			consistency: 'Good',
-			notes: 'Standard video'
+			notes: 'Fast animation generation'
 		},
 		{
 			id: 'svd',

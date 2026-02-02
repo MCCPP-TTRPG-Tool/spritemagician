@@ -22,20 +22,48 @@
 	let shouldLoop = $state(true); // Loop animation back to first frame
 	let selectedPose = $state('idle'); // Pose preset
 	
-	// 2D sprite animation prompts - emphasize flat, minimal motion
+	// Production-ready sprite animation prompts
+	// Optimized for 2D fantasy game sprites (HoMM3 style)
 	const posePresets = [
-		{ id: 'idle', name: 'Idle', description: '2D sprite, subtle breathing, minimal motion, static camera, flat image' },
-		{ id: 'floating', name: 'Floating', description: '2D sprite, gentle floating hover, minimal motion, static camera, flat' },
-		{ id: 'glowing', name: 'Glowing', description: '2D sprite, pulsing glow effect, aura, minimal motion, static camera' },
-		{ id: 'custom', name: 'Custom', description: '' }
+		{ 
+			id: 'idle', 
+			name: 'Idle', 
+			description: '2D fantasy game sprite, idle stance animation, subtle breathing motion, chest rises and falls naturally, gentle body sway, slight weight shift, natural standing pose, lifelike subtle movement, stationary feet, static camera, no background movement, looping animation, game asset quality'
+		},
+		{ 
+			id: 'cast', 
+			name: 'Cast Spell', 
+			description: '2D fantasy game sprite, spellcasting animation, character leans forward with intensity, body tenses with power, arms raise dynamically channeling magic, facial expression shows concentration and determination, glowing magical energy around hands, mystical aura effect, body moves with casting motion, lifelike movement, static camera, contained effects, looping animation, game asset quality'
+		},
+		{ 
+			id: 'attack', 
+			name: 'Attack', 
+			description: '2D fantasy game sprite, melee attack animation, body twists with power, weight shifts forward, weapon swing motion, striking pose, facial expression shows aggression, combat action, powerful dynamic movement, lifelike attack motion, static camera, single attack cycle, game asset quality'
+		},
+		{ 
+			id: 'hit', 
+			name: 'Take Damage', 
+			description: '2D fantasy game sprite, damage reaction animation, body recoils dramatically, flinching motion, pain expression on face, body staggers backward, lifelike reaction, natural flinch response, static camera, quick recovery, game asset quality'
+		},
+		{ 
+			id: 'death', 
+			name: 'Death', 
+			description: '2D fantasy game sprite, death animation, character falls down dead, collapses to the floor, body hits ground, lies motionless on ground, defeated pose lying flat, static camera, game asset quality'
+		},
+		{ 
+			id: 'custom', 
+			name: 'Custom', 
+			description: '' 
+		}
 	];
 	
-	// Available video models
-	let selectedModel = $state('live2d');
+	// Available video models (★ = can self-host)
+	let selectedModel = $state('wan25');
 	const videoModels = [
-		{ id: 'live2d', name: 'Live2D', speed: '20-40s', quality: '2D Animation' },
-		{ id: 'wan25', name: 'Wan 2.5', speed: '30-60s', quality: 'High quality' },
-		{ id: 'minimax', name: 'Minimax', speed: '30-60s', quality: 'Standard' }
+		{ id: 'wan25', name: '★ Wan 2.5', speed: '30-60s', quality: 'Self-hostable' },
+		{ id: 'hailuo', name: 'Hailuo 2.3', speed: '20-40s', quality: 'Best quality' },
+		{ id: 'live2d', name: 'Live2D', speed: '20-40s', quality: '2D focused' },
+		{ id: 'ltxv', name: 'LTX Video', speed: '15-30s', quality: 'Not working' }
 	];
 	
 	// Processing options
@@ -318,14 +346,14 @@
 	<!-- Model Selection -->
 	<div>
 		<label class="block text-sm font-medium mb-1">Video Model</label>
-		<div class="grid grid-cols-3 gap-1">
+		<div class="grid grid-cols-2 gap-1">
 			{#each videoModels as model}
 				<button
 					type="button"
 					class="p-1.5 text-xs border rounded text-center transition-colors {selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
 					onclick={() => selectedModel = model.id}
 				>
-					{model.name.split(' ')[0]}
+					{model.name}
 				</button>
 			{/each}
 		</div>

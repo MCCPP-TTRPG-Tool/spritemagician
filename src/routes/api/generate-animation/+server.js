@@ -13,13 +13,27 @@
 
 import { json } from '@sveltejs/kit';
 import { REPLICATE_API_TOKEN } from '$env/static/private';
+import { env } from '$env/dynamic/private';
 import { setProgress, clearProgress } from '$lib/utils/generationProgress.js';
 import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 
+const WAN_SELF_HOSTED_URL = env.WAN_SELF_HOSTED_URL;
+const RUNPOD_API_KEY = env.RUNPOD_API_KEY;
+
 // Available models
 const MODELS = {
+	hailuo: {
+		name: 'Hailuo 2.3 (Newest)',
+		version: '23a02633b5a44780345a59d4d43f8bd510efa239c56f08f29639ff24fa6615e1',
+		speed: 'fast'
+	},
+	ltxv: {
+		name: 'LTX Video (Fastest)',
+		version: '8c47da666861d081eeb4d1261853087de23923a268a69b63febdf5dc1dee08e4',
+		speed: 'fast'
+	},
 	live2d: {
-		name: 'Video-01 Live (2D Animation)',
+		name: 'Video-01 Live (2D)',
 		version: '7574e16b8f1ad52c6332ecb264c0f132e555f46c222255a738131ec1bb614092',
 		speed: 'fast'
 	},
@@ -27,16 +41,6 @@ const MODELS = {
 		name: 'Wan 2.5 I2V',
 		version: '1b29bbbbfdbc25bba2294de3acd2b58b82e5b623f183880cdb37d76133d80f00',
 		speed: 'medium'
-	},
-	minimax: {
-		name: 'Minimax Video-01',
-		version: '5aa835260ff7f40f4069c41185f72036accf99e29957bb4a3b3a911f3b6c1912',
-		speed: 'fast'
-	},
-	svd: {
-		name: 'Stable Video Diffusion',
-		version: '3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
-		speed: 'slow'
 	}
 };
 
@@ -72,7 +76,23 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		// Build input based on model
 		let input;
 		
-		if (modelId === 'live2d') {
+		if (modelId === 'hailuo') {
+			// Hailuo 2.3 - newest Minimax model
+			input = {
+				prompt: prompt || 'subtle idle animation',
+				first_frame_image: imageUrl
+			};
+		} else if (modelId === 'ltxv') {
+			// LTX Video - Lightricks fast video
+			// Note: LTX may not support prompts well, try with motion emphasis
+			input = {
+				input_image: imageUrl,
+				prompt: prompt || 'subtle breathing animation, gentle motion, idle stance',
+				num_frames: Math.min(65, frameCount * 3), // Match desired frame count
+				guidance_scale: 7.5, // Higher for more motion
+				motion_scale: 1.0 // Explicit motion parameter if supported
+			};
+		} else if (modelId === 'live2d') {
 			// Video-01 Live - designed for Live2D/animation
 			input = {
 				prompt: prompt || 'subtle idle animation, breathing',
@@ -83,31 +103,149 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			input = {
 				prompt: prompt || 'subtle motion, minimal movement',
 				image: imageUrl,
-				max_area: '832x480', // 16:9 small
+				max_area: '832x480',
 				fast_mode: 'Disabled'
 			};
-		} else if (modelId === 'minimax') {
-			// Minimax Video-01 parameters
-			input = {
-				prompt: prompt || 'subtle motion, breathing, idle animation',
-				first_frame_image: imageUrl
-			};
 		} else {
-			// SVD parameters
+			// Default/fallback
 			input = {
-				input_image: imageUrl,
-				frames_per_second: fps,
-				sizing_strategy: 'maintain_aspect_ratio',
-				motion_bucket_id: motionAmount,
-				cond_aug: 0.02,
-				decoding_t: 7,
-				seed: Math.floor(Math.random() * 1000000)
+				prompt: prompt || 'subtle motion',
+				first_frame_image: imageUrl
 			};
 		}
 		
 		console.log(`${model.name} params:`, { fps, motionAmount, frameCount, modelId });
 
-		// Start prediction
+		// Check if using self-hosted Wan 2.5
+		if (modelId === 'wan25' && WAN_SELF_HOSTED_URL) {
+			console.log('Using self-hosted Wan 2.5 endpoint:', WAN_SELF_HOSTED_URL);
+			
+			setProgress(jobId, {
+				currentFrame: 0,
+				totalFrames: frameCount,
+				status: 'processing',
+				message: 'Calling self-hosted Wan 2.5...'
+			});
+
+			// Determine if it's a RunPod endpoint ID or full URL
+			let apiUrl = WAN_SELF_HOSTED_URL;
+			let headers = {
+				'Content-Type': 'application/json'
+			};
+
+			// If it's a RunPod endpoint ID (no http), construct the URL
+			if (!WAN_SELF_HOSTED_URL.startsWith('http')) {
+				if (!RUNPOD_API_KEY) {
+					throw new Error('RUNPOD_API_KEY required for RunPod endpoints');
+				}
+				apiUrl = `https://api.runpod.ai/v2/${WAN_SELF_HOSTED_URL}/run`;
+				headers['Authorization'] = `Bearer ${RUNPOD_API_KEY}`;
+			}
+
+			// Call self-hosted endpoint (RunPod format)
+			const response = await fetch(apiUrl, {
+				method: 'POST',
+				headers: headers,
+				body: JSON.stringify({
+					input: {
+						image: imageUrl,
+						prompt: prompt || 'subtle motion',
+						num_frames: Math.round(frameCount * 2.5)
+					}
+				})
+			});
+
+			if (!response.ok) {
+				const errorText = await response.text();
+				throw new Error(`Self-hosted API error: ${response.status} - ${errorText}`);
+			}
+
+			const jobResult = await response.json();
+			
+			// RunPod serverless can return sync (result) or async (job ID)
+			// Our handler polls internally, so it should return sync, but handle both
+			
+			let videoUrl = null;
+			
+			// Check for async job ID
+			if (jobResult.id && (jobResult.status === 'IN_QUEUE' || jobResult.status === 'IN_PROGRESS')) {
+				// Async - poll RunPod for status
+				const runpodJobId = jobResult.id;
+				const endpointId = WAN_SELF_HOSTED_URL.startsWith('http') 
+					? WAN_SELF_HOSTED_URL.split('/').slice(-2, -1)[0]
+					: WAN_SELF_HOSTED_URL;
+				
+				let attempts = 0;
+				const maxAttempts = 300;
+				
+				while (attempts < maxAttempts) {
+					await new Promise(resolve => setTimeout(resolve, 2000));
+					
+					const statusUrl = `https://api.runpod.ai/v2/${endpointId}/status/${runpodJobId}`;
+					const statusResponse = await fetch(statusUrl, {
+						headers: headers
+					});
+					
+					if (!statusResponse.ok) {
+						throw new Error(`Status check failed: ${statusResponse.status}`);
+					}
+					
+					const statusResult = await statusResponse.json();
+					
+					if (statusResult.status === 'COMPLETED') {
+						const output = statusResult.output;
+						videoUrl = output?.video || output?.videoUrl || output?.output;
+						break;
+					}
+					
+					if (statusResult.status === 'FAILED') {
+						throw new Error(statusResult.error || 'Generation failed');
+					}
+					
+					setProgress(jobId, {
+						currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
+						totalFrames: frameCount,
+						status: 'processing',
+						message: `Self-hosted: ${statusResult.status}... (${attempts * 2}s)`
+					});
+					
+					attempts++;
+				}
+				
+				if (!videoUrl) {
+					throw new Error('Self-hosted generation timed out');
+				}
+			} else {
+				// Sync - result returned directly (handler completed)
+				const output = jobResult.output || jobResult;
+				videoUrl = output?.video || output?.videoUrl || output?.output || jobResult.video;
+				
+				// Check for error in response
+				if (jobResult.error) {
+					throw new Error(jobResult.error);
+				}
+			}
+			
+			if (!videoUrl) {
+				console.error('RunPod response:', jobResult);
+				throw new Error('No video URL in response. Check RunPod logs.');
+			}
+
+			setProgress(jobId, {
+				currentFrame: frameCount,
+				totalFrames: frameCount,
+				status: 'completed',
+				message: 'Video generated! Extracting frames...',
+				videoUrl: videoUrl,
+				loop: true,
+				frames: []
+			});
+
+			setTimeout(() => clearProgress(jobId), 120000);
+			return;
+		}
+
+		// Use Replicate API
 		const response = await fetch('https://api.replicate.com/v1/predictions', {
 			method: 'POST',
 			headers: {
