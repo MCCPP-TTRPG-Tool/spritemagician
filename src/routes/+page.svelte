@@ -1,7 +1,8 @@
 <script>
 	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
 	import PoseGenerator from '$lib/components/PoseGenerator.svelte';
-	import FrameEditor from '$lib/components/FrameEditor.svelte';
+	import SpriteGenerator from '$lib/components/SpriteGenerator.svelte';
+	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
 	import ProjectManager from '$lib/components/ProjectManager.svelte';
@@ -9,7 +10,7 @@
 	import ReplicateTest from '$lib/components/ReplicateTest.svelte';
 	
 	let showDevTools = $state(false);
-	let activeTab = $state('animation'); // 'animation' or 'poses'
+	let activeTab = $state('create'); // 'create', 'animation', or 'poses'
 </script>
 
 <div class="h-screen bg-gray-50 overflow-hidden flex flex-col">
@@ -34,13 +35,19 @@
 			<div class="bg-white rounded shadow flex-1 overflow-hidden flex flex-col min-h-0">
 				<div class="flex border-b">
 					<button
-						class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeTab === 'animation' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
-						onclick={() => activeTab = 'animation'}
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'create' ? 'bg-green-50 text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => activeTab = 'create'}
 					>
-						🎬 Animation
+						✨ Create
 					</button>
 					<button
-						class="flex-1 px-3 py-2 text-sm font-medium transition-colors {activeTab === 'poses' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animation' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => activeTab = 'animation'}
+					>
+						🎬 Animate
+					</button>
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'poses' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
 						onclick={() => activeTab = 'poses'}
 					>
 						🎭 Poses
@@ -48,7 +55,9 @@
 				</div>
 				
 				<div class="p-3 flex-1 overflow-y-auto">
-					{#if activeTab === 'animation'}
+					{#if activeTab === 'create'}
+						<SpriteGenerator />
+					{:else if activeTab === 'animation'}
 						<GenerationPanel />
 					{:else}
 						<PoseGenerator />
@@ -57,9 +66,9 @@
 			</div>
 		</div>
 
-		<!-- Middle Column: Frame Editor -->
-		<div class="bg-white rounded shadow p-3 overflow-y-auto">
-			<FrameEditor />
+		<!-- Middle Column: Frames / Poses / Animations -->
+		<div class="bg-white rounded shadow p-3 overflow-hidden">
+			<CenterPanel />
 		</div>
 
 		<!-- Right Column: Preview & Export -->

@@ -1,9 +1,15 @@
 <script>
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
+	import { poseStore } from '$lib/stores/poses.js';
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
+	let savedPoses = $state({ poses: [] });
+	
+	poseStore.subscribe(value => {
+		savedPoses = value;
+	});
 	
 	projectStore.subscribe(value => {
 		project = value;
@@ -62,14 +68,14 @@
 		}
 	];
 	
-	// Available video models (★ = can self-host)
-	let selectedModel = $state('svd');
+	// Available video models - sorted by cost (cheapest first)
+	let selectedModel = $state('wan22');
 	const videoModels = [
-		{ id: 'svd', name: '★ SVD (Self-Hosted)', speed: '60-120s', quality: 'No Replicate' },
-		{ id: 'wan25', name: 'Wan 2.5', speed: '30-60s', quality: 'Replicate' },
+		{ id: 'wan22', name: 'Wan 2.2 Fast', speed: '15-30s', quality: '💰 Cheapest' },
+		{ id: 'ltxv', name: 'LTX Video', speed: '10-20s', quality: 'Fast' },
 		{ id: 'hailuo', name: 'Hailuo 2.3', speed: '20-40s', quality: 'Best quality' },
 		{ id: 'live2d', name: 'Live2D', speed: '20-40s', quality: '2D focused' },
-		{ id: 'ltxv', name: 'LTX Video', speed: '15-30s', quality: 'Not working' }
+		{ id: 'svd', name: 'SVD', speed: '120s+', quality: '💸 Expensive' }
 	];
 	
 	// Processing options
@@ -77,6 +83,14 @@
 
 	function handleFirstFrameUpload(dataUrl) {
 		projectStore.update(p => ({ ...p, firstFrame: dataUrl }));
+	}
+	
+	function openPosePicker() {
+		// Emit event to show poses in center and switch to poses view
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('startPosePicking'));
+			window.dispatchEvent(new CustomEvent('switchToPoses'));
+		}
 	}
 
 	async function pollProgress() {
@@ -282,34 +296,36 @@
 	}
 </script>
 
-<div class="space-y-4">
-	<div>
-		<h2 class="text-lg font-bold">Sprite Animator</h2>
-		<p class="text-xs text-gray-500">Upload → Animate → Remove BG</p>
-	</div>
-
-	<!-- Reference Image (Required) -->
-	<div>
-		<label class="block text-sm font-medium mb-2">Sprite Image *</label>
-		{#if project.firstFrame}
-			<div class="relative">
-				<img src={project.firstFrame} alt="Reference" class="w-full h-32 object-contain rounded border-2 border-green-400 bg-gray-100" />
-				<button 
-					class="absolute top-1 right-1 bg-red-500 text-white text-xs px-2 py-1 rounded hover:bg-red-600"
-					onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
-				>✕</button>
-			</div>
-		{:else}
-			<FrameUpload label="Upload your sprite" onUpload={handleFirstFrameUpload} />
+<div class="space-y-2">
+	<!-- Sprite Preview -->
+	{#if project.firstFrame}
+		<div class="relative w-3/4 mx-auto">
+			<img src={project.firstFrame} alt="Sprite" class="w-full aspect-square object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
+			<button 
+				class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
+				onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
+			>×</button>
+		</div>
+	{:else}
+		<div class="w-3/4 mx-auto aspect-square">
+			<FrameUpload label="Upload Sprite" onUpload={handleFirstFrameUpload} />
+		</div>
+		{#if savedPoses.poses.length > 0}
+			<button 
+				class="w-full px-2 py-1.5 text-xs bg-purple-100 text-purple-700 border border-purple-300 rounded hover:bg-purple-200"
+				onclick={openPosePicker}
+			>
+				🎭 Use Saved Pose ({savedPoses.poses.length})
+			</button>
 		{/if}
-	</div>
+	{/if}
 
-	<!-- Pose Preset -->
-	<div>
-		<label class="block text-sm font-medium mb-2">Animation Type</label>
+	<!-- Animation Type -->
+	<div class="flex items-center gap-2">
+		<span class="text-xs font-medium text-gray-700">Type:</span>
 		<select 
 			bind:value={selectedPose}
-			class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg bg-white"
+			class="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white"
 		>
 			{#each posePresets as pose}
 				<option value={pose.id}>{pose.name}</option>
@@ -317,112 +333,78 @@
 		</select>
 	</div>
 
-	<!-- Custom prompt (only for custom pose) -->
+	<!-- Custom prompt (only for custom) -->
 	{#if selectedPose === 'custom'}
-		<div>
-			<label class="block text-xs font-medium mb-1">Describe the animation</label>
-			<input
-				type="text"
-				bind:value={prompt}
-				placeholder="e.g., 'walking cycle, smooth stride, legs alternate, arms swing naturally'"
-				class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg"
-			/>
-		</div>
+		<input
+			type="text"
+			bind:value={prompt}
+			placeholder="Describe animation..."
+			class="w-full px-2 py-1 text-xs border border-gray-300 rounded"
+		/>
 	{/if}
 
-	<!-- Duration -->
-	<div>
-		<label class="block text-sm font-medium mb-1">Duration: {duration}s</label>
-		<input
-			type="range"
-			min="1"
-			max="3"
-			step="0.5"
-			bind:value={duration}
-			class="w-full"
-		/>
-		<div class="flex justify-between text-xs text-gray-500">
-			<span>1s</span>
-			<span>3s</span>
+	<!-- Settings Row -->
+	<div class="flex items-center gap-2 text-xs">
+		<div class="flex-1">
+			<span class="text-gray-600">{duration}s</span>
+			<input type="range" min="1" max="5" step="0.5" bind:value={duration} class="w-full h-1" />
+		</div>
+		<div class="flex-1">
+			<span class="text-gray-600">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</span>
+			<input type="range" min="50" max="180" bind:value={motionAmount} class="w-full h-1" />
 		</div>
 	</div>
 
-	<!-- Motion Intensity -->
-	<div>
-		<label class="block text-sm font-medium mb-1">
-			Motion: {motionAmount < 80 ? 'Subtle' : motionAmount < 140 ? 'Medium' : 'Strong'}
-		</label>
-		<input
-			type="range"
-			min="50"
-			max="180"
-			bind:value={motionAmount}
-			class="w-full"
-		/>
-	</div>
-
-	<!-- Toggles -->
-	<div class="flex flex-wrap gap-x-4 gap-y-1">
-		<label class="flex items-center gap-1 text-sm">
-			<input type="checkbox" bind:checked={shouldLoop} class="w-3.5 h-3.5" />
+	<!-- Options Row -->
+	<div class="flex items-center gap-3 text-xs">
+		<label class="flex items-center gap-1">
+			<input type="checkbox" bind:checked={shouldLoop} class="w-3 h-3" />
 			Loop
 		</label>
-		<label class="flex items-center gap-1 text-sm text-gray-600">
-			<input type="checkbox" bind:checked={removeBackground} class="w-3.5 h-3.5" />
+		<label class="flex items-center gap-1 text-gray-600">
+			<input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />
 			Remove BG
 		</label>
+		<span class="ml-auto text-gray-400">~{Math.round(duration * project.fps)}f</span>
 	</div>
 
-	<!-- Model Selection -->
-	<div>
-		<label class="block text-sm font-medium mb-1">Video Model</label>
-		<div class="grid grid-cols-2 gap-1">
-			{#each videoModels as model}
-				<button
-					type="button"
-					class="p-1.5 text-xs border rounded text-center transition-colors {selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
-					onclick={() => selectedModel = model.id}
-				>
-					{model.name}
-				</button>
-			{/each}
-		</div>
+	<!-- Model Selection - Compact -->
+	<div class="flex flex-wrap gap-1">
+		{#each videoModels.slice(0, 5) as model}
+			<button
+				type="button"
+				class="px-2 py-0.5 text-[10px] border rounded transition-colors {selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
+				onclick={() => selectedModel = model.id}
+				title={model.quality}
+			>
+				{model.id === 'wan22' ? '💰Wan' : model.id === 'ltxv' ? 'LTX' : model.id === 'hailuo' ? 'Hailuo' : model.id === 'live2d' ? 'Live2D' : model.id === 'svd' ? 'SVD💸' : model.name}
+			</button>
+		{/each}
 	</div>
-
-	<!-- Info -->
-	<p class="text-xs text-gray-500">
-		~{Math.round(duration * project.fps)} frames • {videoModels.find(m => m.id === selectedModel)?.quality}
-	</p>
 
 	<!-- Generate Button -->
 	<button
-		class="w-full px-3 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+		class="w-full px-3 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
 		onclick={generateFrames}
-		disabled={isGenerating}
+		disabled={isGenerating || !project.firstFrame}
 	>
-		{isGenerating ? 'Generating...' : 'Generate Frames'}
+		{isGenerating ? 'Generating...' : 'Generate Animation'}
 	</button>
 
-	<!-- Progress Indicator -->
+	<!-- Progress / Error -->
 	{#if isGenerating && progress.status !== 'idle'}
-		<div class="space-y-1">
-			<div class="flex justify-between text-xs text-gray-600">
+		<div class="text-xs">
+			<div class="flex justify-between text-gray-600 mb-1">
 				<span>{progress.message || 'Processing...'}</span>
-				<span>{progress.currentFrame} / {progress.totalFrames}</span>
 			</div>
-			<div class="w-full bg-gray-200 rounded-full h-2">
-				<div
-					class="bg-blue-500 h-2 rounded-full transition-all duration-300"
-					style="width: {progress.totalFrames > 0 ? (progress.currentFrame / progress.totalFrames) * 100 : 0}%"
-				></div>
+			<div class="w-full bg-gray-200 rounded-full h-1.5">
+				<div class="bg-blue-500 h-1.5 rounded-full transition-all" style="width: {progress.totalFrames > 0 ? (progress.currentFrame / progress.totalFrames) * 100 : 10}%"></div>
 			</div>
 		</div>
 	{/if}
 
 	{#if generationError}
-		<div class="p-2 text-xs bg-red-100 border border-red-400 text-red-700 rounded">
-			{generationError}
-		</div>
+		<p class="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">{generationError}</p>
 	{/if}
 </div>
 

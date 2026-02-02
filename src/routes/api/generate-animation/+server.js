@@ -21,15 +21,26 @@ const WAN_SELF_HOSTED_URL = env.WAN_SELF_HOSTED_URL;
 const RUNPOD_API_KEY = env.RUNPOD_API_KEY;
 
 // Available models
+// Pricing estimates (check replicate.com for current):
+// - Wan 2.2 Fast: ~$0.01-0.03 (optimized, cheapest)
+// - LTX Video: ~$0.02-0.05 (fast)
+// - Hailuo: ~$0.05-0.10 (quality)
+// - SVD: ~$0.10-0.15 (slow, expensive)
 const MODELS = {
-	hailuo: {
-		name: 'Hailuo 2.3 (Newest)',
-		version: '23a02633b5a44780345a59d4d43f8bd510efa239c56f08f29639ff24fa6615e1',
-		speed: 'fast'
+	wan22: {
+		name: 'Wan 2.2 Fast (Cheapest)',
+		version: 'wan-video/wan-2.2-i2v-fast',
+		speed: 'fast',
+		isModelPath: true  // Use model path instead of version hash
 	},
 	ltxv: {
-		name: 'LTX Video (Fastest)',
+		name: 'LTX Video (Fast)',
 		version: '8c47da666861d081eeb4d1261853087de23923a268a69b63febdf5dc1dee08e4',
+		speed: 'fast'
+	},
+	hailuo: {
+		name: 'Hailuo 2.3 (Quality)',
+		version: '23a02633b5a44780345a59d4d43f8bd510efa239c56f08f29639ff24fa6615e1',
 		speed: 'fast'
 	},
 	live2d: {
@@ -43,8 +54,8 @@ const MODELS = {
 		speed: 'medium'
 	},
 	svd: {
-		name: 'Stable Video Diffusion (Self-Hosted)',
-		version: 'local',
+		name: 'SVD (Expensive)',
+		version: 'stability-ai/stable-video-diffusion:3f0457e4619daac51203dedb472816fd4af51f3149fa7a9e0b5ffcf1b8172438',
 		speed: 'slow'
 	}
 };
@@ -56,174 +67,97 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	const model = MODELS[modelId] || MODELS.minimax;
 	
 	try {
-		// SVD MUST use self-hosted endpoint (no Replicate fallback)
+		// SVD uses Replicate API
 		if (modelId === 'svd') {
-			if (!WAN_SELF_HOSTED_URL) {
-				throw new Error('SVD requires WAN_SELF_HOSTED_URL to be configured. SVD is self-hosted only (no Replicate).');
-			}
-			const modelName = 'SVD';
-			console.log(`Using self-hosted ${modelName} endpoint (NO REPLICATE):`, WAN_SELF_HOSTED_URL);
+			console.log('Using Replicate SVD API');
 			
 			setProgress(jobId, {
 				currentFrame: 0,
 				totalFrames: frameCount,
 				status: 'processing',
-				message: `Calling self-hosted ${modelName}...`
+				message: 'Uploading image for SVD...'
 			});
 
-			// For self-hosted, send base64 directly (no Firebase upload needed)
-			let imageToSend = referenceImage;
-			if (!referenceImage.startsWith('data:image/') && !referenceImage.startsWith('http')) {
-				// If it's not base64 and not a URL, something's wrong
-				throw new Error('Reference image must be a base64 data URL for self-hosted endpoint');
+			// Upload image to Firebase to get a public URL
+			let imageUrl = referenceImage;
+			if (referenceImage.startsWith('data:image/')) {
+				imageUrl = await uploadImageToFirebase(referenceImage, `svd-input-${jobId}`);
+				console.log('Uploaded input image:', imageUrl);
 			}
 
-			// Determine if it's a RunPod endpoint ID or full URL
-			let apiUrl = WAN_SELF_HOSTED_URL;
-			let headers = {
-				'Content-Type': 'application/json'
-			};
+			setProgress(jobId, {
+				currentFrame: 0,
+				totalFrames: frameCount,
+				status: 'processing',
+				message: 'Starting SVD generation...'
+			});
 
-			// If it's a RunPod endpoint ID (no http), construct the URL
-			if (!WAN_SELF_HOSTED_URL.startsWith('http')) {
-				if (!RUNPOD_API_KEY) {
-					throw new Error('RUNPOD_API_KEY required for RunPod endpoints');
-				}
-				apiUrl = `https://api.runpod.ai/v2/${WAN_SELF_HOSTED_URL}/run`;
-				headers['Authorization'] = `Bearer ${RUNPOD_API_KEY}`;
-			}
-
-			// Call self-hosted endpoint (RunPod format) with base64 image
-			const response = await fetch(apiUrl, {
+			// Call Replicate SVD API
+			// SVD supports up to 25 frames - for longer animations, we max it out
+			const svdVersion = MODELS.svd.version;
+			const svdFrames = Math.min(25, Math.max(14, frameCount)); // 14-25 frames
+			console.log(`SVD generating ${svdFrames} frames for ${frameCount} requested`);
+			
+			const response = await fetch('https://api.replicate.com/v1/predictions', {
 				method: 'POST',
-				headers: headers,
+				headers: {
+					'Authorization': `Token ${REPLICATE_API_TOKEN}`,
+					'Content-Type': 'application/json'
+				},
 				body: JSON.stringify({
+					version: svdVersion.split(':')[1],
 					input: {
-						image: imageToSend, // Send base64 data URL directly
-						prompt: prompt || 'subtle motion',
-						num_frames: Math.round(frameCount * 2.5),
-						model: modelId // Pass model ID so handler knows which model to use
+						input_image: imageUrl,
+						motion_bucket_id: motionAmount,
+						fps: fps,
+						num_frames: svdFrames
 					}
 				})
 			});
 
 			if (!response.ok) {
 				const errorText = await response.text();
-				throw new Error(`Self-hosted API error: ${response.status} - ${errorText}`);
+				throw new Error(`Replicate API error: ${response.status} - ${errorText}`);
 			}
 
-			const jobResult = await response.json();
-			
-			// RunPod serverless can return sync (result) or async (job ID)
-			// Our handler polls internally, so it should return sync, but handle both
-			
+			const prediction = await response.json();
+			console.log('SVD prediction started:', prediction.id);
+
+			// Poll for completion
 			let videoUrl = null;
-			
-			// Check for async job ID (RunPod serverless format)
-			// RunPod can return: {id: "...", status: "IN_QUEUE"} or direct result
-			const isAsync = jobResult.id && (
-				jobResult.status === 'IN_QUEUE' || 
-				jobResult.status === 'IN_PROGRESS' ||
-				jobResult.status === 'QUEUED' ||
-				!jobResult.output  // No output means it's async
-			);
-			
-			if (isAsync) {
-				// Async - poll RunPod for status
-				const runpodJobId = jobResult.id;
-				const endpointId = WAN_SELF_HOSTED_URL.startsWith('http') 
-					? WAN_SELF_HOSTED_URL.split('/').slice(-2, -1)[0]
-					: WAN_SELF_HOSTED_URL;
-				
-				let attempts = 0;
-				const maxAttempts = 300; // 10 minutes max (300 * 2s)
-				let lastStatus = 'IN_QUEUE';
-				let stuckInQueueCount = 0;
-				
-				while (attempts < maxAttempts) {
-					await new Promise(resolve => setTimeout(resolve, 2000));
-					
-					const statusUrl = `https://api.runpod.ai/v2/${endpointId}/status/${runpodJobId}`;
-					const statusResponse = await fetch(statusUrl, {
-						headers: headers
-					});
-					
-					if (!statusResponse.ok) {
-						throw new Error(`Status check failed: ${statusResponse.status}`);
-					}
-					
-					const statusResult = await statusResponse.json();
-					
-					// Handle different RunPod status formats
-					const currentStatus = statusResult.status || statusResult.jobStatus || 'UNKNOWN';
-					
-					// Check if stuck in queue for too long
-					if (currentStatus === 'IN_QUEUE' || currentStatus === 'QUEUED') {
-						if (currentStatus === lastStatus) {
-							stuckInQueueCount++;
-							// If stuck in queue for more than 2 minutes (60 attempts), something's wrong
-							if (stuckInQueueCount > 60) {
-								console.error('Job stuck in queue for too long:', statusResult);
-								throw new Error(`Job stuck in ${currentStatus} for ${stuckInQueueCount * 2}s. Check RunPod logs.`);
-							}
-						} else {
-							stuckInQueueCount = 0;
-						}
-						lastStatus = currentStatus;
-					}
-					
-					if (currentStatus === 'COMPLETED' || currentStatus === 'SUCCESS') {
-						const output = statusResult.output || statusResult;
-						videoUrl = output?.video || output?.videoUrl || output?.output || statusResult.video;
-						
-						// If still no video URL, check the full response
-						if (!videoUrl && statusResult.output) {
-							console.log('Full RunPod output:', JSON.stringify(statusResult.output, null, 2));
-						}
-						
-						if (videoUrl) {
-							break;
-						}
-					}
-					
-					if (currentStatus === 'FAILED' || currentStatus === 'ERROR') {
-						const errorMsg = statusResult.error || statusResult.errorMessage || statusResult.output?.error || 'Generation failed';
-						console.error('RunPod job failed:', statusResult);
-						throw new Error(errorMsg);
-					}
-					
-					// Log status for debugging
-					if (attempts % 10 === 0) {
-						console.log(`RunPod status check ${attempts}:`, currentStatus, statusResult);
-					}
-					
-					setProgress(jobId, {
-						currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
-						totalFrames: frameCount,
-						status: 'processing',
-						message: `Self-hosted: ${currentStatus}... (${attempts * 2}s)`
-					});
-					
-					attempts++;
+			let attempts = 0;
+			const maxAttempts = 300;
+
+			while (attempts < maxAttempts) {
+				await new Promise(resolve => setTimeout(resolve, 2000));
+
+				const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
+					headers: { 'Authorization': `Token ${REPLICATE_API_TOKEN}` }
+				});
+
+				const status = await statusResponse.json();
+
+				if (status.status === 'succeeded') {
+					videoUrl = status.output;
+					break;
 				}
-				
-				if (!videoUrl) {
-					throw new Error('Self-hosted generation timed out');
+
+				if (status.status === 'failed') {
+					throw new Error(status.error || 'SVD generation failed');
 				}
-			} else {
-				// Sync - result returned directly (handler completed)
-				const output = jobResult.output || jobResult;
-				videoUrl = output?.video || output?.videoUrl || output?.output || jobResult.video;
-				
-				// Check for error in response
-				if (jobResult.error) {
-					throw new Error(jobResult.error);
-				}
+
+				setProgress(jobId, {
+					currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
+					totalFrames: frameCount,
+					status: 'processing',
+					message: `SVD generating... (${attempts * 2}s)`
+				});
+
+				attempts++;
 			}
-			
+
 			if (!videoUrl) {
-				console.error('RunPod response:', jobResult);
-				throw new Error('No video URL in response. Check RunPod logs.');
+				throw new Error('SVD generation timed out');
 			}
 
 			setProgress(jobId, {
@@ -288,6 +222,15 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				prompt: prompt || 'subtle idle animation, breathing',
 				first_frame_image: imageUrl
 			};
+		} else if (modelId === 'wan22') {
+			// Wan 2.2 i2v-fast - PrunaAI optimized, cheapest option
+			// MINIMUM 81 frames required
+			input = {
+				prompt: prompt || 'subtle motion, minimal movement',
+				image: imageUrl,
+				num_frames: Math.max(81, frameCount * 3), // Minimum 81 frames
+				fps: fps
+			};
 		} else if (modelId === 'wan25') {
 			// Wan 2.5 I2V (for Replicate, not self-hosted)
 			input = {
@@ -306,17 +249,26 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		
 		console.log(`${model.name} params:`, { fps, motionAmount, frameCount, modelId });
 
-		// Use Replicate API
-		const response = await fetch('https://api.replicate.com/v1/predictions', {
+		// Use Replicate API - different endpoints for model path vs version hash
+		let apiUrl, body;
+		
+		if (model.isModelPath) {
+			// Model path format: owner/model-name
+			apiUrl = `https://api.replicate.com/v1/models/${model.version}/predictions`;
+			body = JSON.stringify({ input });
+		} else {
+			// Version hash format
+			apiUrl = 'https://api.replicate.com/v1/predictions';
+			body = JSON.stringify({ version: model.version, input });
+		}
+		
+		const response = await fetch(apiUrl, {
 			method: 'POST',
 			headers: {
 				'Authorization': `Token ${REPLICATE_API_TOKEN}`,
 				'Content-Type': 'application/json'
 			},
-			body: JSON.stringify({
-				version: model.version,
-				input: input
-			})
+			body: body
 		});
 
 		if (!response.ok) {

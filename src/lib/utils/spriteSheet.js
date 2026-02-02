@@ -42,12 +42,36 @@ export async function generateSpriteSheet(frames, frameWidth, frameHeight, colum
 
 /**
  * Converts a data URL or blob to an Image element
+ * Uses server proxy for external URLs to bypass CORS
  */
-export function loadImage(src) {
+export async function loadImage(src) {
+	// If it's an external URL, proxy it through our server to get base64
+	if (src && !src.startsWith('data:') && src.startsWith('http')) {
+		try {
+			const response = await fetch('/api/proxy-image', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ url: src })
+			});
+			
+			if (response.ok) {
+				const { dataUrl } = await response.json();
+				src = dataUrl;
+			} else {
+				console.error('Proxy failed, trying direct load');
+			}
+		} catch (e) {
+			console.error('Proxy error:', e);
+		}
+	}
+	
 	return new Promise((resolve, reject) => {
 		const img = new Image();
 		img.onload = () => resolve(img);
-		img.onerror = reject;
+		img.onerror = (e) => {
+			console.error('Failed to load image:', src?.substring(0, 100));
+			reject(e);
+		};
 		img.src = src;
 	});
 }

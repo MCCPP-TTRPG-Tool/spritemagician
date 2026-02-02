@@ -6,7 +6,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { GEMINI_API_KEY } from '$env/static/private';
+import { GEMINI_API_KEY, REPLICATE_API_TOKEN } from '$env/static/private';
 
 export async function POST({ request }) {
 	try {
@@ -37,17 +37,32 @@ export async function POST({ request }) {
 			return json({ error: 'Reference image must be a base64 data URL' }, { status: 400 });
 		}
 
-		// Build the prompt for pose generation
-		const prompt = `Generate this exact character in a new pose: ${poseDescription}
+		// Build the prompt for pose generation - balance between consistency and actual pose change
+		const prompt = `TASK: Draw this SAME character in a COMPLETELY DIFFERENT pose.
 
-Requirements:
-- 2D game sprite style
+⚠️ THE POSE MUST CHANGE DRAMATICALLY ⚠️
+New pose required: ${poseDescription}
+
+WHAT MUST CHANGE (the pose):
+- Body position and stance must be COMPLETELY DIFFERENT from reference
+- Arms, legs, wings, tail positions must change to match: "${poseDescription}"
+- The character should be DOING something different
+- Movement, gesture, and body language must reflect the new pose
+
+WHAT MUST STAY THE SAME (the character):
+- Same creature/character design
+- Same colors and patterns
+- Same art style and quality
+- Same number of limbs/appendages/features
+- Same proportions and details
+
+OUTPUT REQUIREMENTS:
 - Side view, facing right
-- Maintain the exact same appearance, colors, clothing, and style as the reference
-- Clean lines, game asset quality
-- Centered, full body visible
-- White background
-- Character consistency is critical`;
+- Full body visible and centered
+- Plain white or transparent background
+- 2D game sprite quality
+
+IMPORTANT: If the new pose looks identical to the reference, you have FAILED. The pose "${poseDescription}" should be OBVIOUSLY DIFFERENT from the standing/idle reference pose. Show action, movement, or a distinct body position.`;
 
 		console.log('Generating pose with Gemini (Nano Banana):', poseDescription);
 
@@ -60,7 +75,7 @@ Requirements:
 			body: JSON.stringify({
 				contents: [{
 					parts: [
-						{ text: 'CHARACTER REFERENCE - Generate a new pose for this exact character:' },
+						{ text: 'REFERENCE CHARACTER IMAGE - Study every detail of this character:' },
 						{
 							inline_data: {
 								mime_type: 'image/png',
@@ -117,10 +132,78 @@ Requirements:
 			return json({ error: 'No image generated. Gemini response: ' + JSON.stringify(result) }, { status: 500 });
 		}
 
-		console.log('Generated pose with Gemini');
+		console.log('Generated pose with Gemini, removing background...');
+
+		// Remove background for transparent pose using Replicate rembg
+		let finalImage = generatedImage;
+		
+		if (REPLICATE_API_TOKEN) {
+			try {
+				const bgRemovalResponse = await fetch('https://api.replicate.com/v1/predictions', {
+					method: 'POST',
+					headers: {
+						'Authorization': `Bearer ${REPLICATE_API_TOKEN}`,
+						'Content-Type': 'application/json'
+					},
+					body: JSON.stringify({
+						version: 'fb8af171cfa1616ddcf1242c093f9c46bcada5ad4cf6f2fbe8b81b330ec5c003',
+						input: { 
+							image: generatedImage,
+							alpha_matting: true,
+							alpha_matting_foreground_threshold: 240,
+							alpha_matting_background_threshold: 10
+						}
+					})
+				});
+
+				if (!bgRemovalResponse.ok) {
+					const errorText = await bgRemovalResponse.text();
+					console.error('BG removal API error:', bgRemovalResponse.status, errorText);
+				} else {
+					const prediction = await bgRemovalResponse.json();
+					console.log('BG removal started, polling for result...');
+					
+					// Poll for completion
+					const maxAttempts = 60; // 60 seconds max
+					for (let i = 0; i < maxAttempts; i++) {
+						await new Promise(resolve => setTimeout(resolve, 1000));
+						
+						const statusResponse = await fetch(prediction.urls.get, {
+							headers: { 'Authorization': `Bearer ${REPLICATE_API_TOKEN}` }
+						});
+						
+						if (statusResponse.ok) {
+							const status = await statusResponse.json();
+							console.log(`BG removal status (${i+1}/${maxAttempts}):`, status.status);
+							
+							if (status.status === 'succeeded' && status.output) {
+								// Download the result and convert to base64
+								const imageResponse = await fetch(status.output);
+								if (imageResponse.ok) {
+									const imageBuffer = await imageResponse.arrayBuffer();
+									const base64 = Buffer.from(imageBuffer).toString('base64');
+									finalImage = `data:image/png;base64,${base64}`;
+									console.log('✓ Background removed successfully');
+								} else {
+									console.error('Failed to download BG-removed image');
+								}
+								break;
+							} else if (status.status === 'failed') {
+								console.error('Background removal failed:', status.error);
+								break;
+							}
+						}
+					}
+				}
+			} catch (bgError) {
+				console.error('Background removal error:', bgError.message);
+			}
+		} else {
+			console.warn('REPLICATE_API_TOKEN not set, skipping background removal');
+		}
 
 		return json({ 
-			image: generatedImage,
+			image: finalImage,
 			pose: poseDescription
 		});
 

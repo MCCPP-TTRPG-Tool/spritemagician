@@ -12,17 +12,25 @@
 	let isGenerating = $state(false);
 	let error = $state(null);
 	let lastGenerated = $state(null);
+	let selectedPose = $state(null); // For preview
 	
-	// Quick pose presets
+	// Listen for when center panel saves/discards the generated pose
+	if (typeof window !== 'undefined') {
+		window.addEventListener('poseSavedOrDiscarded', () => {
+			lastGenerated = null;
+		});
+	}
+	
+	// Quick pose presets - specific poses that maintain character identity
 	const posePresets = [
-		{ name: 'Standing', prompt: 'standing upright, neutral pose, arms at sides' },
-		{ name: 'Running', prompt: 'running pose, mid-stride, legs apart, arms pumping' },
-		{ name: 'Jumping', prompt: 'jumping in the air, legs bent, arms raised' },
-		{ name: 'Crouching', prompt: 'crouching low, knees bent, ready stance' },
-		{ name: 'Attacking', prompt: 'attack pose, swinging weapon or punching forward' },
-		{ name: 'Casting', prompt: 'casting spell, hands raised with magical energy' },
-		{ name: 'Hurt', prompt: 'hurt pose, recoiling backward, pained expression' },
-		{ name: 'Dead', prompt: 'lying on ground, defeated, collapsed' },
+		{ name: 'Standing', prompt: 'standing upright in neutral idle pose, weight evenly distributed, relaxed stance' },
+		{ name: 'Running', prompt: 'dynamic running pose, one leg forward mid-stride, arms in running motion, leaning forward slightly' },
+		{ name: 'Jumping', prompt: 'airborne jumping pose, legs tucked or extended, arms up for balance' },
+		{ name: 'Crouching', prompt: 'low crouching stance, knees deeply bent, body compact, ready to spring' },
+		{ name: 'Attacking', prompt: 'aggressive attack pose, body twisted in striking motion, weight forward' },
+		{ name: 'Casting', prompt: 'mystical casting pose, arms extended outward channeling energy, dramatic stance' },
+		{ name: 'Hurt', prompt: 'recoiling in pain, body arched backward, defensive posture' },
+		{ name: 'Dead', prompt: 'collapsed on ground, body limp, completely fallen over' },
 	];
 	
 	function handleReferenceUpload(dataUrl) {
@@ -65,6 +73,9 @@
 				prompt: poseDescription.trim()
 			};
 			
+			// Show in the center viewer
+			showGeneratedInViewer();
+			
 		} catch (err) {
 			error = err.message;
 		} finally {
@@ -95,122 +106,86 @@
 		poseStore.removePose(id);
 	}
 	
+	function previewPose(pose) {
+		selectedPose = pose;
+		// Dispatch event to show pose in PoseViewer
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('poseSelected', { detail: pose }));
+		}
+	}
+	
+	function showGeneratedInViewer() {
+		if (lastGenerated && typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('poseGenerated', { 
+				detail: { 
+					id: 'preview',
+					name: 'Generated Preview',
+					imageData: lastGenerated.image,
+					prompt: lastGenerated.prompt
+				} 
+			}));
+		}
+	}
+	
 	function usePoseForAnimation(pose) {
 		// TODO: Send pose to animation panel
 		alert('Feature coming: Use this pose as a keyframe for animation');
 	}
 </script>
 
-<div class="space-y-4">
-	<div>
-		<h2 class="text-lg font-bold">Pose Generator</h2>
-		<p class="text-xs text-gray-500">Generate specific poses with Nano Banana (Gemini)</p>
-	</div>
-
-	<!-- Reference Image -->
-	<div>
-		<label class="block text-sm font-medium mb-2">Character Reference *</label>
-		{#if poses.referenceImage}
-			<div class="relative">
-				<img src={poses.referenceImage} alt="Reference" class="w-full h-32 object-contain rounded border-2 border-blue-400 bg-gray-100" />
-				<button 
-					class="absolute top-1 right-1 bg-red-500 text-white text-xs px-2 py-1 rounded hover:bg-red-600"
-					onclick={() => poseStore.setReference(null)}
-				>✕</button>
-			</div>
-			<p class="text-xs text-blue-600 mt-1">✓ Reference set</p>
-		{:else}
-			<FrameUpload label="Upload character reference" onUpload={handleReferenceUpload} />
-		{/if}
-	</div>
+<div class="space-y-2">
+	<!-- Reference Preview -->
+	{#if poses.referenceImage}
+		<div class="relative w-3/4 mx-auto">
+			<img src={poses.referenceImage} alt="Reference" class="w-full aspect-square object-contain rounded-lg border-2 border-purple-400 bg-gray-100" />
+			<button 
+				class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
+				onclick={() => poseStore.setReference(null)}
+			>×</button>
+		</div>
+	{:else}
+		<div class="w-3/4 mx-auto aspect-square">
+			<FrameUpload label="Upload Reference" onUpload={handleReferenceUpload} />
+		</div>
+	{/if}
 
 	<!-- Pose Presets -->
-	<div>
-		<label class="block text-sm font-medium mb-2">Quick Presets</label>
-		<div class="flex flex-wrap gap-1">
-			{#each posePresets as preset}
-				<button
-					type="button"
-					class="px-2 py-1 text-xs bg-gray-100 hover:bg-gray-200 rounded border"
-					onclick={() => selectPreset(preset)}
-				>
-					{preset.name}
-				</button>
-			{/each}
-		</div>
+	<div class="flex flex-wrap gap-1 justify-center">
+		{#each posePresets as preset}
+			<button
+				type="button"
+				class="px-2 py-0.5 text-[10px] bg-gray-100 hover:bg-purple-100 rounded border hover:border-purple-300"
+				onclick={() => selectPreset(preset)}
+			>
+				{preset.name}
+			</button>
+		{/each}
 	</div>
 
-	<!-- Pose Description -->
-	<div>
-		<label class="block text-sm font-medium mb-2">Pose Description</label>
-		<textarea
+	<!-- Pose Description + Generate -->
+	<div class="flex gap-2">
+		<input
+			type="text"
 			bind:value={poseDescription}
-			placeholder="Describe the pose you want..."
-			rows="2"
-			class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg resize-none"
-		></textarea>
+			placeholder="Describe pose..."
+			class="flex-1 px-2 py-1.5 text-sm border border-gray-300 rounded"
+		/>
+		<button
+			class="px-3 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed whitespace-nowrap"
+			onclick={generatePose}
+			disabled={isGenerating || !poses.referenceImage || !poseDescription.trim()}
+		>
+			{isGenerating ? '...' : 'Generate'}
+		</button>
 	</div>
 
-	<!-- Generate Button -->
-	<button
-		class="w-full px-4 py-2 text-base bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-		onclick={generatePose}
-		disabled={isGenerating || !poses.referenceImage || !poseDescription.trim()}
-	>
-		{isGenerating ? 'Generating Pose...' : 'Generate Pose'}
-	</button>
-
+	<!-- Status messages -->
 	{#if error}
-		<div class="p-2 text-sm bg-red-100 border border-red-400 text-red-700 rounded">
-			{error}
-		</div>
+		<p class="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">{error}</p>
 	{/if}
 
-	<!-- Generated Result -->
 	{#if lastGenerated}
-		<div class="border-2 border-green-400 rounded-lg p-3 bg-green-50">
-			<p class="text-sm font-medium text-green-800 mb-2">Generated Pose:</p>
-			<img src={lastGenerated.image} alt="Generated pose" class="w-full h-40 object-contain bg-white rounded" />
-			<p class="text-xs text-gray-500 mt-1 truncate">{lastGenerated.prompt}</p>
-			<div class="flex gap-2 mt-2">
-				<button
-					class="flex-1 px-3 py-1 text-sm bg-green-600 text-white rounded hover:bg-green-700"
-					onclick={savePose}
-				>
-					Save Pose
-				</button>
-				<button
-					class="flex-1 px-3 py-1 text-sm bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
-					onclick={discardPose}
-				>
-					Discard
-				</button>
-			</div>
-		</div>
-	{/if}
-
-	<!-- Saved Poses Library -->
-	{#if poses.poses.length > 0}
-		<div>
-			<h3 class="text-sm font-medium mb-2">Saved Poses ({poses.poses.length})</h3>
-			<div class="grid grid-cols-3 gap-2">
-				{#each poses.poses as pose}
-					<div class="relative group">
-						<img 
-							src={pose.imageData} 
-							alt={pose.name} 
-							class="w-full h-20 object-contain bg-gray-100 rounded border cursor-pointer hover:border-blue-400"
-							onclick={() => usePoseForAnimation(pose)}
-						/>
-						<button
-							class="absolute top-0 right-0 bg-red-500 text-white text-xs w-4 h-4 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-							onclick={() => deletePose(pose.id)}
-						>×</button>
-						<p class="text-xs text-center truncate mt-1">{pose.name}</p>
-					</div>
-				{/each}
-			</div>
-		</div>
+		<p class="text-xs text-green-700 bg-green-50 px-2 py-1 rounded">✓ Generated! See Poses tab →</p>
 	{/if}
 </div>
 
