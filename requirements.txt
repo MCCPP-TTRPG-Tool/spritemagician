@@ -1,14 +1,18 @@
 # RunPod SVD Handler Dependencies
-# Note: torch/torchvision are in the base image, don't reinstall
+# Note: torch/torchvision are in the base image (PyTorch 2.1.0), don't reinstall
 
 runpod>=1.0.0
 requests>=2.31.0
 pillow>=10.0.0
 
-# Diffusers and dependencies
-diffusers>=0.27.0
-transformers>=4.40.0
-accelerate>=0.30.0
+# Pin numpy to <2 for compatibility with PyTorch 2.1.0
+numpy<2
+
+# Diffusers - pin to version compatible with PyTorch 2.1.0
+# v0.27.x introduced torch.xpu dependency which requires PyTorch 2.4+
+diffusers==0.26.3
+transformers>=4.38.0,<4.45.0
+accelerate>=0.27.0,<0.31.0
 
 # Video processing
 imageio>=2.31.0
