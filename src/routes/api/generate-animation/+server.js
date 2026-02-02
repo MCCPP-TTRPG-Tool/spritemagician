@@ -51,72 +51,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	const model = MODELS[modelId] || MODELS.minimax;
 	
 	try {
-		setProgress(jobId, {
-			currentFrame: 0,
-			totalFrames: frameCount,
-			status: 'processing',
-			message: 'Uploading reference image...'
-		});
-
-		// Upload reference image to Firebase to get a public URL
-		let imageUrl;
-		if (referenceImage.startsWith('data:')) {
-			imageUrl = await uploadImageToFirebase(referenceImage, `anim-input-${Date.now()}.png`);
-		} else {
-			imageUrl = referenceImage;
-		}
-
-		setProgress(jobId, {
-			currentFrame: 0,
-			totalFrames: frameCount,
-			status: 'processing',
-			message: `Starting ${model.name}...`
-		});
-
-		// Build input based on model
-		let input;
-		
-		if (modelId === 'hailuo') {
-			// Hailuo 2.3 - newest Minimax model
-			input = {
-				prompt: prompt || 'subtle idle animation',
-				first_frame_image: imageUrl
-			};
-		} else if (modelId === 'ltxv') {
-			// LTX Video - Lightricks fast video
-			// Note: LTX may not support prompts well, try with motion emphasis
-			input = {
-				input_image: imageUrl,
-				prompt: prompt || 'subtle breathing animation, gentle motion, idle stance',
-				num_frames: Math.min(65, frameCount * 3), // Match desired frame count
-				guidance_scale: 7.5, // Higher for more motion
-				motion_scale: 1.0 // Explicit motion parameter if supported
-			};
-		} else if (modelId === 'live2d') {
-			// Video-01 Live - designed for Live2D/animation
-			input = {
-				prompt: prompt || 'subtle idle animation, breathing',
-				first_frame_image: imageUrl
-			};
-		} else if (modelId === 'wan25') {
-			// Wan 2.5 I2V
-			input = {
-				prompt: prompt || 'subtle motion, minimal movement',
-				image: imageUrl,
-				max_area: '832x480',
-				fast_mode: 'Disabled'
-			};
-		} else {
-			// Default/fallback
-			input = {
-				prompt: prompt || 'subtle motion',
-				first_frame_image: imageUrl
-			};
-		}
-		
-		console.log(`${model.name} params:`, { fps, motionAmount, frameCount, modelId });
-
-		// Check if using self-hosted Wan 2.5
+		// Check if using self-hosted Wan 2.5 - skip Firebase upload for this
 		if (modelId === 'wan25' && WAN_SELF_HOSTED_URL) {
 			console.log('Using self-hosted Wan 2.5 endpoint:', WAN_SELF_HOSTED_URL);
 			
@@ -126,6 +61,13 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				status: 'processing',
 				message: 'Calling self-hosted Wan 2.5...'
 			});
+
+			// For self-hosted, send base64 directly (no Firebase upload needed)
+			let imageToSend = referenceImage;
+			if (!referenceImage.startsWith('data:image/') && !referenceImage.startsWith('http')) {
+				// If it's not base64 and not a URL, something's wrong
+				throw new Error('Reference image must be a base64 data URL for self-hosted endpoint');
+			}
 
 			// Determine if it's a RunPod endpoint ID or full URL
 			let apiUrl = WAN_SELF_HOSTED_URL;
@@ -142,13 +84,13 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				headers['Authorization'] = `Bearer ${RUNPOD_API_KEY}`;
 			}
 
-			// Call self-hosted endpoint (RunPod format)
+			// Call self-hosted endpoint (RunPod format) with base64 image
 			const response = await fetch(apiUrl, {
 				method: 'POST',
 				headers: headers,
 				body: JSON.stringify({
 					input: {
-						image: imageUrl,
+						image: imageToSend, // Send base64 data URL directly
 						prompt: prompt || 'subtle motion',
 						num_frames: Math.round(frameCount * 2.5)
 					}
@@ -244,6 +186,72 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			setTimeout(() => clearProgress(jobId), 120000);
 			return;
 		}
+
+		// For Replicate API, upload to Firebase first to get public URL
+		setProgress(jobId, {
+			currentFrame: 0,
+			totalFrames: frameCount,
+			status: 'processing',
+			message: 'Uploading reference image...'
+		});
+
+		// Upload reference image to Firebase to get a public URL
+		let imageUrl;
+		if (referenceImage.startsWith('data:')) {
+			imageUrl = await uploadImageToFirebase(referenceImage, `anim-input-${Date.now()}.png`);
+		} else {
+			imageUrl = referenceImage;
+		}
+
+		setProgress(jobId, {
+			currentFrame: 0,
+			totalFrames: frameCount,
+			status: 'processing',
+			message: `Starting ${model.name}...`
+		});
+
+		// Build input based on model
+		let input;
+		
+		if (modelId === 'hailuo') {
+			// Hailuo 2.3 - newest Minimax model
+			input = {
+				prompt: prompt || 'subtle idle animation',
+				first_frame_image: imageUrl
+			};
+		} else if (modelId === 'ltxv') {
+			// LTX Video - Lightricks fast video
+			// Note: LTX may not support prompts well, try with motion emphasis
+			input = {
+				input_image: imageUrl,
+				prompt: prompt || 'subtle breathing animation, gentle motion, idle stance',
+				num_frames: Math.min(65, frameCount * 3), // Match desired frame count
+				guidance_scale: 7.5, // Higher for more motion
+				motion_scale: 1.0 // Explicit motion parameter if supported
+			};
+		} else if (modelId === 'live2d') {
+			// Video-01 Live - designed for Live2D/animation
+			input = {
+				prompt: prompt || 'subtle idle animation, breathing',
+				first_frame_image: imageUrl
+			};
+		} else if (modelId === 'wan25') {
+			// Wan 2.5 I2V (for Replicate, not self-hosted)
+			input = {
+				prompt: prompt || 'subtle motion, minimal movement',
+				image: imageUrl,
+				max_area: '832x480',
+				fast_mode: 'Disabled'
+			};
+		} else {
+			// Default/fallback
+			input = {
+				prompt: prompt || 'subtle motion',
+				first_frame_image: imageUrl
+			};
+		}
+		
+		console.log(`${model.name} params:`, { fps, motionAmount, frameCount, modelId });
 
 		// Use Replicate API
 		const response = await fetch('https://api.replicate.com/v1/predictions', {

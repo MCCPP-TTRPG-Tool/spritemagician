@@ -22,7 +22,7 @@ def handler(event):
     Expected input:
     {
         "input": {
-            "image": "https://...",  # Image URL
+            "image": "data:image/png;base64,..." or "https://...",  # Base64 data URL or Image URL
             "prompt": "animation description",
             "num_frames": 65
         }
@@ -36,12 +36,20 @@ def handler(event):
         if not input_data and "image" in event:
             input_data = event
         
-        image_url = input_data.get("image")
+        image_input = input_data.get("image")
         prompt = input_data.get("prompt", "subtle motion, idle animation")
         num_frames = input_data.get("num_frames", 65)
         
-        if not image_url:
-            return {"error": "Image URL is required", "received": list(input_data.keys())}
+        if not image_input:
+            return {"error": "Image is required (base64 data URL or image URL)", "received": list(input_data.keys())}
+        
+        # Handle base64 data URL - Replicate accepts these directly
+        image_url = image_input
+        if image_input.startswith("data:image/"):
+            # Replicate accepts base64 data URLs directly, so we can pass it through
+            image_url = image_input
+        elif not image_input.startswith("http"):
+            return {"error": "Image must be a base64 data URL (data:image/...) or HTTP(S) URL"}
         
         # For now, we'll use Replicate's Wan 2.5 API
         # TODO: Load model locally once we have proper GPU setup
