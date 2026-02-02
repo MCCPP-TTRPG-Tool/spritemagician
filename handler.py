@@ -1,24 +1,61 @@
 """
-RunPod Serverless Handler for Wan 2.5 Video Generation
-Supports base64 image uploads directly
+RunPod Serverless Handler for Local Video Generation
+Uses Stable Video Diffusion (SVD) - NO REPLICATE CALLS
 """
 import runpod
 import requests
 from io import BytesIO
 import base64
 from PIL import Image
+import torch
+from diffusers import StableVideoDiffusionPipeline
+from diffusers.utils import load_image, export_to_video
+import numpy as np
+import os
+import time
 
-# Note: You'll need to install dependencies in your Dockerfile
-# pip install diffusers transformers accelerate torch runpod
+# Global model cache
+_model = None
+_pipe = None
 
-def download_image(url):
-    """Download image from URL and return PIL Image"""
-    response = requests.get(url)
-    return Image.open(BytesIO(response.content))
+def load_model():
+    """Load SVD model once and cache it"""
+    global _model, _pipe
+    if _pipe is None:
+        print("Loading Stable Video Diffusion model...")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # Use Stable Video Diffusion from Hugging Face
+        model_id = "stabilityai/stable-video-diffusion-img2vid-xt"
+        
+        _pipe = StableVideoDiffusionPipeline.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            variant="fp16" if device == "cuda" else None
+        )
+        _pipe = _pipe.to(device)
+        _pipe.enable_model_cpu_offload()  # Save VRAM
+        
+        print("Model loaded successfully")
+    return _pipe
+
+def image_to_base64(image):
+    """Convert PIL Image to base64 data URL"""
+    from io import BytesIO
+    buffered = BytesIO()
+    image.save(buffered, format="PNG")
+    img_str = base64.b64encode(buffered.getvalue()).decode()
+    return f"data:image/png;base64,{img_str}"
+
+def video_to_base64(video_path):
+    """Convert video file to base64 data URL"""
+    with open(video_path, "rb") as video_file:
+        video_data = base64.b64encode(video_file.read()).decode()
+        return f"data:video/mp4;base64,{video_data}"
 
 def handler(event):
     """
-    Handler function for RunPod serverless
+    Handler function for RunPod serverless - LOCAL INFERENCE, NO REPLICATE
     
     Expected input:
     {
@@ -44,91 +81,92 @@ def handler(event):
         if not image_input:
             return {"error": "Image is required (base64 data URL or image URL)", "received": list(input_data.keys())}
         
-        # Handle base64 data URL - Replicate accepts these directly
-        image_url = image_input
+        # Load or get cached model
+        pipe = load_model()
+        
+        # Process input image
         if image_input.startswith("data:image/"):
-            # Replicate accepts base64 data URLs directly, so we can pass it through
-            image_url = image_input
-        elif not image_input.startswith("http"):
+            # Extract base64
+            base64_data = image_input.split(",")[1]
+            image_bytes = base64.b64decode(base64_data)
+            image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        elif image_input.startswith("http"):
+            # Download from URL
+            response = requests.get(image_input)
+            image = Image.open(BytesIO(response.content)).convert("RGB")
+        else:
             return {"error": "Image must be a base64 data URL (data:image/...) or HTTP(S) URL"}
         
-        # For now, we'll use Replicate's Wan 2.5 API
-        # TODO: Load model locally once we have proper GPU setup
-        import os
-        replicate_token = os.environ.get("REPLICATE_API_TOKEN")
+        # Resize image to model requirements (1024x576 for SVD)
+        image = image.resize((1024, 576))
         
-        if not replicate_token:
-            return {"error": "REPLICATE_API_TOKEN not set"}
+        print(f"Generating {num_frames} frames with SVD, prompt: {prompt}")
         
-        # Call Replicate's Wan 2.5 model
-        response = requests.post(
-            "https://api.replicate.com/v1/predictions",
-            headers={
-                "Authorization": f"Token {replicate_token}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "version": "1b29bbbbfdbc25bba2294de3acd2b58b82e5b623f183880cdb37d76133d80f00",
-                "input": {
-                    "image": image_url,
-                    "prompt": prompt,
-                    "max_area": "832x480",
-                    "fast_mode": "Disabled"
-                }
-            }
+        # Generate video frames with SVD
+        # SVD doesn't use prompts, it's purely image-to-video
+        output = pipe(
+            image,
+            decode_chunk_size=8,  # Process in chunks for memory efficiency
+            num_frames=min(num_frames, 25),  # SVD max is 25 frames
+            motion_bucket_id=127,  # Motion intensity (1-255)
+            fps=8
         )
         
-        # Replicate returns 201 (Created) for successful prediction creation, 200 for other success
-        if response.status_code not in [200, 201]:
-            error_text = response.text
+        frames = output.frames[0]
+        
+        # Convert frames to video
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp_file:
+            video_path = tmp_file.name
+        
+        # Export frames to video
+        export_to_video(frames, video_path, fps=8)
+        
+        # Upload video to Firebase Storage (if available) or return as base64
+        # Check for Firebase credentials
+        firebase_project_id = os.environ.get("FIREBASE_PROJECT_ID")
+        
+        if firebase_project_id:
             try:
-                error_json = response.json()
-                error_text = error_json.get("detail", error_text)
-            except:
-                pass
-            return {"error": f"Replicate API error: {response.status_code}", "details": error_text}
-        
-        prediction = response.json()
-        prediction_id = prediction.get("id")
-        
-        if not prediction_id:
-            return {"error": "No prediction ID returned", "response": prediction}
-        
-        # Poll for completion
-        import time
-        max_wait = 300  # 5 minutes
-        waited = 0
-        
-        while waited < max_wait:
-            try:
-                status_response = requests.get(
-                    f"https://api.replicate.com/v1/predictions/{prediction_id}",
-                    headers={"Authorization": f"Token {replicate_token}"}
-                )
+                from firebase_admin import storage, initialize_app, cert
+                from firebase_admin import get_app, get_apps
                 
-                if status_response.status_code != 200:
-                    return {"error": f"Status check failed: {status_response.status_code}"}
+                # Initialize Firebase if not already
+                if not get_apps():
+                    initialize_app(credential=cert({
+                        "project_id": firebase_project_id,
+                        "client_email": os.environ.get("FIREBASE_CLIENT_EMAIL"),
+                        "private_key": os.environ.get("FIREBASE_PRIVATE_KEY", "").replace("\\n", "\n")
+                    }))
                 
-                result = status_response.json()
-                status = result.get("status")
+                bucket = storage.bucket()
+                video_filename = f"videos/svd-{int(time.time())}.mp4"
+                blob = bucket.blob(video_filename)
                 
-                if status == "succeeded":
-                    video_url = result.get("output")
-                    if isinstance(video_url, list):
-                        video_url = video_url[0]
-                    # Return in format our app expects
-                    return {"video": video_url, "videoUrl": video_url, "output": video_url}
+                # Upload video
+                blob.upload_from_filename(video_path)
+                blob.make_public()
                 
-                if status == "failed":
-                    error_msg = result.get("error") or result.get("message") or "Generation failed"
-                    return {"error": error_msg, "status": status}
+                video_url = blob.public_url
+                os.unlink(video_path)
                 
-                time.sleep(2)
-                waited += 2
-            except Exception as poll_error:
-                return {"error": f"Polling error: {str(poll_error)}"}
+                return {
+                    "video": video_url,
+                    "videoUrl": video_url,
+                    "output": video_url
+                }
+            except Exception as firebase_error:
+                print(f"Firebase upload failed: {firebase_error}, using base64 fallback")
         
-        return {"error": "Generation timed out", "waited_seconds": waited}
+        # Fallback: return as base64 (large but works)
+        video_base64 = video_to_base64(video_path)
+        os.unlink(video_path)
+        
+        return {
+            "video": video_base64,
+            "videoUrl": video_base64,
+            "output": video_base64
+        }
         
     except Exception as e:
         import traceback
