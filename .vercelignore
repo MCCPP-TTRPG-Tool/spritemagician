@@ -1,0 +1,9 @@
+# Ignore RunPod/Python files
+runpod/
+*.py
+*requirements*.txt
+
+# Other
+.git
+node_modules
+.env.local
