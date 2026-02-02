@@ -6,11 +6,12 @@ requests>=2.31.0
 pillow>=10.0.0
 numpy<2
 
-# Diffusers - use version compatible with PyTorch 2.4
-diffusers>=0.28.0,<0.30.0
-transformers>=4.40.0
-accelerate>=0.30.0
-huggingface-hub>=0.23.0
+# Diffusers + transformers - MUST use compatible versions
+# transformers 4.40+ removed FLAX_WEIGHTS_NAME which diffusers needs
+diffusers==0.27.2
+transformers==4.38.2
+accelerate==0.28.0
+huggingface-hub>=0.21.0,<0.24.0
 
 # Video processing
 imageio>=2.31.0
