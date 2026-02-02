@@ -1,17 +1,16 @@
 # RunPod SVD Handler Dependencies
-# Base image: PyTorch 2.2.0 + CUDA 12.1
+# Base image: PyTorch 2.4.0 + CUDA 12.4
 
 runpod>=1.0.0
 requests>=2.31.0
 pillow>=10.0.0
 numpy<2
 
-# Diffusers - pin to 0.25.1 to avoid torch.xpu AttributeError
-# Newer versions try to use Intel XPU which causes import errors
-diffusers==0.25.1
-transformers>=4.36.0,<4.39.0
-accelerate>=0.25.0,<0.28.0
-huggingface-hub>=0.20.0,<0.22.0
+# Diffusers - use version compatible with PyTorch 2.4
+diffusers>=0.28.0,<0.30.0
+transformers>=4.40.0
+accelerate>=0.30.0
+huggingface-hub>=0.23.0
 
 # Video processing
 imageio>=2.31.0
