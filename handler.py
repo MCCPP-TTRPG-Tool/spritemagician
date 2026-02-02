@@ -55,9 +55,18 @@ def load_model():
             
             # Memory optimizations
             if device == "cuda":
-                _pipe.enable_attention_slicing(slice_size="auto")
-                _pipe.enable_vae_slicing()
-                print("[SVD Handler] Memory optimizations enabled")
+                try:
+                    _pipe.enable_attention_slicing(slice_size="auto")
+                    print("[SVD Handler] Attention slicing enabled")
+                except Exception as e:
+                    print(f"[SVD Handler] Attention slicing not available: {e}")
+                
+                # Try xformers for faster attention (optional)
+                try:
+                    _pipe.enable_xformers_memory_efficient_attention()
+                    print("[SVD Handler] Xformers enabled")
+                except Exception:
+                    print("[SVD Handler] Xformers not available, using default attention")
             
             print("[SVD Handler] Model ready!")
         except Exception as e:
