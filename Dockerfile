@@ -15,8 +15,21 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Verify imports work BEFORE deploying (fail fast)
+RUN python -c "\
+from diffusers import StableVideoDiffusionPipeline; \
+from diffusers.utils import export_to_video; \
+import torch; \
+print('✓ diffusers imports OK'); \
+print(f'✓ PyTorch {torch.__version__}'); \
+print(f'✓ CUDA available: {torch.cuda.is_available()}'); \
+"
+
 # Copy handler
 COPY handler.py .
+
+# Verify handler imports work
+RUN python -c "import sys; sys.path.insert(0, '/app'); exec(open('handler.py').read().split('runpod.serverless.start')[0]); print('✓ handler imports OK')"
 
 # Run handler
 CMD ["python", "-u", "handler.py"]

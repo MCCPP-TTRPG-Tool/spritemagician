@@ -1,19 +1,27 @@
 # RunPod SVD Handler Dependencies
-# Base image: PyTorch 2.4.0 + CUDA 12.4
+# Base image: PyTorch 2.4.0 + CUDA 12.4.1
+#
+# COMPATIBILITY MATRIX (tested together):
+# - diffusers 0.27.2 requires transformers <4.40 (FLAX_WEIGHTS_NAME)
+# - transformers 4.38.2 is the last version with FLAX_WEIGHTS_NAME
+# - huggingface-hub <0.24 has cached_download (needed by diffusers)
+# - accelerate 0.28.0 works with PyTorch 2.4
 
 runpod>=1.0.0
 requests>=2.31.0
 pillow>=10.0.0
 numpy<2
 
-# Diffusers + transformers - MUST use compatible versions
-# transformers 4.40+ removed FLAX_WEIGHTS_NAME which diffusers needs
+# === CRITICAL: Exact versions for compatibility ===
 diffusers==0.27.2
 transformers==4.38.2
 accelerate==0.28.0
-huggingface-hub>=0.21.0,<0.24.0
+huggingface-hub==0.23.4
 
 # Video processing
 imageio>=2.31.0
 imageio-ffmpeg>=0.4.9
 opencv-python-headless>=4.8.0
+
+# Optional but recommended for faster attention
+xformers>=0.0.26
