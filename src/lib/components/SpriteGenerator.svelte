@@ -100,20 +100,14 @@
 	// Custom Description
 	let description = $state('');
 	
-	// Quick presets for common sprites
-	const quickPresets = [
-		{ name: 'HoMM3', desc: '', type: 'character', style: 'homm3' },
-		{ name: 'Knight', desc: 'armored medieval knight with sword and shield', type: 'character', style: 'fantasy' },
-		{ name: 'Wizard', desc: 'robed wizard with staff and magical aura', type: 'character', style: 'fantasy' },
-		{ name: 'Goblin', desc: 'small green goblin with crude weapons', type: 'creature', style: 'fantasy' },
-		{ name: 'Dragon', desc: 'fierce dragon with wings and fire breath', type: 'creature', style: 'fantasy' },
-		{ name: 'Slime', desc: 'cute bouncy slime monster', type: 'monster', style: 'anime' },
-	];
+	// HoMM3 mode toggle
+	let homm3Mode = $state(false);
 	
-	function applyPreset(preset) {
-		description = preset.desc;
-		subjectType = preset.type;
-		artStyle = preset.style;
+	function toggleHoMM3() {
+		homm3Mode = !homm3Mode;
+		if (homm3Mode) {
+			artStyle = 'homm3';
+		}
 	}
 	
 	function buildPrompt() {
@@ -123,37 +117,22 @@
 		const detailInfo = detailLevels.find(d => d.id === detailLevel);
 		const paletteInfo = colorPalettes.find(p => p.id === colorPalette);
 		
-		// If we have a reference image, build a reference-based prompt
+		// If we have a reference image
 		if (referenceImage) {
-			const baseDesc = description.trim() || 'in the same style';
-			return `REFERENCE-BASED SPRITE GENERATION
-
-You are given a REFERENCE IMAGE. Use it as the basis for generation.
-
-TASK: Generate a new sprite based on the reference image: "${baseDesc}"
-
-INSTRUCTIONS:
-- Keep the SAME character/subject from the reference
-- Maintain consistent style, colors, proportions, and details
-- Apply the requested modification: "${baseDesc}"
-- View angle: ${viewAngles.find(v => v.id === viewAngle)?.name || 'Side View'}
-- Art style: ${styleInfo.name}
-- Detail level: ${detailInfo.name}
-- Color palette: ${paletteInfo.name}
-
-REQUIREMENTS:
-- The result should clearly be the SAME character/object as the reference
-- Clean game sprite quality
-- Plain white or transparent background
-- No text, no ground, no scenery
-- Centered, full subject visible
-
-Generate a variation of the reference that matches the description while keeping the character recognizable.`;
+			const baseDesc = description.trim() || 'the same character';
+			
+			// HoMM3 mode with reference
+			if (artStyle === 'homm3' || homm3Mode) {
+				return `Create a pixel art sprite of ${baseDesc} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background. Base it on the reference image provided.`;
+			}
+			
+			// Custom mode with reference
+			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// Special case: HoMM3 style uses ONLY this exact prompt format
-		if (artStyle === 'homm3') {
-			return `Create a pixel art sprite of ${description || typeInfo.name} in the style of Heroes of Might and Magic 3, facing to the right, with a black background.`;
+		// Special case: HoMM3 style uses EXACT user-specified format
+		if (artStyle === 'homm3' || homm3Mode) {
+			return `Create a pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background.`;
 		}
 		
 		// Build aggressive view-specific instructions
@@ -439,82 +418,65 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 			{/if}
 		</div>
 
-		<!-- Quick Presets -->
-		<div>
-			<p class="text-xs text-gray-500 mb-1">Quick Start:</p>
-			<div class="flex flex-wrap gap-1">
-				{#each quickPresets as preset}
-					<button
-						class="px-2 py-0.5 text-[10px] rounded border {preset.style === 'homm3' ? 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}"
-						onclick={() => applyPreset(preset)}
-					>{preset.name}</button>
-				{/each}
+		<!-- HoMM3 Mode Toggle -->
+		<button
+			class="w-full py-2 px-3 rounded-lg border-2 font-medium text-sm transition-all {homm3Mode 
+				? 'bg-amber-100 border-amber-400 text-amber-800' 
+				: 'bg-gray-50 border-gray-300 text-gray-600 hover:border-amber-300'}"
+			onclick={toggleHoMM3}
+		>
+			{#if homm3Mode}
+				⚔️ HoMM3 Style ACTIVE
+			{:else}
+				⚔️ Enable HoMM3 Style
+			{/if}
+		</button>
+		
+		{#if homm3Mode}
+			<div class="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-700">
+				Prompt: "Create a pixel art sprite of <span class="font-bold">[your description]</span> in the style of Heroes of Might and Magic 3, facing to the right, with a blank background."
 			</div>
-		</div>
-
-		<!-- Subject Type -->
-		<div>
-			<p class="text-xs text-gray-500 mb-1">Type:</p>
-			<div class="flex flex-wrap gap-1">
-				{#each subjectTypes.slice(0, 6) as type}
-					<button
-						class="px-2 py-0.5 text-[10px] rounded border transition-colors {subjectType === type.id ? 'bg-purple-100 border-purple-400 text-purple-700' : 'bg-gray-50 border-gray-200 hover:border-gray-300'}"
-						onclick={() => subjectType = type.id}
-					>{type.icon} {type.name}</button>
-				{/each}
-			</div>
-		</div>
-
-		<!-- Style + View Row -->
-		<div class="flex gap-2">
-			<div class="flex-1">
-				<p class="text-xs text-gray-500 mb-1">Style:</p>
-				<select bind:value={artStyle} class="w-full px-2 py-1 text-xs border rounded bg-white">
-					{#each artStyles as style}
-						<option value={style.id}>{style.name}</option>
-					{/each}
-				</select>
-			</div>
-			<div class="flex-1">
-				<p class="text-xs text-gray-500 mb-1">View:</p>
-				<select bind:value={viewAngle} class="w-full px-2 py-1 text-xs border rounded bg-white">
-					{#each viewAngles as view}
-						<option value={view.id}>{view.name}</option>
-					{/each}
-				</select>
-			</div>
-		</div>
-
-		<!-- Detail + Colors Row -->
-		<div class="flex gap-2">
-			<div class="flex-1">
-				<p class="text-xs text-gray-500 mb-1">Detail:</p>
-				<select bind:value={detailLevel} class="w-full px-2 py-1 text-xs border rounded bg-white">
-					{#each detailLevels as detail}
-						<option value={detail.id}>{detail.name}</option>
-					{/each}
-				</select>
-			</div>
-			<div class="flex-1">
-				<p class="text-xs text-gray-500 mb-1">Colors:</p>
-				<select bind:value={colorPalette} class="w-full px-2 py-1 text-xs border rounded bg-white">
-					{#each colorPalettes as palette}
-						<option value={palette.id}>{palette.name}</option>
-					{/each}
-				</select>
-			</div>
-		</div>
+		{/if}
 
 		<!-- Description -->
 		<div>
-			<p class="text-xs text-gray-500 mb-1">{referenceImage ? 'Modification:' : 'Description:'}</p>
+			<p class="text-xs text-gray-500 mb-1">{referenceImage ? 'Modification:' : 'Character Description:'}</p>
 			<textarea
 				bind:value={description}
-				placeholder={referenceImage ? "e.g., 'make it angry', 'wearing armor', 'jumping pose', 'pixel art version'..." : "Describe your sprite in detail..."}
-				rows="2"
+				placeholder={homm3Mode 
+					? "e.g., 'a skeleton warrior', 'a fire elemental', 'a green dragon'..." 
+					: "Describe your sprite in detail..."}
+				rows="3"
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
 			></textarea>
 		</div>
+		
+		{#if !homm3Mode}
+			<!-- Advanced Options (only when NOT in HoMM3 mode) -->
+			<details class="text-xs">
+				<summary class="cursor-pointer text-gray-500 hover:text-gray-700">Advanced Options</summary>
+				<div class="mt-2 space-y-2 p-2 bg-gray-50 rounded">
+					<div class="flex gap-2">
+						<div class="flex-1">
+							<p class="text-gray-500 mb-1">Style:</p>
+							<select bind:value={artStyle} class="w-full px-2 py-1 text-xs border rounded bg-white">
+								{#each artStyles as style}
+									<option value={style.id}>{style.name}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="flex-1">
+							<p class="text-gray-500 mb-1">View:</p>
+							<select bind:value={viewAngle} class="w-full px-2 py-1 text-xs border rounded bg-white">
+								{#each viewAngles as view}
+									<option value={view.id}>{view.name}</option>
+								{/each}
+							</select>
+						</div>
+					</div>
+				</div>
+			</details>
+		{/if}
 
 		<!-- Generate Button -->
 		<button
