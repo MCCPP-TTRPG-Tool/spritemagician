@@ -5,6 +5,7 @@
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
+	import { pixelateFrames } from '$lib/utils/pixelate.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
 	let savedPoses = $state({ poses: [] });
@@ -85,6 +86,9 @@
 	
 	// Processing options
 	let removeBackground = $state(false); // Disabled by default for faster testing
+	let pixelateOutput = $state(true); // Force pixel art look
+	let pixelSize = $state(4); // Size of each "pixel" (2-8)
+	let colorLevels = $state(16); // Color levels (8, 16, 32)
 
 	function handleFirstFrameUpload(dataUrl) {
 		projectStore.update(p => ({ ...p, firstFrame: dataUrl }));
@@ -199,6 +203,22 @@
 						}
 						
 						finalFrames = transparentFrames;
+					}
+					
+					// Step 4: Pixelate frames (if enabled) - force pixel art look
+					if (pixelateOutput && finalFrames.length > 0) {
+						const totalFrames = finalFrames.length;
+						progress = { ...progress, message: `Pixelating frames (0/${totalFrames})...` };
+						
+						if (queueJobId) {
+							jobQueue.updateJob(queueJobId, { message: `Pixelating frames...` });
+						}
+						
+						finalFrames = await pixelateFrames(finalFrames, pixelSize, colorLevels, (done, total) => {
+							progress = { ...progress, message: `Pixelating frames (${done}/${total})...` };
+						});
+						
+						console.log(`Pixelated ${finalFrames.length} frames with pixel size ${pixelSize}, ${colorLevels} colors`);
 					}
 						
 					// Add to completed jobs for user to review
@@ -432,8 +452,37 @@
 			<input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />
 			Remove BG
 		</label>
+		<label class="flex items-center gap-1 text-gray-600" title="Force pixel art look">
+			<input type="checkbox" bind:checked={pixelateOutput} class="w-3 h-3" />
+			Pixelate
+		</label>
 		<span class="ml-auto text-gray-400">~{Math.round(duration * project.fps)}f</span>
 	</div>
+	
+	<!-- Pixelation Settings (when enabled) -->
+	{#if pixelateOutput}
+		<div class="flex items-center gap-3 text-[10px] bg-amber-50 border border-amber-200 rounded p-2">
+			<span class="text-amber-700 font-medium">Pixel Art:</span>
+			<label class="flex items-center gap-1">
+				<span class="text-gray-600">Size:</span>
+				<select bind:value={pixelSize} class="px-1 py-0.5 border rounded text-[10px]">
+					<option value={2}>2px (fine)</option>
+					<option value={4}>4px</option>
+					<option value={6}>6px</option>
+					<option value={8}>8px (chunky)</option>
+				</select>
+			</label>
+			<label class="flex items-center gap-1">
+				<span class="text-gray-600">Colors:</span>
+				<select bind:value={colorLevels} class="px-1 py-0.5 border rounded text-[10px]">
+					<option value={8}>8 (retro)</option>
+					<option value={16}>16</option>
+					<option value={32}>32</option>
+					<option value={64}>64 (smooth)</option>
+				</select>
+			</label>
+		</div>
+	{/if}
 
 	<!-- Model Selection - Compact -->
 	<div class="flex flex-wrap gap-1">
