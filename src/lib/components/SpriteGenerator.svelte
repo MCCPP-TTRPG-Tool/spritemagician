@@ -7,6 +7,7 @@
 	let error = $state(null);
 	let generatedSprite = $state(null);
 	let currentJobId = $state(null);
+	let showPreviewModal = $state(false);
 	
 	// Reference image for "generate like X" feature
 	let referenceImage = $state(null);
@@ -363,6 +364,11 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 	{#if generatedSprite}
 		<div class="relative w-3/4 mx-auto mb-3">
 			<img src={generatedSprite} alt="Generated sprite" class="w-full aspect-square object-contain rounded-lg border-2 border-green-400 bg-gray-100" />
+			<!-- Full size preview button -->
+			<button
+				class="absolute top-2 right-2 px-2 py-1 bg-black/70 text-white text-xs rounded hover:bg-black/90"
+				onclick={() => showPreviewModal = true}
+			>🔍 Full Size</button>
 		</div>
 		<div class="grid grid-cols-3 gap-2 mb-2">
 			<button
@@ -498,3 +504,42 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		{/if}
 	{/if}
 </div>
+
+<!-- Full Size Preview Modal -->
+{#if showPreviewModal && generatedSprite}
+	<div
+		class="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-4"
+		onclick={() => showPreviewModal = false}
+		onkeydown={(e) => { if (e.key === 'Escape') showPreviewModal = false; }}
+		tabindex="0"
+		role="dialog"
+	>
+		<div class="relative max-w-4xl max-h-[90vh]" onclick={(e) => e.stopPropagation()}>
+			<button
+				onclick={() => showPreviewModal = false}
+				class="absolute -top-10 right-0 text-white hover:text-gray-300 text-2xl font-bold"
+				title="Close (ESC)"
+			>✕</button>
+			<img 
+				src={generatedSprite} 
+				alt="Full size preview"
+				class="max-w-full max-h-[85vh] object-contain rounded-lg"
+				style="image-rendering: pixelated;"
+			/>
+			<div class="flex justify-center gap-3 mt-4">
+				<button
+					class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600"
+					onclick={useAsReference}
+				>🎬 Animate</button>
+				<button
+					class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600"
+					onclick={saveSprite}
+				>💾 Save</button>
+				<button
+					class="px-4 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600"
+					onclick={downloadSprite}
+				>📥 Download</button>
+			</div>
+		</div>
+	</div>
+{/if}
