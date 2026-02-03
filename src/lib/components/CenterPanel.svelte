@@ -168,6 +168,23 @@
 			else saveAssetCategory = 'props';
 			showSaveAssetModal = true;
 		});
+		
+		// AUTO-SAVE: Silently save sprites without modal
+		window.addEventListener('autoSaveSprite', (e) => {
+			const { image, description, type, style } = e.detail;
+			// Determine category based on type
+			let category = 'props';
+			if (type === 'character') category = 'characters';
+			else if (type === 'creature' || type === 'monster' || type === 'animal') category = 'creatures';
+			else if (type === 'item' || type === 'object') category = 'items';
+			else if (type === 'building' || type === 'plant') category = 'scenery';
+			else if (type === 'effect') category = 'effects';
+			
+			// Auto-save to gallery
+			const assetName = description?.slice(0, 30) || 'Sprite';
+			assetStore.addAsset(category, assetName, image);
+			console.log(`Auto-saved sprite "${assetName}" to ${category}`);
+		});
 	}
 	
 	// === FRAMES ===

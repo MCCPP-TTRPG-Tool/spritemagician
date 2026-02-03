@@ -232,6 +232,14 @@
 						fps: project.fps
 					});
 					
+					// AUTO-SAVE: Add frames directly to the project
+					projectStore.update(p => ({
+						...p,
+						frames: finalFrames,
+						prompt: poseName
+					}));
+					console.log(`Auto-saved ${finalFrames.length} frames to project`);
+					
 					progress = { ...progress, status: 'completed', message: `Done! ${finalFrames.length} frames ready.` };
 					
 					// Mark job as complete

@@ -302,6 +302,22 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 				description: description
 			});
 			
+			// AUTO-SAVE: Set as first frame of project (ready for animation)
+			projectStore.update(p => ({ ...p, firstFrame: data.image }));
+			
+			// AUTO-SAVE: Also dispatch event to save to gallery with auto-category
+			if (typeof window !== 'undefined') {
+				window.dispatchEvent(new CustomEvent('autoSaveSprite', { 
+					detail: { 
+						image: data.image, 
+						description: description,
+						type: subjectType,
+						style: artStyle
+					} 
+				}));
+			}
+			console.log('Auto-saved sprite to project');
+			
 			// Mark job complete
 			if (currentJobId) {
 				jobQueue.completeJob(currentJobId);
