@@ -27,7 +27,7 @@
 	let queueJobId = $state(null); // For job queue tracking
 	
 	// Animation settings - lower motion for 2D sprites
-	let duration = $state(2); // seconds (1-3)
+	let duration = $state(5); // seconds (2-10, Wan 2.2 max ~121 frames)
 	let motionAmount = $state(50); // 1-255, lower = subtle motion for sprites
 	let shouldLoop = $state(true); // Loop animation back to first frame
 	let selectedPose = $state('idle'); // Pose preset
@@ -442,7 +442,19 @@
 	<div class="flex items-center gap-2 text-xs">
 		<div class="flex-1">
 			<span class="text-gray-600">{duration}s</span>
-			<input type="range" min="1" max="5" step="0.5" bind:value={duration} class="w-full h-1" />
+			<input type="range" min="2" max="10" step="1" bind:value={duration} class="w-full h-1" />
+		</div>
+		<div class="w-16">
+			<span class="text-gray-600">{project.fps}fps</span>
+			<select 
+				value={project.fps} 
+				onchange={(e) => updateFPS(Number(e.target.value))}
+				class="w-full text-[10px] border rounded px-1"
+			>
+				<option value={6}>6 fps (long)</option>
+				<option value={8}>8 fps</option>
+				<option value={12}>12 fps</option>
+			</select>
 		</div>
 		<div class="flex-1">
 			<span class="text-gray-600">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</span>

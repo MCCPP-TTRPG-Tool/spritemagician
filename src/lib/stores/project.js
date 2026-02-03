@@ -2,7 +2,7 @@ import { writable } from 'svelte/store';
 
 export const projectStore = writable({
 	frames: [],
-	fps: 12,
+	fps: 8, // Lower FPS = longer animations from same frames
 	prompt: '',
 	firstFrame: null,
 	lastFrame: null,
