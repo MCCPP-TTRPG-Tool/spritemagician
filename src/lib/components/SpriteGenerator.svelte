@@ -122,9 +122,9 @@
 		if (referenceImage) {
 			const baseDesc = description.trim() || 'the same character';
 			
-			// HoMM3 mode with reference
+			// HoMM3 mode with reference - use same pre-rendered 3D approach
 			if (artStyle === 'homm3' || homm3Mode) {
-				return `Create a pixel art sprite of ${baseDesc} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background. Base it on the reference image provided.`;
+				return `A high-fidelity pre-rendered 2D game sprite of ${baseDesc} in the style of Heroes of Might and Magic 3. Character is rendered from a 3D model, soft painterly textures, rich shadows, facing right. Clean edges with a 1-pixel dark outline. 32-bit color depth, nostalgic 90s fantasy aesthetic. Solid neutral grey background. Base this on the reference image provided.`;
 			}
 			
 			// Custom mode with reference
@@ -440,7 +440,7 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		
 		{#if homm3Mode}
 			<div class="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-700">
-				Prompt: "Create a pixel art sprite of <span class="font-bold">[your description]</span> in the style of Heroes of Might and Magic 3, facing to the right, with a blank background."
+				Prompt: "A high-fidelity pre-rendered 2D game sprite of <span class="font-bold">[your description]</span> in the style of Heroes of Might and Magic 3, soft painterly textures, rich shadows."
 			</div>
 		{/if}
 
