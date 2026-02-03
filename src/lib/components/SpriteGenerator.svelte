@@ -130,9 +130,9 @@
 			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// HoMM3 style - simple clean prompt like Gemini website
+		// HoMM3 style - locked in high detail
 		if (artStyle === 'homm3' || homm3Mode) {
-			return `Highly detailed pixel art of ${description || 'a fantasy character'}, Heroes of Might and Magic 3 style, transparent background`;
+			return `Highly detailed pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3. Use fine pixels with high pixel density, intricate shading and textures. NOT blocky, NOT low resolution. Transparent background, full body visible.`;
 		}
 		
 		// Build aggressive view-specific instructions
