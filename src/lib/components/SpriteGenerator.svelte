@@ -288,7 +288,7 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 			generatedSprite = data.image;
 			
 			// Add to completed jobs for user to review
-			completedJobs.addSprite({
+			await completedJobs.addSprite({
 				name: description.substring(0, 30) || 'Sprite',
 				image: data.image,
 				description: description

@@ -205,7 +205,7 @@
 					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
 					console.log(`Adding animation to completed jobs: ${poseName} with ${finalFrames.length} frames`);
 					
-					completedJobs.addAnimation({
+					await completedJobs.addAnimation({
 						name: poseName,
 						frames: finalFrames,
 						pose: selectedPose,
@@ -227,7 +227,7 @@
 						
 						// Still add to completed jobs with the video URL so user can see something
 						const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
-						completedJobs.addAnimation({
+						await completedJobs.addAnimation({
 							name: `${poseName} (video only)`,
 							frames: [], // Empty frames
 							videoUrl: data.videoUrl, // Store the video URL
