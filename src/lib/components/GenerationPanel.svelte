@@ -31,38 +31,40 @@
 	let shouldLoop = $state(true); // Loop animation back to first frame
 	let selectedPose = $state('idle'); // Pose preset
 	
-	// Production-ready sprite animation prompts
-	// Optimized for 2D fantasy game sprites (HoMM3 style)
+	// HoMM3 pixel art style animation prompts
+	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
+	const HOMM3_STYLE = 'Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, black background';
+	
 	const posePresets = [
 		{ 
 			id: 'idle', 
 			name: 'Idle', 
-			description: '2D fantasy game sprite, idle stance animation, subtle breathing motion, chest rises and falls naturally, gentle body sway, slight weight shift, natural standing pose, lifelike subtle movement, stationary feet, static camera, no background movement, looping animation, game asset quality'
+			description: `${HOMM3_STYLE}, idle breathing animation, subtle chest movement, gentle sway, stationary feet, looping`
 		},
 		{ 
 			id: 'cast', 
 			name: 'Cast Spell', 
-			description: '2D fantasy game sprite, spellcasting animation, character leans forward with intensity, body tenses with power, arms raise dynamically channeling magic, facial expression shows concentration and determination, glowing magical energy around hands, mystical aura effect, body moves with casting motion, lifelike movement, static camera, contained effects, looping animation, game asset quality'
+			description: `${HOMM3_STYLE}, spellcasting animation, arms raise channeling magic, glowing energy effect, mystical aura, looping`
 		},
 		{ 
 			id: 'attack', 
 			name: 'Attack', 
-			description: '2D fantasy game sprite, melee attack animation, body twists with power, weight shifts forward, weapon swing motion, striking pose, facial expression shows aggression, combat action, powerful dynamic movement, lifelike attack motion, static camera, single attack cycle, game asset quality'
+			description: `${HOMM3_STYLE}, attack swing animation, weapon strike motion, powerful movement, single attack cycle`
 		},
 		{ 
 			id: 'walk', 
 			name: 'Walking', 
-			description: '2D fantasy game sprite, walking cycle animation, side view facing right, smooth walking motion, legs alternate in natural stride, arms swing opposite to legs, body bobs gently up and down, weight shifts from foot to foot, consistent pace, smooth continuous movement, no jitter or spazzing, controlled motion, static camera, looping walk cycle, game asset quality'
+			description: `${HOMM3_STYLE}, walking cycle, side view facing right, legs alternate stride, smooth looping walk`
 		},
 		{ 
 			id: 'hit', 
 			name: 'Take Damage', 
-			description: '2D fantasy game sprite, damage reaction animation, body recoils dramatically, flinching motion, pain expression on face, body staggers backward, lifelike reaction, natural flinch response, static camera, quick recovery, game asset quality'
+			description: `${HOMM3_STYLE}, damage reaction, body recoils, flinch motion, quick recovery`
 		},
 		{ 
 			id: 'death', 
 			name: 'Death', 
-			description: '2D fantasy game sprite, death animation, character falls down dead, collapses to the floor, body hits ground, lies motionless on ground, defeated pose lying flat, static camera, game asset quality'
+			description: `${HOMM3_STYLE}, death animation, character falls and collapses, lies motionless`
 		},
 		{ 
 			id: 'custom', 

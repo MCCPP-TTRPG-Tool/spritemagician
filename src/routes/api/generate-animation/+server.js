@@ -65,6 +65,10 @@ const MODELS = {
 async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'minimax') {
 	const model = MODELS[modelId] || MODELS.minimax;
 	
+	// CRITICAL: Enhance prompt to preserve pixel art quality
+	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic';
+	const enhancedPrompt = prompt ? `${PIXEL_ART_PRESERVE}. ${prompt}` : `${PIXEL_ART_PRESERVE}. subtle idle animation`;
+	
 	try {
 		// SVD uses Replicate API
 		if (modelId === 'svd') {
@@ -202,7 +206,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		if (modelId === 'hailuo') {
 			// Hailuo 2.3 - newest Minimax model
 			input = {
-				prompt: prompt || 'subtle idle animation',
+				prompt: enhancedPrompt,
 				first_frame_image: imageUrl
 			};
 		} else if (modelId === 'ltxv') {
@@ -210,7 +214,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			// Note: LTX may not support prompts well, try with motion emphasis
 			input = {
 				input_image: imageUrl,
-				prompt: prompt || 'subtle breathing animation, gentle motion, idle stance',
+				prompt: enhancedPrompt,
 				num_frames: Math.min(65, frameCount * 3), // Match desired frame count
 				guidance_scale: 7.5, // Higher for more motion
 				motion_scale: 1.0 // Explicit motion parameter if supported
@@ -218,7 +222,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else if (modelId === 'live2d') {
 			// Video-01 Live - designed for Live2D/animation
 			input = {
-				prompt: prompt || 'subtle idle animation, breathing',
+				prompt: enhancedPrompt,
 				first_frame_image: imageUrl
 			};
 		} else if (modelId === 'wan22') {
@@ -226,7 +230,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			// Frame range: 81-121
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
 			input = {
-				prompt: prompt || 'subtle motion, minimal movement',
+				prompt: enhancedPrompt,
 				image: imageUrl,
 				num_frames: wanFrames,
 				fps: fps
@@ -234,7 +238,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else if (modelId === 'wan25') {
 			// Wan 2.5 I2V (for Replicate, not self-hosted)
 			input = {
-				prompt: prompt || 'subtle motion, minimal movement',
+				prompt: enhancedPrompt,
 				image: imageUrl,
 				max_area: '832x480',
 				fast_mode: 'Disabled'
@@ -242,7 +246,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else {
 			// Default/fallback
 			input = {
-				prompt: prompt || 'subtle motion',
+				prompt: enhancedPrompt,
 				first_frame_image: imageUrl
 			};
 		}
