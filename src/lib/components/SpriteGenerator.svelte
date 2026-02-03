@@ -130,9 +130,9 @@
 			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// Special case: HoMM3 style - HIGH DETAIL pixel art, NO background
+		// HoMM3 style - simple clean prompt like Gemini website
 		if (artStyle === 'homm3' || homm3Mode) {
-			return `Create a highly detailed pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3, facing to the right. Transparent background, no background, isolated character only. IMPORTANT: Use fine detailed pixels with high pixel density, intricate shading, rich textures, NOT blocky or chunky pixels. Professional quality with hundreds of tiny pixels creating smooth gradients and fine details. Vibrant colors, masterful pixel art craftsmanship.`;
+			return `Highly detailed pixel art of ${description || 'a fantasy character'}, Heroes of Might and Magic 3 style, transparent background`;
 		}
 		
 		// Build aggressive view-specific instructions
