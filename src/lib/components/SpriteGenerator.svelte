@@ -122,18 +122,18 @@
 		if (referenceImage) {
 			const baseDesc = description.trim() || 'the same character';
 			
-			// HoMM3 mode with reference - use same pre-rendered 3D approach
+			// HoMM3 mode with reference
 			if (artStyle === 'homm3' || homm3Mode) {
-				return `A high-fidelity pre-rendered 2D game sprite of ${baseDesc} in the style of Heroes of Might and Magic 3. Character is rendered from a 3D model, soft painterly textures, rich shadows, facing right. Clean edges with a 1-pixel dark outline. 32-bit color depth, nostalgic 90s fantasy aesthetic. Solid neutral grey background. Base this on the reference image provided.`;
+				return `Create a sprite of ${baseDesc} in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. Facing right. Solid grey background. Base this on the reference image provided.`;
 			}
 			
 			// Custom mode with reference
 			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// HoMM3 style - PRE-RENDERED 3D approach (not pixel art!)
+		// HoMM3 style - pre-rendered 3D with pixel texture
 		if (artStyle === 'homm3' || homm3Mode) {
-			return `A high-fidelity pre-rendered 2D game sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3. Character is rendered from a 3D model, soft painterly textures, rich shadows, facing right. Clean edges with a 1-pixel dark outline. 32-bit color depth, nostalgic 90s fantasy aesthetic. Solid neutral grey background.`;
+			return `Create a sprite of ${description || 'a fantasy character'} in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. Facing right. Solid grey background.`;
 		}
 		
 		// Build aggressive view-specific instructions
