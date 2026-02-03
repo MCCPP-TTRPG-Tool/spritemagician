@@ -20,8 +20,9 @@ const createCompletedJobsStore = () => {
 				description: sprite.description || '',
 				createdAt: new Date()
 			};
+			// Limit to 10 jobs max to prevent memory issues
 			update(state => ({
-				jobs: [job, ...state.jobs],
+				jobs: [job, ...state.jobs].slice(0, 10),
 				activeIndex: 0
 			}));
 			return job.id;
@@ -33,13 +34,16 @@ const createCompletedJobsStore = () => {
 				id: `anim-${Date.now()}-${Math.random().toString(36).substring(7)}`,
 				type: 'animation',
 				name: animation.name || 'Animation',
-				frames: animation.frames,
+				frames: animation.frames || [],
+				videoUrl: animation.videoUrl || null, // Fallback video URL if frames failed
+				error: animation.error || null,
 				fps: animation.fps || 12,
 				pose: animation.pose || '',
 				createdAt: new Date()
 			};
+			// Limit to 10 jobs max to prevent memory issues
 			update(state => ({
-				jobs: [job, ...state.jobs],
+				jobs: [job, ...state.jobs].slice(0, 10),
 				activeIndex: 0
 			}));
 			return job.id;

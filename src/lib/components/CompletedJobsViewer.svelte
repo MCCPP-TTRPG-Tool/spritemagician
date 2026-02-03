@@ -3,32 +3,48 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { assetStore } from '$lib/stores/assets.js';
 	import { animationStore } from '$lib/stores/animations.js';
+	import { onDestroy } from 'svelte';
 	
 	let jobs = $state({ jobs: [], activeIndex: 0 });
 	let animFrame = $state(0);
-	let animInterval = $state(null);
+	let animIntervalId = null;
+	let lastJobId = null;
 	
 	completedJobs.subscribe(value => { jobs = value; });
 	
 	const activeJob = $derived(jobs.jobs.length > 0 ? jobs.jobs[jobs.activeIndex] : null);
 	
-	// Animate the preview for animations
+	// Watch for job changes and update animation
 	$effect(() => {
-		if (animInterval) {
-			clearInterval(animInterval);
-			animInterval = null;
-		}
+		const job = activeJob;
+		const jobId = job?.id || null;
 		
-		if (activeJob?.type === 'animation' && activeJob.frames?.length > 1) {
-			const fps = activeJob.fps || 12;
-			animInterval = setInterval(() => {
-				animFrame = (animFrame + 1) % activeJob.frames.length;
-			}, 1000 / fps);
+		// Only restart animation if the job changed
+		if (jobId !== lastJobId) {
+			lastJobId = jobId;
+			
+			// Clear any existing interval
+			if (animIntervalId) {
+				clearInterval(animIntervalId);
+				animIntervalId = null;
+			}
+			animFrame = 0;
+			
+			// Start new animation if needed
+			if (job?.type === 'animation' && job.frames?.length > 1) {
+				const fps = job.fps || 12;
+				const frameCount = job.frames.length;
+				let frame = 0;
+				animIntervalId = setInterval(() => {
+					frame = (frame + 1) % frameCount;
+					animFrame = frame;
+				}, 1000 / fps);
+			}
 		}
-		
-		return () => {
-			if (animInterval) clearInterval(animInterval);
-		};
+	});
+	
+	onDestroy(() => {
+		if (animIntervalId) clearInterval(animIntervalId);
 	});
 	
 	function useAsReference() {
