@@ -13,12 +13,11 @@ export async function POST({ request }) {
 			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
 		}
 
-		// Enhance prompt for transparent background
-		const enhancedPrompt = `${prompt}
-
-IMPORTANT: Generate this on a pure white or transparent background. No background scenery, no gradients, no shadows on the ground. Just the sprite/subject isolated on a clean white background.`;
+		// Send prompt EXACTLY as provided - don't add extra instructions that confuse the model
+		const finalPrompt = prompt;
 
 		console.log('[Sprite Generator] Creating sprite with Nano Banana (Gemini)...');
+		console.log('[Sprite Generator] Prompt:', finalPrompt.substring(0, 100) + '...');
 		console.log('[Sprite Generator] Reference image:', referenceImage ? 'provided' : 'none');
 
 		// Build the parts array - include reference image if provided
@@ -46,8 +45,8 @@ IMPORTANT: Generate this on a pure white or transparent background. No backgroun
 			});
 		}
 		
-		// Add the prompt
-		parts.push({ text: enhancedPrompt });
+		// Add the prompt EXACTLY as provided
+		parts.push({ text: finalPrompt });
 
 		// Use the same model as pose generator (gemini-2.5-flash-image)
 		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
