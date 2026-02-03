@@ -120,15 +120,23 @@
 		
 		// If we have a reference image
 		if (referenceImage) {
-			const baseDesc = description.trim() || 'the same character';
+			const modification = description.trim();
 			
-			// HoMM3 mode with reference
+			// HoMM3 mode with reference - keep FULL quality instructions, add modification as extra instruction
 			if (artStyle === 'homm3' || homm3Mode) {
-				return `Create a sprite of ${baseDesc} in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. Facing right. Solid grey background. Base this on the reference image provided.`;
+				const basePrompt = `Recreate the character from the reference image in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. Facing right. Solid grey background. IMPORTANT: Maintain the same level of detail and quality as the reference.`;
+				if (modification) {
+					return `${basePrompt} Additional instruction: ${modification}`;
+				}
+				return basePrompt;
 			}
 			
 			// Custom mode with reference
-			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
+			const basePrompt = `Generate a sprite variation based on the reference image. Keep the same character style and quality. Clean game sprite, transparent background.`;
+			if (modification) {
+				return `${basePrompt} Modification: ${modification}`;
+			}
+			return basePrompt;
 		}
 		
 		// HoMM3 style - pre-rendered 3D with pixel texture
