@@ -223,9 +223,20 @@
 						generationError = 'Failed to process frames: ' + errorMsg;
 						progress = { ...progress, status: 'error', message: errorMsg };
 						
-						// Mark job as failed
+						// Still add to completed jobs with the video URL so user can see something
+						const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
+						completedJobs.addAnimation({
+							name: `${poseName} (video only)`,
+							frames: [], // Empty frames
+							videoUrl: data.videoUrl, // Store the video URL
+							pose: selectedPose,
+							fps: project.fps,
+							error: errorMsg
+						});
+						
+						// Mark job as failed but still accessible
 						if (queueJobId) {
-							jobQueue.failJob(queueJobId, errorMsg);
+							jobQueue.failJob(queueJobId, `Extraction failed - video saved`);
 						}
 					}
 					

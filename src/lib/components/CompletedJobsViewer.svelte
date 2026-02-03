@@ -163,6 +163,29 @@
 						<div class="absolute bottom-2 left-2 px-2 py-1 bg-black/60 text-white text-xs rounded">
 							Frame {animFrame + 1}/{activeJob.frames.length}
 						</div>
+					{:else if activeJob.type === 'animation' && activeJob.videoUrl}
+						<!-- Video preview when frames failed to extract -->
+						<video 
+							src={activeJob.videoUrl}
+							class="w-full h-full object-contain"
+							autoplay
+							loop
+							muted
+							playsinline
+						></video>
+						<div class="absolute bottom-2 left-2 px-2 py-1 bg-red-600 text-white text-xs rounded">
+							⚠️ Frame extraction failed - showing video
+						</div>
+					{:else if activeJob.type === 'animation'}
+						<div class="w-full h-full flex items-center justify-center text-gray-400">
+							<div class="text-center">
+								<p class="text-2xl">⚠️</p>
+								<p class="text-xs">No frames available</p>
+								{#if activeJob.error}
+									<p class="text-[10px] text-red-500 mt-1">{activeJob.error}</p>
+								{/if}
+							</div>
+						</div>
 					{/if}
 				</div>
 			</div>
@@ -178,7 +201,7 @@
 						class="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm font-medium"
 						onclick={saveToAssets}
 					>💾 Save to Assets</button>
-				{:else}
+				{:else if activeJob.frames?.length > 0}
 					<button
 						class="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-medium"
 						onclick={useAsReference}
@@ -187,6 +210,18 @@
 						class="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm font-medium"
 						onclick={saveAnimation}
 					>💾 Save Animation</button>
+				{:else if activeJob.videoUrl}
+					<!-- Video-only actions -->
+					<a
+						href={activeJob.videoUrl}
+						target="_blank"
+						class="px-3 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 text-sm font-medium text-center"
+					>🎬 Open Video</a>
+					<a
+						href={activeJob.videoUrl}
+						download="animation.mp4"
+						class="px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 text-sm font-medium text-center"
+					>📥 Download Video</a>
 				{/if}
 			</div>
 			
