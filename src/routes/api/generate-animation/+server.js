@@ -32,6 +32,13 @@ const MODELS = {
 		speed: 'fast',
 		isModelPath: true  // Use model path instead of version hash
 	},
+	wan22flf: {
+		name: 'Wan 2.2 FLF2V (Interpolation)',
+		version: 'wan-video/wan-2.2-flf2v',  // First-Last-Frame to Video
+		speed: 'fast',
+		isModelPath: true,
+		supportsInterpolation: true
+	},
 	ltxv: {
 		name: 'LTX Video (Fast)',
 		version: '8c47da666861d081eeb4d1261853087de23923a268a69b63febdf5dc1dee08e4',
@@ -238,23 +245,28 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				prompt: enhancedPrompt,
 				first_frame_image: imageUrl
 			};
-		} else if (modelId === 'wan22') {
-			// Wan 2.2 i2v-fast - PrunaAI optimized, cheapest option
-			// Frame range: 81-121
-			// Supports FLF2V (First/Last Frame to Video) for interpolation
+		} else if (modelId === 'wan22' || modelId === 'wan22flf') {
+			// Wan 2.2 - Frame range: 81-121
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
-			input = {
-				prompt: enhancedPrompt,
-				image: imageUrl,
-				num_frames: wanFrames,
-				fps: fps
-			};
-			// FLF2V interpolation mode - add last frame
+			
 			if (endImageUrl) {
-				input.last_frame = endImageUrl;  // Try last_frame parameter
-				input.end_image = endImageUrl;   // Also try end_image as fallback
-				input.prompt = `Smooth seamless transition from first pose to last pose, maintaining character consistency. ${enhancedPrompt}`;
-				console.log('Wan 2.2 FLF2V interpolation mode enabled');
+				// FLF2V mode - First/Last Frame to Video interpolation
+				console.log('Wan 2.2 FLF2V interpolation mode - using first & last images');
+				input = {
+					prompt: `Smooth seamless motion transition from first frame to last frame, maintaining perfect character consistency throughout. ${enhancedPrompt}`,
+					first_image: imageUrl,       // First frame
+					last_image: endImageUrl,     // Last frame to interpolate TO
+					num_frames: wanFrames,
+					fps: fps
+				};
+			} else {
+				// Standard I2V mode
+				input = {
+					prompt: enhancedPrompt,
+					image: imageUrl,
+					num_frames: wanFrames,
+					fps: fps
+				};
 			}
 		} else if (modelId === 'wan25') {
 			// Wan 2.5 I2V (for Replicate, not self-hosted)
