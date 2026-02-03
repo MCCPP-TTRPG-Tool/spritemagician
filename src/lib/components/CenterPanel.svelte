@@ -139,6 +139,11 @@
 		window.addEventListener('posePickingCancelled', () => {
 			pickingMode = false;
 		});
+		// Auto-switch to frames tab when animation completes
+		window.addEventListener('animationCompleted', (e) => {
+			console.log('Animation completed:', e.detail);
+			activeTab = 'frames';
+		});
 		// Listen for newly generated poses
 		window.addEventListener('poseGenerated', (e) => {
 			generatedPose = e.detail;

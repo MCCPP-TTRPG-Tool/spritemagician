@@ -124,12 +124,24 @@
 					try {
 						// Step 1: Extract frames from video
 						progress = { ...progress, message: 'Extracting frames from video...' };
+						if (queueJobId) {
+							jobQueue.updateJob(queueJobId, { message: 'Extracting frames from video...' });
+						}
+						
+						console.log('Starting frame extraction from:', data.videoUrl);
 						let rawFrames = await extractFrames(data.videoUrl, Math.round(duration * project.fps));
 						console.log(`Extracted ${rawFrames.length} frames`);
+						
+						if (!rawFrames || rawFrames.length === 0) {
+							throw new Error('No frames extracted from video');
+						}
 						
 					// Step 2: If loop enabled, create ping-pong loop
 					if (shouldLoop && rawFrames.length > 2) {
 						progress = { ...progress, message: 'Creating seamless loop...' };
+						if (queueJobId) {
+							jobQueue.updateJob(queueJobId, { message: 'Creating seamless loop...' });
+						}
 						// Take first half, then reverse for smooth loop back
 						const halfLength = Math.ceil(rawFrames.length / 2);
 						const firstHalf = rawFrames.slice(0, halfLength);
@@ -189,6 +201,8 @@
 						
 					// Add to unsaved animations buffer instead of directly to project
 					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
+					console.log(`Adding animation to buffer: ${poseName} with ${finalFrames.length} frames`);
+					
 					unsavedAnimations.addAnimation({
 						name: poseName,
 						frames: finalFrames,
@@ -210,14 +224,23 @@
 					if (queueJobId) {
 						jobQueue.completeJob(queueJobId, { frameCount: finalFrames.length });
 					}
+					
+					// Notify CenterPanel to switch to frames tab
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('animationCompleted', { 
+							detail: { frameCount: finalFrames.length, name: poseName } 
+						}));
+					}
 						
 					} catch (extractError) {
 						console.error('Frame processing failed:', extractError);
-						generationError = 'Failed to process frames: ' + extractError.message;
+						const errorMsg = extractError.message || 'Unknown extraction error';
+						generationError = 'Failed to process frames: ' + errorMsg;
+						progress = { ...progress, status: 'error', message: errorMsg };
 						
 						// Mark job as failed
 						if (queueJobId) {
-							jobQueue.failJob(queueJobId, extractError.message);
+							jobQueue.failJob(queueJobId, errorMsg);
 						}
 					}
 					
