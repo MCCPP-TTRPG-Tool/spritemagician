@@ -10,8 +10,11 @@
 	import CompletedJobsViewer from './CompletedJobsViewer.svelte';
 	
 	let activeTab = $state('assets'); // 'assets', 'frames', 'poses', 'animations'
+	let showCompletedJobs = $state(true); // Always show by default
 	
 	let project = $state({ frames: [], fps: 12 });
+	let completedJobsState = $state({ jobs: [], activeIndex: 0, loaded: false });
+	completedJobs.subscribe(value => { completedJobsState = value; });
 	let poses = $state({ poses: [] });
 	let animations = $state({ animations: [] });
 	let assets = $state({ categories: [] });
@@ -435,8 +438,10 @@
 	
 	<!-- Content -->
 	<div class="flex-1 overflow-y-auto">
-		<!-- Completed Jobs Viewer - shows at top of any tab -->
-		<CompletedJobsViewer />
+		<!-- Completed Jobs Viewer - toggleable -->
+		{#if showCompletedJobs}
+			<CompletedJobsViewer />
+		{/if}
 		
 		<!-- ASSETS TAB -->
 		{#if activeTab === 'assets'}
@@ -749,6 +754,21 @@
 			{/if}
 		{/if}
 	</div>
+	
+	<!-- Completed Jobs Toggle Button -->
+	<button
+		class="w-full py-2 px-3 flex items-center justify-between text-sm font-medium transition-colors {showCompletedJobs ? 'bg-purple-100 text-purple-700 hover:bg-purple-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}"
+		onclick={() => showCompletedJobs = !showCompletedJobs}
+	>
+		<span class="flex items-center gap-2">
+			<span>📦</span>
+			<span>Completed Jobs</span>
+			{#if completedJobsState.jobs.length > 0}
+				<span class="px-1.5 py-0.5 bg-purple-500 text-white text-[10px] rounded-full">{completedJobsState.jobs.length}</span>
+			{/if}
+		</span>
+		<span class="text-xs">{showCompletedJobs ? '▲ Hide' : '▼ Show'}</span>
+	</button>
 	
 	<!-- Job Queue at bottom -->
 	<JobQueue />
