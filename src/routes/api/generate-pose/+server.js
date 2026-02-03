@@ -37,7 +37,7 @@ export async function POST({ request }) {
 			return json({ error: 'Reference image must be a base64 data URL' }, { status: 400 });
 		}
 
-		// Build the prompt for pose generation - balance between consistency and actual pose change
+		// Build the prompt for pose generation - HoMM3 pre-rendered 3D style
 		const prompt = `TASK: Draw this SAME character in a COMPLETELY DIFFERENT pose.
 
 ⚠️ THE POSE MUST CHANGE DRAMATICALLY ⚠️
@@ -52,17 +52,24 @@ WHAT MUST CHANGE (the pose):
 WHAT MUST STAY THE SAME (the character):
 - Same creature/character design
 - Same colors and patterns
-- Same art style and quality
 - Same number of limbs/appendages/features
 - Same proportions and details
+
+ART STYLE (CRITICAL - Heroes of Might and Magic 3):
+- Pre-rendered 3D model converted to 2D sprite with visible pixel texture
+- Soft dithered shading, rich shadows
+- 256-color palette aesthetic
+- Clean 1-pixel dark outline
+- Nostalgic 1999 PC game art quality
+- NOT blocky 16-bit, NOT smooth digital painting
 
 OUTPUT REQUIREMENTS:
 - Side view, facing right
 - Full body visible and centered
-- Plain white or transparent background
-- 2D game sprite quality
+- Solid grey background
+- Match the exact visual style of the reference image
 
-IMPORTANT: If the new pose looks identical to the reference, you have FAILED. The pose "${poseDescription}" should be OBVIOUSLY DIFFERENT from the standing/idle reference pose. Show action, movement, or a distinct body position.`;
+IMPORTANT: If the new pose looks identical to the reference, you have FAILED. The pose "${poseDescription}" should be OBVIOUSLY DIFFERENT from the reference pose.`;
 
 		console.log('Generating pose with Gemini (Nano Banana):', poseDescription);
 
