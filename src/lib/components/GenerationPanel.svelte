@@ -33,7 +33,7 @@
 	
 	// HoMM3 pixel art style animation prompts
 	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
-	const HOMM3_STYLE = 'Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, black background';
+	const HOMM3_STYLE = 'Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, transparent background, isolated character';
 	
 	const posePresets = [
 		{ 
