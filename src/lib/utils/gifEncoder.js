@@ -1,67 +1,74 @@
-import pkg from 'gifenc';
-const { GIFEncoder, quantize, applyPalette } = pkg;
-
 /**
  * Generate an animated GIF from an array of image sources
+ * Uses a pure JavaScript GIF encoder (no external dependencies)
  * @param {string[]} frames - Array of image data URLs or URLs
  * @param {number} frameSize - Size to render each frame
  * @param {number} fps - Frames per second
  * @returns {Promise<Blob>} - GIF blob
  */
 export async function generateGif(frames, frameSize = 256, fps = 12) {
-	const delay = Math.round(1000 / fps);
+	const delay = Math.round(100 / fps); // GIF delay is in 1/100th of a second
 	
-	// Create GIF encoder
-	const gif = GIFEncoder();
+	// Load all images first
+	const images = await Promise.all(frames.map(loadImage));
 	
-	// Process each frame
-	for (const frameSrc of frames) {
-		const img = await loadImage(frameSrc);
-		
-		// Create canvas and draw frame
-		const canvas = document.createElement('canvas');
-		canvas.width = frameSize;
-		canvas.height = frameSize;
-		const ctx = canvas.getContext('2d');
-		
-		// Clear with transparent background
-		ctx.clearRect(0, 0, frameSize, frameSize);
-		
-		// Draw image centered/scaled
-		const scale = Math.min(frameSize / img.width, frameSize / img.height);
-		const width = img.width * scale;
-		const height = img.height * scale;
-		const x = (frameSize - width) / 2;
-		const y = (frameSize - height) / 2;
-		ctx.drawImage(img, x, y, width, height);
-		
-		// Get image data
-		const imageData = ctx.getImageData(0, 0, frameSize, frameSize);
-		const { data } = imageData;
-		
-		// Convert to RGB array (gifenc expects flat RGB array)
-		const rgb = new Uint8Array(frameSize * frameSize * 3);
-		for (let i = 0, j = 0; i < data.length; i += 4, j += 3) {
-			// Handle transparency by using a background color (grey)
-			const alpha = data[i + 3] / 255;
-			rgb[j] = Math.round(data[i] * alpha + 128 * (1 - alpha));     // R
-			rgb[j + 1] = Math.round(data[i + 1] * alpha + 128 * (1 - alpha)); // G
-			rgb[j + 2] = Math.round(data[i + 2] * alpha + 128 * (1 - alpha)); // B
+	// Create canvas for rendering
+	const canvas = document.createElement('canvas');
+	canvas.width = frameSize;
+	canvas.height = frameSize;
+	const ctx = canvas.getContext('2d');
+	
+	// Use GIF.js library loaded from CDN
+	return new Promise((resolve, reject) => {
+		// Dynamically load gif.js if not already loaded
+		if (!window.GIF) {
+			const script = document.createElement('script');
+			script.src = 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js';
+			script.onload = () => createGif();
+			script.onerror = () => reject(new Error('Failed to load GIF library'));
+			document.head.appendChild(script);
+		} else {
+			createGif();
 		}
 		
-		// Quantize to 256 colors
-		const palette = quantize(rgb, 256);
-		const indexed = applyPalette(rgb, palette);
-		
-		// Write frame
-		gif.writeFrame(indexed, frameSize, frameSize, { palette, delay });
-	}
-	
-	// Finish and get bytes
-	gif.finish();
-	const bytes = gif.bytes();
-	
-	return new Blob([bytes], { type: 'image/gif' });
+		function createGif() {
+			const gif = new window.GIF({
+				workers: 2,
+				quality: 10,
+				width: frameSize,
+				height: frameSize,
+				workerScript: 'https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js'
+			});
+			
+			// Add each frame
+			for (const img of images) {
+				// Clear canvas with grey background
+				ctx.fillStyle = '#808080';
+				ctx.fillRect(0, 0, frameSize, frameSize);
+				
+				// Draw image centered/scaled
+				const scale = Math.min(frameSize / img.width, frameSize / img.height);
+				const width = img.width * scale;
+				const height = img.height * scale;
+				const x = (frameSize - width) / 2;
+				const y = (frameSize - height) / 2;
+				ctx.drawImage(img, x, y, width, height);
+				
+				// Add frame to GIF
+				gif.addFrame(ctx, { copy: true, delay: delay * 10 });
+			}
+			
+			gif.on('finished', (blob) => {
+				resolve(blob);
+			});
+			
+			gif.on('error', (err) => {
+				reject(new Error('GIF encoding failed: ' + err));
+			});
+			
+			gif.render();
+		}
+	});
 }
 
 /**
