@@ -1,6 +1,7 @@
 <script>
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	
 	let isGenerating = $state(false);
 	let error = $state(null);
@@ -305,6 +306,13 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 			}
 			
 			generatedSprite = data.image;
+			
+			// Add to completed jobs for user to review
+			completedJobs.addSprite({
+				name: description.substring(0, 30) || 'Sprite',
+				image: data.image,
+				description: description
+			});
 			
 			// Mark job complete
 			if (currentJobId) {

@@ -4,8 +4,10 @@
 	import { animationStore } from '$lib/stores/animations.js';
 	import { assetStore } from '$lib/stores/assets.js';
 	import { unsavedAnimations } from '$lib/stores/unsavedAnimations.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { browser } from '$app/environment';
 	import JobQueue from './JobQueue.svelte';
+	import CompletedJobsViewer from './CompletedJobsViewer.svelte';
 	
 	let activeTab = $state('assets'); // 'assets', 'frames', 'poses', 'animations'
 	
@@ -433,6 +435,9 @@
 	
 	<!-- Content -->
 	<div class="flex-1 overflow-y-auto">
+		<!-- Completed Jobs Viewer - shows at top of any tab -->
+		<CompletedJobsViewer />
+		
 		<!-- ASSETS TAB -->
 		{#if activeTab === 'assets'}
 			{#if movingAsset}
@@ -560,67 +565,6 @@
 		
 		<!-- FRAMES TAB -->
 		{:else if activeTab === 'frames'}
-			<!-- Unsaved Animations Toggle Bar -->
-			{#if unsaved.animations.length > 1}
-				<div class="bg-amber-50 border-2 border-amber-300 rounded-lg p-2 mb-3">
-					<div class="flex items-center justify-between mb-2">
-						<span class="text-xs font-medium text-amber-800">
-							🎬 {unsaved.animations.length} unsaved animations
-						</span>
-						<div class="flex items-center gap-1">
-							<button
-								class="px-2 py-0.5 text-[10px] bg-green-500 text-white rounded hover:bg-green-600"
-								onclick={keepCurrentAnimation}
-								title="Keep this animation and discard others"
-							>✓ Keep This</button>
-							<button
-								class="px-2 py-0.5 text-[10px] bg-red-100 text-red-700 rounded hover:bg-red-200"
-								onclick={() => discardUnsavedAnimation(unsaved.animations[unsaved.activeIndex]?.id)}
-								title="Discard this animation"
-							>✕ Discard</button>
-						</div>
-					</div>
-					<div class="flex items-center gap-2">
-						<button
-							class="px-2 py-1 text-xs bg-amber-200 rounded hover:bg-amber-300 disabled:opacity-50"
-							onclick={() => switchToUnsavedAnimation(unsaved.activeIndex - 1)}
-							disabled={unsaved.activeIndex === 0}
-						>◀</button>
-						<div class="flex-1 flex gap-1 overflow-x-auto">
-							{#each unsaved.animations as anim, i}
-								<button
-									class="flex-shrink-0 px-2 py-1 text-[10px] rounded border transition-all {i === unsaved.activeIndex ? 'bg-amber-400 border-amber-600 font-bold' : 'bg-white border-amber-200 hover:border-amber-400'}"
-									onclick={() => switchToUnsavedAnimation(i)}
-								>
-									{anim.name} ({anim.frames.length}f)
-								</button>
-							{/each}
-						</div>
-						<button
-							class="px-2 py-1 text-xs bg-amber-200 rounded hover:bg-amber-300 disabled:opacity-50"
-							onclick={() => switchToUnsavedAnimation(unsaved.activeIndex + 1)}
-							disabled={unsaved.activeIndex >= unsaved.animations.length - 1}
-						>▶</button>
-					</div>
-				</div>
-			{:else if unsaved.animations.length === 1}
-				<div class="bg-green-50 border border-green-300 rounded-lg p-2 mb-3 flex items-center justify-between">
-					<span class="text-xs text-green-700">
-						✨ New animation: <strong>{unsaved.animations[0].name}</strong> ({unsaved.animations[0].frames.length} frames)
-					</span>
-					<div class="flex gap-1">
-						<button
-							class="px-2 py-0.5 text-[10px] bg-green-500 text-white rounded hover:bg-green-600"
-							onclick={keepCurrentAnimation}
-						>✓ Keep</button>
-						<button
-							class="px-2 py-0.5 text-[10px] bg-red-100 text-red-700 rounded hover:bg-red-200"
-							onclick={() => discardUnsavedAnimation(unsaved.animations[0].id)}
-						>✕ Discard</button>
-					</div>
-				</div>
-			{/if}
-			
 			{#if project.frames.length === 0}
 				<div class="flex items-center justify-center h-full text-gray-400">
 					<div class="text-center">

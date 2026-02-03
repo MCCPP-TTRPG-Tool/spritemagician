@@ -2,7 +2,7 @@
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
 	import { poseStore } from '$lib/stores/poses.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
-	import { unsavedAnimations } from '$lib/stores/unsavedAnimations.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	
@@ -199,37 +199,22 @@
 						finalFrames = transparentFrames;
 					}
 						
-					// Add to unsaved animations buffer instead of directly to project
+					// Add to completed jobs for user to review
 					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
-					console.log(`Adding animation to buffer: ${poseName} with ${finalFrames.length} frames`);
+					console.log(`Adding animation to completed jobs: ${poseName} with ${finalFrames.length} frames`);
 					
-					unsavedAnimations.addAnimation({
+					completedJobs.addAnimation({
 						name: poseName,
 						frames: finalFrames,
 						pose: selectedPose,
-						duration: duration,
-						fps: project.fps,
-						jobId: queueJobId
+						fps: project.fps
 					});
 					
-					// Also update the project to show the latest one
-					projectStore.update(p => ({
-						...p,
-						frames: finalFrames,
-						prompt: selectedPose
-					}));
 					progress = { ...progress, status: 'completed', message: `Done! ${finalFrames.length} frames ready.` };
 					
 					// Mark job as complete
 					if (queueJobId) {
 						jobQueue.completeJob(queueJobId, { frameCount: finalFrames.length });
-					}
-					
-					// Notify CenterPanel to switch to frames tab
-					if (typeof window !== 'undefined') {
-						window.dispatchEvent(new CustomEvent('animationCompleted', { 
-							detail: { frameCount: finalFrames.length, name: poseName } 
-						}));
 					}
 						
 					} catch (extractError) {
