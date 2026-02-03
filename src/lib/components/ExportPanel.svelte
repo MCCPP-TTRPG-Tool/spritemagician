@@ -1,6 +1,7 @@
 <script>
 	import { projectStore } from '$lib/stores/project.js';
 	import { generateSpriteSheet, loadImage, downloadBlob } from '$lib/utils/spriteSheet.js';
+	import { generateGif } from '$lib/utils/gifEncoder.js';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -10,7 +11,10 @@
 	
 	let isExporting = $state(false);
 	let isGeneratingPreview = $state(false);
+	let isGeneratingGif = $state(false);
 	let spriteSheetPreview = $state(null);
+	let gifPreview = $state(null);
+	let showGifModal = $state(false);
 	let previewColumns = $state(4);
 	let frameSize = $state(128);
 	let showFullSize = $state(false);
@@ -88,6 +92,52 @@
 			downloadBlob(blob, 'sprite_sheet.png');
 		} finally {
 			isExporting = false;
+		}
+	}
+	
+	async function handlePreviewGif() {
+		if (project.frames.length === 0) return;
+		isGeneratingGif = true;
+		try {
+			const blob = await generateGif(project.frames, frameSize, project.fps || 12);
+			// Clean up old preview
+			if (gifPreview) {
+				URL.revokeObjectURL(gifPreview);
+			}
+			gifPreview = URL.createObjectURL(blob);
+			showGifModal = true;
+		} catch (e) {
+			console.error('GIF generation error:', e);
+			alert('Failed to generate GIF: ' + e.message);
+		} finally {
+			isGeneratingGif = false;
+		}
+	}
+	
+	async function handleDownloadGif() {
+		if (project.frames.length === 0) return;
+		isGeneratingGif = true;
+		try {
+			const blob = await generateGif(project.frames, frameSize, project.fps || 12);
+			downloadBlob(blob, 'animation.gif');
+		} catch (e) {
+			console.error('GIF generation error:', e);
+			alert('Failed to generate GIF: ' + e.message);
+		} finally {
+			isGeneratingGif = false;
+		}
+	}
+	
+	function closeGifModal() {
+		showGifModal = false;
+	}
+	
+	function downloadGifFromModal() {
+		if (gifPreview) {
+			const a = document.createElement('a');
+			a.href = gifPreview;
+			a.download = 'animation.gif';
+			a.click();
 		}
 	}
 </script>
@@ -183,7 +233,58 @@
 		</div>
 	{/if}
 	
-	<!-- Action Buttons -->
+	<!-- GIF Preview Modal -->
+	{#if showGifModal && gifPreview}
+		<div 
+			class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+			onclick={closeGifModal}
+			onkeydown={(e) => { if (e.key === 'Escape') closeGifModal(); }}
+			tabindex="0"
+			role="dialog"
+		>
+			<div class="relative max-w-full max-h-full bg-gray-900 rounded-lg p-4" onclick={(e) => e.stopPropagation()}>
+				<button
+					onclick={closeGifModal}
+					class="absolute top-2 right-2 text-white hover:text-gray-300 text-2xl z-10"
+					title="Close"
+				>
+					✕
+				</button>
+				
+				<h3 class="text-white text-lg font-bold mb-3 text-center">🎬 GIF Preview</h3>
+				
+				<div class="bg-gray-700 rounded-lg p-2 mb-3">
+					<img 
+						src={gifPreview} 
+						alt="Animation GIF preview" 
+						class="max-w-full max-h-[60vh] object-contain mx-auto"
+						style="image-rendering: pixelated;"
+					/>
+				</div>
+				
+				<div class="flex justify-center gap-3">
+					<button
+						onclick={downloadGifFromModal}
+						class="px-4 py-2 bg-pink-500 text-white rounded hover:bg-pink-600 font-medium"
+					>
+						⬇️ Download GIF
+					</button>
+					<button
+						onclick={closeGifModal}
+						class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500"
+					>
+						Close
+					</button>
+				</div>
+				
+				<p class="text-center text-gray-400 text-sm mt-3">
+					{project.frames.length} frames • {project.fps || 12} fps • {frameSize}px
+				</p>
+			</div>
+		</div>
+	{/if}
+	
+	<!-- Action Buttons Row 1 -->
 	<div class="grid grid-cols-3 gap-2">
 		<button
 			class="px-2 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
@@ -207,6 +308,25 @@
 			disabled={isExporting || project.frames.length === 0}
 		>
 			{isExporting ? '...' : '🖼️ Sheet'}
+		</button>
+	</div>
+	
+	<!-- GIF Buttons Row 2 -->
+	<div class="grid grid-cols-2 gap-2">
+		<button
+			class="px-2 py-1.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+			onclick={handlePreviewGif}
+			disabled={isGeneratingGif || project.frames.length === 0}
+		>
+			{isGeneratingGif ? 'Generating...' : '🎬 Preview GIF'}
+		</button>
+		
+		<button
+			class="px-2 py-1.5 text-xs bg-pink-500 text-white rounded hover:bg-pink-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+			onclick={handleDownloadGif}
+			disabled={isGeneratingGif || project.frames.length === 0}
+		>
+			{isGeneratingGif ? 'Generating...' : '⬇️ Download GIF'}
 		</button>
 	</div>
 
