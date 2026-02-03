@@ -99,16 +99,12 @@
 	
 	// Quick presets for common sprites
 	const quickPresets = [
+		{ name: 'HoMM3', desc: '', type: 'character', style: 'homm3' },
 		{ name: 'Knight', desc: 'armored medieval knight with sword and shield', type: 'character', style: 'fantasy' },
 		{ name: 'Wizard', desc: 'robed wizard with staff and magical aura', type: 'character', style: 'fantasy' },
 		{ name: 'Goblin', desc: 'small green goblin with crude weapons', type: 'creature', style: 'fantasy' },
 		{ name: 'Dragon', desc: 'fierce dragon with wings and fire breath', type: 'creature', style: 'fantasy' },
 		{ name: 'Slime', desc: 'cute bouncy slime monster', type: 'monster', style: 'anime' },
-		{ name: 'Sword', desc: 'glowing enchanted sword', type: 'item', style: 'fantasy' },
-		{ name: 'Potion', desc: 'magical healing potion in glass bottle', type: 'item', style: 'fantasy' },
-		{ name: 'Chest', desc: 'wooden treasure chest', type: 'object', style: 'fantasy' },
-		{ name: 'Tree', desc: 'ancient magical tree', type: 'plant', style: 'fantasy' },
-		{ name: 'Fireball', desc: 'blazing fireball spell effect', type: 'effect', style: 'fantasy' },
 	];
 	
 	function applyPreset(preset) {
@@ -152,18 +148,9 @@ REQUIREMENTS:
 Generate a variation of the reference that matches the description while keeping the character recognizable.`;
 		}
 		
-		// Special case: HoMM3 style uses a specific prompt format
+		// Special case: HoMM3 style uses ONLY this exact prompt format
 		if (artStyle === 'homm3') {
-			return `Create a pixel art sprite of ${description || typeInfo.name} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background.
-
-Additional details:
-- Classic 1990s pixel art aesthetic
-- Rich, saturated colors typical of HoMM3
-- Detailed but readable at small sizes
-- Fantasy RPG creature/character style
-- Clean edges, no anti-aliasing blur
-- Iconic, memorable silhouette
-- White or transparent background ONLY`;
+			return `Create a pixel art sprite of ${description || typeInfo.name} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background.`;
 		}
 		
 		// Build aggressive view-specific instructions
@@ -428,9 +415,9 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		<div>
 			<p class="text-xs text-gray-500 mb-1">Quick Start:</p>
 			<div class="flex flex-wrap gap-1">
-				{#each quickPresets.slice(0, 5) as preset}
+				{#each quickPresets as preset}
 					<button
-						class="px-2 py-0.5 text-[10px] bg-blue-50 text-blue-700 rounded border border-blue-200 hover:bg-blue-100"
+						class="px-2 py-0.5 text-[10px] rounded border {preset.style === 'homm3' ? 'bg-amber-100 text-amber-800 border-amber-300 hover:bg-amber-200' : 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'}"
 						onclick={() => applyPreset(preset)}
 					>{preset.name}</button>
 				{/each}
