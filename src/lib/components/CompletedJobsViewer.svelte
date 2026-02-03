@@ -107,7 +107,7 @@
 	}
 </script>
 
-{#if jobs.jobs.length > 0}
+{#if jobs.jobs.length > 0 || !jobs.loaded}
 	<div class="bg-gradient-to-b from-purple-50 to-blue-50 border-2 border-purple-300 rounded-lg p-3 mb-3">
 		<!-- Header -->
 		<div class="flex items-center justify-between mb-2">
@@ -115,15 +115,29 @@
 				<span class="text-lg">📦</span>
 				<span class="font-bold text-purple-800">Completed Jobs</span>
 				<span class="px-2 py-0.5 bg-purple-200 text-purple-800 text-xs rounded-full font-medium">
-					{jobs.jobs.length}
+					{jobs.jobs.length} saved
 				</span>
+				<span class="text-[10px] text-purple-500">💾 Auto-saved to browser</span>
 			</div>
-			<button
-				class="text-xs text-red-500 hover:text-red-700"
-				onclick={() => completedJobs.clearAll()}
-			>Clear All</button>
+			{#if jobs.jobs.length > 0}
+				<button
+					class="text-xs text-red-500 hover:text-red-700"
+					onclick={() => completedJobs.clearAll()}
+				>Clear All</button>
+			{/if}
 		</div>
 		
+		{#if !jobs.loaded}
+			<div class="text-center py-4 text-purple-600">
+				<span class="animate-pulse">Loading saved jobs...</span>
+			</div>
+		{:else if jobs.jobs.length === 0}
+			<div class="text-center py-2 text-gray-500 text-xs">
+				No completed jobs yet. Generate something!
+			</div>
+		{/if}
+		
+		{#if jobs.jobs.length > 0}
 		<!-- Navigation -->
 		<div class="flex items-center gap-2 mb-3">
 			<button
@@ -251,6 +265,7 @@
 					onclick={discard}
 				>🗑️ Discard</button>
 			</div>
+		{/if}
 		{/if}
 	</div>
 {/if}
