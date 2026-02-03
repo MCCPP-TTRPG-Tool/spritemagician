@@ -241,6 +241,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else if (modelId === 'wan22') {
 			// Wan 2.2 i2v-fast - PrunaAI optimized, cheapest option
 			// Frame range: 81-121
+			// Supports FLF2V (First/Last Frame to Video) for interpolation
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
 			input = {
 				prompt: enhancedPrompt,
@@ -248,11 +249,12 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				num_frames: wanFrames,
 				fps: fps
 			};
-			// Add end image for interpolation mode (first_last_image mode)
+			// FLF2V interpolation mode - add last frame
 			if (endImageUrl) {
-				input.end_image = endImageUrl;
-				input.prompt = `Smooth transition from start pose to end pose. ${enhancedPrompt}`;
-				console.log('Wan 2.2 interpolation mode enabled');
+				input.last_frame = endImageUrl;  // Try last_frame parameter
+				input.end_image = endImageUrl;   // Also try end_image as fallback
+				input.prompt = `Smooth seamless transition from first pose to last pose, maintaining character consistency. ${enhancedPrompt}`;
+				console.log('Wan 2.2 FLF2V interpolation mode enabled');
 			}
 		} else if (modelId === 'wan25') {
 			// Wan 2.5 I2V (for Replicate, not self-hosted)
