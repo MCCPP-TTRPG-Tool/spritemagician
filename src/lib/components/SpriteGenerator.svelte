@@ -5,6 +5,30 @@
 	let error = $state(null);
 	let generatedSprite = $state(null);
 	
+	// Reference image for "generate like X" feature
+	let referenceImage = $state(null);
+	let fileInput;
+	
+	function handleFileUpload(event) {
+		const file = event.target.files?.[0];
+		if (!file) return;
+		
+		const reader = new FileReader();
+		reader.onload = (e) => {
+			referenceImage = e.target.result;
+		};
+		reader.readAsDataURL(file);
+	}
+	
+	function clearReference() {
+		referenceImage = null;
+		if (fileInput) fileInput.value = '';
+	}
+	
+	function triggerUpload() {
+		fileInput?.click();
+	}
+	
 	// === TOOLBOX OPTIONS ===
 	
 	// Subject Type
@@ -99,6 +123,34 @@
 		const viewInfo = viewAngles.find(v => v.id === viewAngle);
 		const detailInfo = detailLevels.find(d => d.id === detailLevel);
 		const paletteInfo = colorPalettes.find(p => p.id === colorPalette);
+		
+		// If we have a reference image, build a reference-based prompt
+		if (referenceImage) {
+			const baseDesc = description.trim() || 'in the same style';
+			return `REFERENCE-BASED SPRITE GENERATION
+
+You are given a REFERENCE IMAGE. Use it as the basis for generation.
+
+TASK: Generate a new sprite based on the reference image: "${baseDesc}"
+
+INSTRUCTIONS:
+- Keep the SAME character/subject from the reference
+- Maintain consistent style, colors, proportions, and details
+- Apply the requested modification: "${baseDesc}"
+- View angle: ${viewAngles.find(v => v.id === viewAngle)?.name || 'Side View'}
+- Art style: ${styleInfo.name}
+- Detail level: ${detailInfo.name}
+- Color palette: ${paletteInfo.name}
+
+REQUIREMENTS:
+- The result should clearly be the SAME character/object as the reference
+- Clean game sprite quality
+- Plain white or transparent background
+- No text, no ground, no scenery
+- Centered, full subject visible
+
+Generate a variation of the reference that matches the description while keeping the character recognizable.`;
+		}
 		
 		// Special case: HoMM3 style uses a specific prompt format
 		if (artStyle === 'homm3') {
@@ -225,8 +277,8 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 	}
 	
 	async function generateSprite() {
-		if (!description.trim()) {
-			error = 'Please describe what you want to create';
+		if (!description.trim() && !referenceImage) {
+			error = 'Please describe what you want to create or upload a reference image';
 			return;
 		}
 		
@@ -237,11 +289,15 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		try {
 			const prompt = buildPrompt();
 			console.log('Generating sprite with prompt:', prompt);
+			console.log('Reference image:', referenceImage ? 'provided' : 'none');
 			
 			const response = await fetch('/api/generate-sprite', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ prompt })
+				body: JSON.stringify({ 
+					prompt,
+					referenceImage: referenceImage || null
+				})
 			});
 			
 			const data = await response.json();
@@ -333,6 +389,41 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 			onclick={discardSprite}
 		>✨ Create Another</button>
 	{:else}
+		<!-- Hidden file input -->
+		<input 
+			type="file" 
+			accept="image/*" 
+			class="hidden" 
+			bind:this={fileInput}
+			onchange={handleFileUpload}
+		/>
+		
+		<!-- Reference Image Upload -->
+		<div class="border-2 border-dashed border-gray-300 rounded-lg p-2 bg-gray-50">
+			{#if referenceImage}
+				<div class="flex items-center gap-2">
+					<img src={referenceImage} alt="Reference" class="w-16 h-16 object-contain rounded border bg-white" />
+					<div class="flex-1">
+						<p class="text-xs font-medium text-green-700">📎 Reference uploaded</p>
+						<p class="text-[10px] text-gray-500">Describe how to modify it below</p>
+					</div>
+					<button
+						class="px-2 py-1 text-xs bg-red-100 text-red-700 rounded hover:bg-red-200"
+						onclick={clearReference}
+					>✕</button>
+				</div>
+			{:else}
+				<button
+					class="w-full flex items-center justify-center gap-2 py-2 text-xs text-gray-600 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors"
+					onclick={triggerUpload}
+				>
+					<span class="text-lg">📤</span>
+					<span>Upload reference image (optional)</span>
+				</button>
+				<p class="text-[10px] text-gray-400 text-center mt-1">Upload a character/sprite to generate variations</p>
+			{/if}
+		</div>
+
 		<!-- Quick Presets -->
 		<div>
 			<p class="text-xs text-gray-500 mb-1">Quick Start:</p>
@@ -401,10 +492,10 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 
 		<!-- Description -->
 		<div>
-			<p class="text-xs text-gray-500 mb-1">Description:</p>
+			<p class="text-xs text-gray-500 mb-1">{referenceImage ? 'Modification:' : 'Description:'}</p>
 			<textarea
 				bind:value={description}
-				placeholder="Describe your sprite in detail..."
+				placeholder={referenceImage ? "e.g., 'make it angry', 'wearing armor', 'jumping pose', 'pixel art version'..." : "Describe your sprite in detail..."}
 				rows="2"
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
 			></textarea>
@@ -414,9 +505,15 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		<button
 			class="w-full px-3 py-2 bg-gradient-to-r from-purple-500 to-blue-500 text-white rounded-lg hover:from-purple-600 hover:to-blue-600 disabled:from-gray-400 disabled:to-gray-400 disabled:cursor-not-allowed font-medium"
 			onclick={generateSprite}
-			disabled={isGenerating || !description.trim()}
+			disabled={isGenerating || (!description.trim() && !referenceImage)}
 		>
-			{isGenerating ? '✨ Creating...' : '✨ Create Sprite'}
+			{#if isGenerating}
+				✨ Creating...
+			{:else if referenceImage}
+				✨ Generate Variation
+			{:else}
+				✨ Create Sprite
+			{/if}
 		</button>
 
 		{#if error}

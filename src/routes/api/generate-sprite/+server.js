@@ -3,10 +3,10 @@ import { env } from '$env/dynamic/private';
 
 export async function POST({ request }) {
 	try {
-		const { prompt } = await request.json();
+		const { prompt, referenceImage } = await request.json();
 
-		if (!prompt) {
-			return json({ error: 'Prompt is required' }, { status: 400 });
+		if (!prompt && !referenceImage) {
+			return json({ error: 'Prompt or reference image is required' }, { status: 400 });
 		}
 
 		if (!env.GEMINI_API_KEY) {
@@ -19,6 +19,35 @@ export async function POST({ request }) {
 IMPORTANT: Generate this on a pure white or transparent background. No background scenery, no gradients, no shadows on the ground. Just the sprite/subject isolated on a clean white background.`;
 
 		console.log('[Sprite Generator] Creating sprite with Nano Banana (Gemini)...');
+		console.log('[Sprite Generator] Reference image:', referenceImage ? 'provided' : 'none');
+
+		// Build the parts array - include reference image if provided
+		const parts = [];
+		
+		if (referenceImage) {
+			// Add reference image instruction
+			parts.push({ text: 'REFERENCE IMAGE - Use this as the basis for generation:' });
+			
+			// Extract base64 from data URL
+			let base64Data = referenceImage;
+			if (referenceImage.startsWith('data:')) {
+				const base64Index = referenceImage.indexOf(',');
+				if (base64Index !== -1) {
+					base64Data = referenceImage.substring(base64Index + 1);
+				}
+			}
+			
+			// Add the reference image
+			parts.push({
+				inline_data: {
+					mime_type: 'image/png',
+					data: base64Data
+				}
+			});
+		}
+		
+		// Add the prompt
+		parts.push({ text: enhancedPrompt });
 
 		// Use the same model as pose generator (gemini-2.5-flash-image)
 		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
@@ -28,7 +57,7 @@ IMPORTANT: Generate this on a pure white or transparent background. No backgroun
 			},
 			body: JSON.stringify({
 				contents: [{
-					parts: [{ text: enhancedPrompt }]
+					parts: parts
 				}],
 				generationConfig: {
 					responseModalities: ['TEXT', 'IMAGE'],
