@@ -1,7 +1,9 @@
 <script>
 	import { jobQueue } from '$lib/stores/jobQueue.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	
 	let jobs = $state([]);
+	let completed = $state({ jobs: [], activeIndex: 0 });
 	let isCollapsed = $state(false);
 	
 	// Subscribe to job queue
@@ -12,11 +14,37 @@
 		return unsubscribe;
 	});
 	
+	// Subscribe to completed jobs
+	$effect(() => {
+		const unsubscribe = completedJobs.subscribe(value => {
+			completed = value;
+		});
+		return unsubscribe;
+	});
+	
+	// Click a completed job to preview it
+	function previewJob(job) {
+		if (job.status !== 'completed') return;
+		
+		// Find matching completed job by name/type
+		const index = completed.jobs.findIndex(cj => {
+			if (job.type?.includes('Animation') && cj.type === 'animation' && cj.name === job.name) return true;
+			if (job.type?.includes('Sprite') && cj.type === 'sprite') return true;
+			return false;
+		});
+		
+		if (index >= 0) {
+			completedJobs.setActiveIndex(index);
+			// Scroll to top of center panel
+			document.querySelector('.flex-1.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' });
+		}
+	}
+	
 	function getStatusIcon(status) {
 		switch (status) {
 			case 'pending': return '⏳';
 			case 'processing': return '⚡';
-			case 'completed': return '✅';
+			case 'completed': return '👁️'; // Eye = clickable to preview
 			case 'failed': return '❌';
 			case 'cancelled': return '🚫';
 			default: return '❓';
@@ -86,7 +114,11 @@
 		{#if !isCollapsed}
 			<div class="max-h-40 overflow-y-auto">
 				{#each jobs as job}
-					<div class="flex items-center gap-2 px-3 py-1.5 border-t border-gray-100 text-xs {getStatusColor(job.status)}">
+					<div 
+						class="flex items-center gap-2 px-3 py-1.5 border-t border-gray-100 text-xs {getStatusColor(job.status)} {job.status === 'completed' ? 'cursor-pointer hover:bg-green-100' : ''}"
+						onclick={() => previewJob(job)}
+						role={job.status === 'completed' ? 'button' : undefined}
+					>
 						<!-- Status Icon -->
 						<span class="text-sm">{getStatusIcon(job.status)}</span>
 						
