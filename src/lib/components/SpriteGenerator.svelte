@@ -130,9 +130,9 @@
 			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// Special case: HoMM3 style uses EXACT user-specified format
+		// Special case: HoMM3 style - high quality pixel art
 		if (artStyle === 'homm3' || homm3Mode) {
-			return `Create a pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background.`;
+			return `Create a high quality pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3, facing to the right, with a solid black background. Detailed pixelated artwork, crisp pixels, vibrant colors, professional game asset quality.`;
 		}
 		
 		// Build aggressive view-specific instructions
