@@ -61,9 +61,11 @@ const MODELS = {
 
 /**
  * Process animation generation asynchronously
+ * @param {string} endImage - Optional end frame for interpolation mode
  */
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'minimax') {
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'minimax', endImage = null) {
 	const model = MODELS[modelId] || MODELS.minimax;
+	const isInterpolation = !!endImage;
 	
 	// CRITICAL: Enhance prompt to preserve pixel art quality
 	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic';
@@ -182,7 +184,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			currentFrame: 0,
 			totalFrames: frameCount,
 			status: 'processing',
-			message: 'Uploading reference image...'
+			message: isInterpolation ? 'Uploading start & end frames...' : 'Uploading reference image...'
 		});
 
 		// Upload reference image to Firebase to get a public URL
@@ -191,6 +193,17 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			imageUrl = await uploadImageToFirebase(referenceImage, `anim-input-${Date.now()}.png`);
 		} else {
 			imageUrl = referenceImage;
+		}
+		
+		// Upload end image if interpolation mode
+		let endImageUrl = null;
+		if (isInterpolation && endImage) {
+			if (endImage.startsWith('data:')) {
+				endImageUrl = await uploadImageToFirebase(endImage, `anim-end-${Date.now()}.png`);
+			} else {
+				endImageUrl = endImage;
+			}
+			console.log('Interpolation mode: end image uploaded');
 		}
 
 		setProgress(jobId, {
@@ -235,6 +248,12 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				num_frames: wanFrames,
 				fps: fps
 			};
+			// Add end image for interpolation mode (first_last_image mode)
+			if (endImageUrl) {
+				input.end_image = endImageUrl;
+				input.prompt = `Smooth transition from start pose to end pose. ${enhancedPrompt}`;
+				console.log('Wan 2.2 interpolation mode enabled');
+			}
 		} else if (modelId === 'wan25') {
 			// Wan 2.5 I2V (for Replicate, not self-hosted)
 			input = {
@@ -352,10 +371,15 @@ export async function POST({ request }) {
 	const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
 	try {
-		const { referenceImage, prompt, pose, frameCount, motionAmount, fps, loop, model } = await request.json();
+		const { referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate } = await request.json();
 
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required. Upload an image first.' }, { status: 400 });
+		}
+		
+		// Interpolation mode requires end image
+		if (interpolate && !endImage) {
+			return json({ error: 'End image is required for interpolation mode' }, { status: 400 });
 		}
 
 		if (!env.REPLICATE_API_TOKEN) {
@@ -371,13 +395,13 @@ export async function POST({ request }) {
 			currentFrame: 0,
 			totalFrames: numFrames,
 			status: 'starting',
-			message: `Initializing ${selectedModel.name}...`
+			message: interpolate ? `Interpolating with ${selectedModel.name}...` : `Initializing ${selectedModel.name}...`
 		});
 
-		// Start async processing
-		processAnimationAsync(jobId, referenceImage, prompt, numFrames, motionAmount || 127, fps || 8, modelId);
+		// Start async processing (pass endImage for interpolation)
+		processAnimationAsync(jobId, referenceImage, prompt, numFrames, motionAmount || 127, fps || 8, modelId, endImage);
 
-		return json({ jobId, status: 'started', model: selectedModel.name });
+		return json({ jobId, status: 'started', model: selectedModel.name, interpolate: !!endImage });
 
 	} catch (error) {
 		console.error('API error:', error);

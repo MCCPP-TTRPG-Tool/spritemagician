@@ -32,6 +32,18 @@
 	let shouldLoop = $state(true); // Loop animation back to first frame
 	let selectedPose = $state('idle'); // Pose preset
 	
+	// Interpolation mode (start → end frame)
+	let useInterpolation = $state(false);
+	let endFrame = $state(null);
+	
+	function handleEndFrameUpload(dataUrl) {
+		endFrame = dataUrl;
+	}
+	
+	function clearEndFrame() {
+		endFrame = null;
+	}
+	
 	// HoMM3 pixel art style animation prompts
 	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
 	const HOMM3_STYLE = 'Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, transparent background, isolated character';
@@ -349,6 +361,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					referenceImage: project.firstFrame,
+					endImage: useInterpolation ? endFrame : null, // For interpolation mode
 					prompt: posePrompt,
 					pose: selectedPose,
 					frameCount: frameCount,
@@ -356,7 +369,8 @@
 					motionAmount: motionAmount,
 					fps: project.fps,
 					loop: shouldLoop,
-					model: selectedModel
+					model: selectedModel,
+					interpolate: useInterpolation
 				})
 			});
 
@@ -392,27 +406,66 @@
 </script>
 
 <div class="space-y-2">
-	<!-- Sprite Preview -->
-	{#if project.firstFrame}
-		<div class="relative w-3/4 mx-auto">
-			<img src={project.firstFrame} alt="Sprite" class="w-full aspect-square object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
-			<button 
-				class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
-				onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
-			>×</button>
-		</div>
-	{:else}
-		<div class="w-3/4 mx-auto aspect-square">
-			<FrameUpload label="Upload Sprite" onUpload={handleFirstFrameUpload} />
-		</div>
-		{#if savedPoses.poses.length > 0}
-			<button 
-				class="w-full px-2 py-1.5 text-xs bg-purple-100 text-purple-700 border border-purple-300 rounded hover:bg-purple-200"
-				onclick={openPosePicker}
-			>
-				🎭 Use Saved Pose ({savedPoses.poses.length})
-			</button>
+	<!-- Interpolation checkbox -->
+	<label class="flex items-center gap-2 text-xs">
+		<input type="checkbox" bind:checked={useInterpolation} class="w-3 h-3" />
+		<span class="text-gray-700">Start → End interpolation</span>
+		{#if useInterpolation}
+			<span class="text-gray-400 text-[10px]">(morph between two frames)</span>
 		{/if}
+	</label>
+
+	<!-- Sprite Preview(s) -->
+	<div class="flex gap-2 {useInterpolation ? '' : 'justify-center'}">
+		<!-- Start Frame -->
+		<div class="{useInterpolation ? 'flex-1' : 'w-3/4'}">
+			{#if useInterpolation}
+				<p class="text-[10px] text-gray-500 text-center mb-1">Start Frame</p>
+			{/if}
+			{#if project.firstFrame}
+				<div class="relative">
+					<img src={project.firstFrame} alt="Start" class="w-full aspect-square object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
+					<button 
+						class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
+						onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
+					>×</button>
+				</div>
+			{:else}
+				<div class="aspect-square">
+					<FrameUpload label={useInterpolation ? "Start" : "Upload Sprite"} onUpload={handleFirstFrameUpload} />
+				</div>
+			{/if}
+		</div>
+		
+		<!-- End Frame (only when interpolation enabled) -->
+		{#if useInterpolation}
+			<div class="flex-1">
+				<p class="text-[10px] text-gray-500 text-center mb-1">End Frame</p>
+				{#if endFrame}
+					<div class="relative">
+						<img src={endFrame} alt="End" class="w-full aspect-square object-contain rounded-lg border-2 border-green-400 bg-gray-100" />
+						<button 
+							class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
+							onclick={clearEndFrame}
+						>×</button>
+					</div>
+				{:else}
+					<div class="aspect-square">
+						<FrameUpload label="End" onUpload={handleEndFrameUpload} />
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</div>
+	
+	<!-- Use Saved Pose button (only when no first frame) -->
+	{#if !project.firstFrame && savedPoses.poses.length > 0}
+		<button 
+			class="w-full px-2 py-1.5 text-xs bg-purple-100 text-purple-700 border border-purple-300 rounded hover:bg-purple-200"
+			onclick={openPosePicker}
+		>
+			🎭 Use Saved Pose ({savedPoses.poses.length})
+		</button>
 	{/if}
 
 	<!-- Animation Type -->
