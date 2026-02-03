@@ -152,7 +152,7 @@ Generate a variation of the reference that matches the description while keeping
 		
 		// Special case: HoMM3 style uses ONLY this exact prompt format
 		if (artStyle === 'homm3') {
-			return `Create a pixel art sprite of ${description || typeInfo.name} in the style of Heroes of Might and Magic 3, facing to the right, with a blank background.`;
+			return `Create a pixel art sprite of ${description || typeInfo.name} in the style of Heroes of Might and Magic 3, facing to the right, with a black background.`;
 		}
 		
 		// Build aggressive view-specific instructions
