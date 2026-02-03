@@ -131,9 +131,28 @@
 			return `Generate a sprite variation based on the reference image: ${baseDesc}. Keep the same character but apply the requested changes. Clean game sprite, transparent background.`;
 		}
 		
-		// HoMM3 style - locked in high detail
+		// HoMM3 style - EXTREMELY precise prompt for high quality
 		if (artStyle === 'homm3' || homm3Mode) {
-			return `Highly detailed pixel art sprite of ${description || 'a fantasy character'} in the style of Heroes of Might and Magic 3. Use fine pixels with high pixel density, intricate shading and textures. NOT blocky, NOT low resolution. Transparent background, full body visible.`;
+			return `Create pixel art of ${description || 'a fantasy character'}.
+
+CRITICAL STYLE REQUIREMENTS:
+- Style: Heroes of Might and Magic 3, late 1990s PC game art
+- Resolution: High pixel density with HUNDREDS of tiny pixels, NOT chunky 16-bit style
+- Shading: Complex multi-step color gradients, rich shadows and highlights
+- Colors: 32+ color palette, vibrant and saturated, smooth color transitions
+- Details: Intricate textures visible (fabric weave, metal scratches, skin pores)
+- Outlines: Clean dark outlines defining shapes
+- Quality: Professional game studio quality, museum-worthy pixel craftsmanship
+
+DO NOT:
+- Use chunky/blocky large pixels
+- Use flat colors without shading
+- Make it look like 8-bit or 16-bit retro games
+- Use limited color palettes
+- Make it look amateur or simple
+
+Background: Transparent/none
+View: Side view facing right, full body visible`;
 		}
 		
 		// Build aggressive view-specific instructions
