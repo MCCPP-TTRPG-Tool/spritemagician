@@ -471,7 +471,7 @@
 							onmouseleave={endHoverPreview}
 						>
 							<div class="aspect-square bg-gray-100 relative flex items-center justify-center">
-								{#if category.thumbnail}
+								{#if category.thumbnail && category.thumbnail !== 'stored' && category.thumbnail.startsWith('data:')}
 									<img src={category.thumbnail} alt={category.name} class="w-full h-full object-contain" />
 								{:else}
 									<span class="text-4xl">{category.icon}</span>
@@ -525,13 +525,19 @@
 					<div class="grid grid-cols-4 gap-3">
 						{#each currentCategory.assets as asset}
 							<div class="relative group">
-								<img 
-									src={asset.imageData} 
-									alt={asset.name}
-									class="w-full aspect-square object-contain rounded border-2 cursor-pointer transition-all bg-gray-100 border-gray-200 hover:border-green-400"
-									onclick={() => useAssetForAnimation(asset)}
-									title="Click to use for animation"
-								/>
+								{#if asset.imageData && asset.imageData !== 'stored' && asset.imageData.startsWith('data:')}
+									<img 
+										src={asset.imageData} 
+										alt={asset.name}
+										class="w-full aspect-square object-contain rounded border-2 cursor-pointer transition-all bg-gray-100 border-gray-200 hover:border-green-400"
+										onclick={() => useAssetForAnimation(asset)}
+										title="Click to use for animation"
+									/>
+								{:else}
+									<div class="w-full aspect-square flex items-center justify-center rounded border-2 bg-gray-100 border-gray-200">
+										<span class="text-gray-400 text-xs">Loading...</span>
+									</div>
+								{/if}
 								<!-- Preview -->
 								<button
 									class="absolute top-1 left-1 bg-white/90 text-gray-700 w-5 h-5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center shadow text-[10px] hover:scale-110"
@@ -916,7 +922,7 @@
 		style="left: {hoverPreview.x}px; top: {hoverPreview.y}px; transform: translate(-50%, -100%);"
 	>
 		<div class="bg-white rounded-lg shadow-xl border-2 border-gray-300 p-2 animate-fade-in">
-			{#if hoverPreview.category.thumbnail}
+			{#if hoverPreview.category.thumbnail && hoverPreview.category.thumbnail !== 'stored' && hoverPreview.category.thumbnail.startsWith('data:')}
 				<img 
 					src={hoverPreview.category.thumbnail} 
 					alt={hoverPreview.category.name}
