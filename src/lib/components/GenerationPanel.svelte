@@ -2,6 +2,7 @@
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
 	import { poseStore } from '$lib/stores/poses.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
+	import { unsavedAnimations } from '$lib/stores/unsavedAnimations.js';
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	
@@ -186,6 +187,18 @@
 						finalFrames = transparentFrames;
 					}
 						
+					// Add to unsaved animations buffer instead of directly to project
+					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
+					unsavedAnimations.addAnimation({
+						name: poseName,
+						frames: finalFrames,
+						pose: selectedPose,
+						duration: duration,
+						fps: project.fps,
+						jobId: queueJobId
+					});
+					
+					// Also update the project to show the latest one
 					projectStore.update(p => ({
 						...p,
 						frames: finalFrames,
