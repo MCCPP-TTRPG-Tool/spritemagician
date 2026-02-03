@@ -4,6 +4,7 @@
 	import { animationStore } from '$lib/stores/animations.js';
 	import { assetStore } from '$lib/stores/assets.js';
 	import { browser } from '$app/environment';
+	import JobQueue from './JobQueue.svelte';
 	
 	let activeTab = $state('assets'); // 'assets', 'frames', 'poses', 'animations'
 	
@@ -687,6 +688,9 @@
 			{/if}
 		{/if}
 	</div>
+	
+	<!-- Job Queue at bottom -->
+	<JobQueue />
 </div>
 
 <!-- Pose Preview Modal -->

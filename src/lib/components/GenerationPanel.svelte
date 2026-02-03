@@ -1,6 +1,7 @@
 <script>
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
 	import { poseStore } from '$lib/stores/poses.js';
+	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	
@@ -21,6 +22,7 @@
 	let progress = $state({ currentFrame: 0, totalFrames: 0, status: 'idle', message: '' });
 	let progressPollInterval = $state(null);
 	let jobId = $state(null);
+	let queueJobId = $state(null); // For job queue tracking
 	
 	// Animation settings - lower motion for 2D sprites
 	let duration = $state(2); // seconds (1-3)
@@ -103,6 +105,14 @@
 				console.log('Progress update:', data);
 				progress = data;
 				
+				// Update job queue
+				if (queueJobId) {
+					jobQueue.updateJob(queueJobId, {
+						progress: data.totalFrames > 0 ? Math.round((data.currentFrame / data.totalFrames) * 100) : 0,
+						message: data.message || `Frame ${data.currentFrame}/${data.totalFrames}`
+					});
+				}
+				
 				// If video URL is returned, extract frames and remove backgrounds
 				if (data.status === 'completed' && data.videoUrl) {
 					if (progressPollInterval) {
@@ -182,10 +192,20 @@
 						prompt: selectedPose
 					}));
 					progress = { ...progress, status: 'completed', message: `Done! ${finalFrames.length} frames ready.` };
+					
+					// Mark job as complete
+					if (queueJobId) {
+						jobQueue.completeJob(queueJobId, { frameCount: finalFrames.length });
+					}
 						
 					} catch (extractError) {
 						console.error('Frame processing failed:', extractError);
 						generationError = 'Failed to process frames: ' + extractError.message;
+						
+						// Mark job as failed
+						if (queueJobId) {
+							jobQueue.failJob(queueJobId, extractError.message);
+						}
 					}
 					
 					isGenerating = false;
@@ -228,6 +248,15 @@
 		const frameCount = Math.round(duration * project.fps);
 		progress = { currentFrame: 0, totalFrames: frameCount, status: 'starting', message: `Starting ${duration}s animation...` };
 		jobId = null;
+
+		// Add job to queue
+		const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
+		queueJobId = jobQueue.addJob({
+			type: '🎬 Animation',
+			name: poseName,
+			status: 'processing',
+			message: `Starting ${duration}s animation...`
+		});
 
 		// Clear existing frames
 		projectStore.update(p => ({ ...p, frames: [] }));
@@ -290,6 +319,10 @@
 			if (progressPollInterval) {
 				clearInterval(progressPollInterval);
 				progressPollInterval = null;
+			}
+			// Mark job as failed
+			if (queueJobId) {
+				jobQueue.failJob(queueJobId, error.message);
 			}
 			isGenerating = false;
 		}

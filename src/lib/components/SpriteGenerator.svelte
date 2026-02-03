@@ -1,9 +1,11 @@
 <script>
 	import { projectStore } from '$lib/stores/project.js';
+	import { jobQueue } from '$lib/stores/jobQueue.js';
 	
 	let isGenerating = $state(false);
 	let error = $state(null);
 	let generatedSprite = $state(null);
+	let currentJobId = $state(null);
 	
 	// Reference image for "generate like X" feature
 	let referenceImage = $state(null);
@@ -273,6 +275,15 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 		error = null;
 		generatedSprite = null;
 		
+		// Add job to queue
+		const jobName = description.substring(0, 30) || 'Sprite';
+		currentJobId = jobQueue.addJob({
+			type: '✨ Sprite',
+			name: jobName + (description.length > 30 ? '...' : ''),
+			status: 'processing',
+			message: 'Generating sprite...'
+		});
+		
 		try {
 			const prompt = buildPrompt();
 			console.log('Generating sprite with prompt:', prompt);
@@ -295,8 +306,17 @@ The sprite should look professional and suitable for a 2D video game. Remember: 
 			
 			generatedSprite = data.image;
 			
+			// Mark job complete
+			if (currentJobId) {
+				jobQueue.completeJob(currentJobId);
+			}
+			
 		} catch (err) {
 			error = err.message;
+			// Mark job failed
+			if (currentJobId) {
+				jobQueue.failJob(currentJobId, err.message);
+			}
 		} finally {
 			isGenerating = false;
 		}
