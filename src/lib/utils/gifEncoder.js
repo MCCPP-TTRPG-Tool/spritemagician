@@ -27,7 +27,7 @@ export async function generateGif(frames, frameSize = 256, fps = 12) {
 	const canvas = document.createElement('canvas');
 	canvas.width = frameSize;
 	canvas.height = frameSize;
-	const ctx = canvas.getContext('2d');
+	const ctx = canvas.getContext('2d', { willReadFrequently: true });
 	
 	// Add each frame
 	for (const img of images) {
@@ -475,8 +475,14 @@ class LZWEncoder {
 			}
 			output(ent);
 			ent = c;
-			if (freeEnt < 4096) { this.codetab[i] = freeEnt++; this.htab[i] = fcode; }
-			else clBlock();
+			if (freeEnt < 4096) {
+				this.codetab[i] = freeEnt++;
+				this.htab[i] = fcode;
+				if (freeEnt > maxcode && nBits < 12) {
+					nBits++;
+					maxcode = (1 << nBits) - 1;
+				}
+			} else clBlock();
 		}
 		
 		output(ent);

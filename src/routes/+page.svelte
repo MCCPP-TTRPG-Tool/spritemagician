@@ -3,6 +3,7 @@
 	import SpriteGenerator from '$lib/components/SpriteGenerator.svelte';
 	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
 	import PosePanel from '$lib/components/PosePanel.svelte';
+	import EditPanel from '$lib/components/EditPanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
@@ -92,24 +93,32 @@
 				>
 					🦴 Pose
 				</button>
-				<button
-					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animation' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
-					onclick={() => activeTab = 'animation'}
-				>
-					🎬 Animate
-				</button>
+			<button
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'edit' ? 'bg-teal-50 text-teal-600 border-b-2 border-teal-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'edit'}
+			>
+				✏️ Edit
+			</button>
+			<button
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animation' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'animation'}
+			>
+				🎬 Animate
+			</button>
 				</div>
 				
 				<div class="p-3 flex-1 overflow-y-auto">
-				{#if activeTab === 'create'}
-					<SpriteGenerator />
-				{:else if activeTab === 'wizard'}
-					<CharacterWizard />
-				{:else if activeTab === 'pose'}
-					<PosePanel />
-				{:else}
-					<GenerationPanel />
-				{/if}
+			{#if activeTab === 'create'}
+				<SpriteGenerator />
+			{:else if activeTab === 'wizard'}
+				<CharacterWizard />
+			{:else if activeTab === 'pose'}
+				<PosePanel />
+			{:else if activeTab === 'edit'}
+				<EditPanel />
+			{:else}
+				<GenerationPanel />
+			{/if}
 			</div>
 		</div>
 
