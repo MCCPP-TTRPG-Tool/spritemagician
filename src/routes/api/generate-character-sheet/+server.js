@@ -122,17 +122,14 @@ CRITICAL RULES:
 - Label each view underneath: "FRONT", "RIGHT SIDE", "BACK", "LEFT SIDE"
 - NO 3/4 angles in this sheet — strict cardinal directions only
 
-BODY PROPORTIONS — MATCH THE REFERENCE EXACTLY:
-- Study the head-to-body ratio in the reference image CAREFULLY
-- If the character has a realistically proportioned body (head is ~1/7 to 1/8 of total height), draw it that way — do NOT enlarge the head
-- If the character is intentionally chibi/stylized with a large head, keep that stylization
-- Measure the reference: how many "heads tall" is the figure? Replicate that EXACT ratio
-- Common mistake: making the head too large on normally-proportioned characters. AVOID THIS
-- Shoulders, torso length, arm length, leg length — all must match the reference proportions
-- If the character is muscular, lean, stocky, tall, short — match that body type exactly
-- Do NOT default to cartoon proportions unless the reference IS a cartoon
+PROPORTIONS — THIS IS THE MOST IMPORTANT RULE:
+- All 4 views must have IDENTICAL proportions — same height, same width, same limb lengths, same head size
+- Match the reference image's proportions exactly. Count how many "heads tall" the figure is and keep that ratio
+- Do NOT enlarge the head. Do NOT widen the body in the back view. Do NOT change muscle mass between views
+- The silhouette width/height should be consistent across all 4 views (only depth changes)
+- If the character is lean, keep it lean in every view. If muscular, keep the same muscle mass in every view
 
-Accuracy and consistency are the top priority.`;
+Accuracy and consistency across all 4 views are the top priority.`;
 
 		const result = await callGemini(
 			env.GEMINI_API_KEY,
