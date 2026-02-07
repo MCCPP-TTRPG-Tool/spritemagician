@@ -1,20 +1,15 @@
 /**
  * ControlNet + IP-Adapter Pose Generation via RunPod
  * 
- * The "Digital Marionette":
- *   - ControlNet DWPose  → forces correct skeletal pose
- *   - IP-Adapter Plus    → locks character visual identity
- * 
  * Flow:
- *   1. Client sends: styled character image + skeleton image + prompt
- *   2. We upload both to Firebase for public URLs
- *   3. Call RunPod serverless endpoint (pose_handler.py)
+ *   1. Client sends: styled character image + text prompt + optional pose reference
+ *   2. We upload images to Firebase for URLs
+ *   3. RunPod handler:
+ *      - IP-Adapter locks character identity from the styled image
+ *      - If pose reference provided: DWPose extracts skeleton → ControlNet enforces pose
+ *      - If no reference: IP-Adapter + text prompt only
  *   4. Poll for completion
  *   5. Return generated pose as base64
- * 
- * Env vars needed:
- *   RUNPOD_API_KEY          — RunPod API key
- *   POSE_ENDPOINT_ID        — RunPod endpoint ID for the pose handler
  */
 
 import { json } from '@sveltejs/kit';
@@ -28,10 +23,9 @@ export async function POST({ request, locals }) {
 		}
 
 		const {
-			characterImage,    // base64 — the styled master character (identity source for IP-Adapter)
-			skeletonImage,     // base64 — the target pose skeleton (for ControlNet)
-			prompt,            // text prompt
-			poseName,          // e.g. "Idle Stance"
+			characterImage,    // base64 — styled master character (IP-Adapter identity source)
+			poseReference,     // base64 — optional reference image to extract pose from (DWPose)
+			prompt,            // text — what pose the character should be in
 			characterName,     // e.g. "Fire Dragon"
 			controlnetScale,   // 0-1, default 0.8
 			ipAdapterScale,    // 0-1, default 0.7
@@ -41,10 +35,10 @@ export async function POST({ request, locals }) {
 		} = await request.json();
 
 		if (!characterImage) {
-			return json({ error: 'Styled character image is required (identity source for IP-Adapter)' }, { status: 400 });
+			return json({ error: 'Styled character image is required (IP-Adapter identity source)' }, { status: 400 });
 		}
-		if (!skeletonImage) {
-			return json({ error: 'Skeleton pose image is required (for ControlNet)' }, { status: 400 });
+		if (!prompt && !poseReference) {
+			return json({ error: 'Provide a pose description, a reference image, or both.' }, { status: 400 });
 		}
 
 		const RUNPOD_API_KEY = env.RUNPOD_API_KEY;
@@ -57,25 +51,30 @@ export async function POST({ request, locals }) {
 			return json({ error: 'POSE_ENDPOINT_ID not configured. Deploy the pose handler to RunPod first.' }, { status: 500 });
 		}
 
-		console.log(`[Pose Gen] Generating "${poseName}" for "${characterName}" via RunPod`);
+		console.log(`[Pose Gen] Generating pose for "${characterName}" via RunPod`);
+		console.log(`[Pose Gen] Prompt: ${prompt || '(none)'}`);
+		console.log(`[Pose Gen] Has pose reference: ${!!poseReference}`);
 
-		// ── Upload images to Firebase for public URLs ──
-		// RunPod handler can accept base64 directly, but URLs are smaller payloads
+		// ── Upload images to Firebase for URLs ──
 		console.log('[Pose Gen] Uploading character image...');
 		const characterUrl = await uploadImageToFirebase(
 			characterImage,
 			`pose-character-${Date.now()}.png`
 		);
 
-		console.log('[Pose Gen] Uploading skeleton image...');
-		const skeletonUrl = await uploadImageToFirebase(
-			skeletonImage,
-			`pose-skeleton-${Date.now()}.png`
-		);
+		let poseReferenceUrl = null;
+		if (poseReference) {
+			console.log('[Pose Gen] Uploading pose reference...');
+			poseReferenceUrl = await uploadImageToFirebase(
+				poseReference,
+				`pose-reference-${Date.now()}.png`
+			);
+		}
 
-		// ── Build prompt ──────────────────────────────
-		const stylePrompt = prompt || [
-			`${characterName || 'fantasy creature'} in ${poseName || 'idle'} pose,`,
+		// ── Build prompt ──────────────────────────
+		const stylePrompt = prompt || `${characterName || 'fantasy creature'} in a dynamic pose`;
+		const fullPrompt = [
+			stylePrompt + ',',
 			'HoMM3 style, pre-rendered 3D sprite, isometric game character,',
 			'rich saturated colors, dramatic lighting from upper-left,',
 			'smooth gradient shading, dark outlines,',
@@ -91,9 +90,8 @@ export async function POST({ request, locals }) {
 			'extra limbs, missing limbs, bad anatomy',
 		].join(' ');
 
-		// ── Call RunPod ───────────────────────────────
+		// ── Call RunPod ───────────────────────────
 		const runpodUrl = `https://api.runpod.ai/v2/${POSE_ENDPOINT_ID}/run`;
-
 		console.log(`[Pose Gen] Calling RunPod endpoint: ${POSE_ENDPOINT_ID}`);
 
 		const controller = new AbortController();
@@ -110,8 +108,8 @@ export async function POST({ request, locals }) {
 				body: JSON.stringify({
 					input: {
 						character_image: characterUrl,
-						skeleton_image: skeletonUrl,
-						prompt: stylePrompt,
+						pose_reference: poseReferenceUrl,  // null if no reference
+						prompt: fullPrompt,
 						negative_prompt: negativePrompt,
 						controlnet_scale: controlnetScale ?? 0.8,
 						ip_adapter_scale: ipAdapterScale ?? 0.7,
@@ -136,36 +134,29 @@ export async function POST({ request, locals }) {
 			clearTimeout(timeoutId);
 			const errorText = await response.text();
 			console.error('[Pose Gen] RunPod error:', response.status, errorText);
-			return json({
-				error: `RunPod API error: ${response.status}`,
-				details: errorText,
-			}, { status: 500 });
+			return json({ error: `RunPod API error: ${response.status}`, details: errorText }, { status: 500 });
 		}
 
 		const job = await response.json();
 		const jobId = job.id;
 		console.log(`[Pose Gen] RunPod job started: ${jobId}`);
 
-		// ── Poll for completion ────────────────────────
+		// ── Poll for completion ──────────────────
 		const statusUrl = `https://api.runpod.ai/v2/${POSE_ENDPOINT_ID}/status/${jobId}`;
 		let result = job;
 		let attempts = 0;
-		const maxAttempts = 150; // 5 min at 2s intervals
-		const pollInterval = 2000;
+		const maxAttempts = 150;
 
 		while (
 			(result.status === 'IN_QUEUE' || result.status === 'IN_PROGRESS') &&
 			attempts < maxAttempts
 		) {
-			await new Promise(resolve => setTimeout(resolve, pollInterval));
-
+			await new Promise(resolve => setTimeout(resolve, 2000));
 			const statusResponse = await fetch(statusUrl, {
 				headers: { 'Authorization': `Bearer ${RUNPOD_API_KEY}` },
 			});
-
 			result = await statusResponse.json();
 			attempts++;
-
 			if (attempts % 10 === 0) {
 				console.log(`[Pose Gen] Status: ${result.status} (${attempts * 2}s)`);
 			}
@@ -173,7 +164,6 @@ export async function POST({ request, locals }) {
 
 		clearTimeout(timeoutId);
 
-		// ── Handle result ─────────────────────────────
 		if (result.status === 'FAILED') {
 			console.error('[Pose Gen] RunPod job failed:', result.output?.error || result.error);
 			return json({
@@ -187,13 +177,12 @@ export async function POST({ request, locals }) {
 		}
 
 		const output = result.output;
-
 		if (!output?.image) {
 			console.error('[Pose Gen] No image in output:', JSON.stringify(output).slice(0, 500));
 			return json({ error: 'No image returned from pose generator' }, { status: 500 });
 		}
 
-		console.log(`[Pose Gen] ✓ Generated pose "${poseName}" for "${characterName}" in ${output.total_time || '?'}s`);
+		console.log(`[Pose Gen] ✓ Pose generated for "${characterName}" in ${output.total_time || '?'}s`);
 
 		return json({
 			image: output.image,
@@ -203,9 +192,6 @@ export async function POST({ request, locals }) {
 
 	} catch (error) {
 		console.error('[Pose Gen] Error:', error);
-		if (error.name === 'AbortError') {
-			return json({ error: 'Request timed out.' }, { status: 504 });
-		}
 		return json({ error: error.message }, { status: 500 });
 	}
 }

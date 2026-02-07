@@ -1,8 +1,5 @@
 # RunPod Pose Handler Dependencies
-# ControlNet + IP-Adapter on SD 1.5
-#
-# COMPATIBILITY: diffusers >=0.25 required for IP-Adapter support
-# Using diffusers 0.30+ for latest IP-Adapter improvements
+# ControlNet + IP-Adapter + DWPose on SD 1.5
 
 runpod>=1.0.0
 requests>=2.31.0
@@ -19,6 +16,9 @@ transformers>=4.38.0,<4.45.0
 accelerate>=0.28.0
 huggingface-hub>=0.23.0
 safetensors>=0.4.0
+
+# === DWPose for skeleton extraction from reference images ===
+controlnet_aux>=0.0.7
 
 # Image processing
 opencv-python-headless>=4.8.0

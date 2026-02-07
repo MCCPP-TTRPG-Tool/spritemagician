@@ -1,5 +1,5 @@
-# RunPod Serverless: ControlNet + IP-Adapter Pose Generation
-# Models: SD 1.5 + ControlNet OpenPose + IP-Adapter Plus
+# RunPod Serverless: ControlNet + IP-Adapter + DWPose
+# Models: SD 1.5 + ControlNet OpenPose + IP-Adapter Plus + DWPose
 #
 # Build: docker build -f Dockerfile.pose -t pose-handler .
 # Test:  docker run --gpus all -p 8000:8000 pose-handler
@@ -18,7 +18,7 @@ COPY requirements_pose.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements_pose.txt
 
-# Pre-download ALL models during build (so cold starts are fast)
+# Pre-download AI models during build (fast cold starts)
 RUN python -c "\
 from diffusers import StableDiffusionControlNetPipeline, ControlNetModel; \
 import torch; \
@@ -36,10 +36,20 @@ pipe.load_ip_adapter('h94/IP-Adapter', subfolder='models', weight_name='ip-adapt
 print('✓ All models downloaded'); \
 "
 
+# Pre-download DWPose model
+RUN python -c "\
+try: \
+    from controlnet_aux import DWposeDetector; \
+    det = DWposeDetector.from_pretrained('yzd-v/DWPose'); \
+    print('✓ DWPose downloaded'); \
+except Exception as e: \
+    print(f'DWPose download failed (non-fatal): {e}'); \
+"
+
 # Copy handler
 COPY pose_handler.py .
 
-# Verify handler imports
+# Verify imports
 RUN python -c "\
 import sys; sys.path.insert(0, '/app'); \
 exec(open('pose_handler.py').read().split('runpod.serverless.start')[0]); \

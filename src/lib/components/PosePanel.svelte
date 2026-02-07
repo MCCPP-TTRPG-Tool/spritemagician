@@ -1,19 +1,19 @@
 <script>
 	import { assetStore } from '$lib/stores/assets.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
-	import { POSE_PRESETS, renderSkeleton, renderSkeletonPreview, cloneKeypoints, getPresetsByCategory } from '$lib/utils/posePresets.js';
 
 	// ── State ─────────────────────────────────────────
 	let step = $state('select'); // 'select' | 'configure' | 'generating' | 'approve'
 
 	// Character selection
 	let characters = $state([]);
-	let selectedCharacter = $state(null); // { categoryId, name, styledImage, referenceImage }
+	let selectedCharacter = $state(null);
 
 	// Pose configuration
-	let selectedPresetId = $state('idle');
-	let customPrompt = $state('');
-	let editableKeypoints = $state(null); // cloned from preset for future dragging
+	let posePrompt = $state('');
+	let poseReference = $state(null); // base64 of uploaded reference image
+	let poseReferencePreview = $state(null);
+	let fileInput = $state();
 
 	// Generation
 	let isGenerating = $state(false);
@@ -24,38 +24,21 @@
 	let fullPreviewImage = $state(null);
 	let fullPreviewLabel = $state('');
 
-	// ── Derived ───────────────────────────────────────
-	const selectedPreset = $derived(POSE_PRESETS.find(p => p.id === selectedPresetId));
-	const presetsByCategory = $derived(getPresetsByCategory());
-
-	// Build skeleton preview when preset or keypoints change
-	let skeletonPreview = $state(null);
-	$effect(() => {
-		if (selectedPreset && typeof document !== 'undefined') {
-			const kps = editableKeypoints || selectedPreset.keypoints;
-			skeletonPreview = renderSkeleton(kps, 512, 512);
-		}
-	});
-
 	// ── Load characters from asset store ──────────────
 	assetStore.subscribe(state => {
 		const chars = [];
-		// Find "Characters" root category
 		const charRoot = state.categories.find(c => c.name === 'Characters' && !c.parentId);
 		if (charRoot) {
-			// Each child category is a character
 			const charFolders = state.categories.filter(c => c.parentId === charRoot.id);
 			for (const folder of charFolders) {
 				const styledAsset = folder.assets.find(a => a.type === 'styled');
 				const sourceAsset = folder.assets.find(a => a.type === 'source');
-				const sheetAsset = folder.assets.find(a => a.type === 'sheet');
 				if (styledAsset) {
 					chars.push({
 						categoryId: folder.id,
 						name: folder.name,
 						styledImage: styledAsset.imageData,
 						referenceImage: sourceAsset?.imageData || null,
-						sheetImage: sheetAsset?.imageData || null,
 						poseCount: folder.assets.filter(a => a.type === 'pose').length,
 					});
 				}
@@ -64,14 +47,14 @@
 		characters = chars;
 	});
 
-	// ── Step handlers ─────────────────────────────────
+	// ── Helpers ───────────────────────────────────────
 
 	function selectCharacter(char) {
 		selectedCharacter = char;
 		step = 'configure';
-		selectedPresetId = 'idle';
-		editableKeypoints = null;
-		customPrompt = '';
+		posePrompt = '';
+		poseReference = null;
+		poseReferencePreview = null;
 		generatedPose = null;
 		error = '';
 	}
@@ -83,48 +66,54 @@
 		error = '';
 	}
 
-	function selectPreset(presetId) {
-		selectedPresetId = presetId;
-		editableKeypoints = null; // Reset to default keypoints
-		// Auto-fill prompt based on preset
-		const preset = POSE_PRESETS.find(p => p.id === presetId);
-		if (preset) {
-			customPrompt = `${selectedCharacter?.name || 'Character'} in a ${preset.name.toLowerCase()} pose, ${preset.desc.toLowerCase()}`;
-		}
+	function handleReferenceUpload(e) {
+		const file = e.target.files?.[0];
+		if (!file) return;
+		const reader = new FileReader();
+		reader.onload = () => {
+			poseReference = reader.result;
+			poseReferencePreview = reader.result;
+		};
+		reader.readAsDataURL(file);
+	}
+
+	function removeReference() {
+		poseReference = null;
+		poseReferencePreview = null;
+		if (fileInput) fileInput.value = '';
 	}
 
 	// ── Generate ──────────────────────────────────────
 
 	async function generatePose() {
-		if (!selectedCharacter || !selectedPreset) return;
+		if (!selectedCharacter) return;
+		if (!posePrompt.trim() && !poseReference) {
+			error = 'Describe the pose you want, or upload a reference image (or both).';
+			return;
+		}
 
 		isGenerating = true;
 		error = '';
 		step = 'generating';
 
-		const kps = editableKeypoints || selectedPreset.keypoints;
-		// Render the skeleton at 512x512 for the API
-		const skeletonImage = renderSkeleton(kps, 512, 512);
-
 		const jobId = jobQueue.addJob({
-			type: '🦴 ControlNet Pose',
-			name: `${selectedCharacter.name} — ${selectedPreset.name}`,
+			type: '🦴 Pose',
+			name: `${selectedCharacter.name} — ${posePrompt.slice(0, 30) || 'Reference pose'}`,
 			status: 'processing',
-			message: 'Generating pose with ControlNet...'
+			message: 'Generating pose via ControlNet + IP-Adapter...'
 		});
 
 		try {
 			const controller = new AbortController();
-			const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 min
+			const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000);
 
 			const response = await fetch('/api/generate-controlnet-pose', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					characterImage: selectedCharacter.styledImage,  // IP-Adapter: identity lock
-					skeletonImage,                                   // ControlNet: pose skeleton
-					prompt: customPrompt || undefined,
-					poseName: selectedPreset.name,
+					characterImage: selectedCharacter.styledImage,
+					poseReference: poseReference || null,
+					prompt: posePrompt.trim() || undefined,
 					characterName: selectedCharacter.name,
 				}),
 				signal: controller.signal,
@@ -142,7 +131,7 @@
 			step = 'approve';
 
 		} catch (err) {
-			error = err.name === 'AbortError' ? 'Generation timed out. Please try again.' : err.message;
+			error = err.name === 'AbortError' ? 'Generation timed out. Try again.' : err.message;
 			jobQueue.failJob(jobId, error);
 			step = 'configure';
 		} finally {
@@ -150,26 +139,23 @@
 		}
 	}
 
-	// ── Approve / Reject ──────────────────────────────
+	// ── Approve / Reject ─────────────────────────────
 
 	function approvePose() {
 		if (!generatedPose || !selectedCharacter) return;
 
-		// Save to the character's folder
 		assetStore.addAsset(selectedCharacter.categoryId, {
-			name: `Pose — ${selectedPreset?.name || 'Custom'}`,
+			name: `Pose — ${posePrompt.slice(0, 40) || 'Custom'}`,
 			imageData: generatedPose,
-			description: `ControlNet generated pose: ${selectedPreset?.name || 'Custom'}`,
+			description: posePrompt || 'ControlNet generated pose',
 			type: 'pose'
 		});
 
-		// Update the character's pose count locally
 		selectedCharacter = {
 			...selectedCharacter,
 			poseCount: (selectedCharacter.poseCount || 0) + 1
 		};
 
-		// Stay on configure to generate more
 		generatedPose = null;
 		error = '';
 		step = 'configure';
@@ -180,12 +166,6 @@
 		error = '';
 		step = 'configure';
 	}
-
-	function regeneratePose() {
-		generatePose();
-	}
-
-	// ── Preview ───────────────────────────────────────
 
 	function openPreview(src, label) {
 		fullPreviewImage = src;
@@ -199,21 +179,22 @@
 </script>
 
 <div class="space-y-3 text-sm">
+
 	<!-- ═══════════════════════════════════════════════ -->
-	<!-- STEP: Select Character                         -->
+	<!-- SELECT CHARACTER                               -->
 	<!-- ═══════════════════════════════════════════════ -->
 	{#if step === 'select'}
 		<div class="text-center mb-3">
 			<p class="text-lg font-bold text-gray-800">🦴 Pose Generator</p>
-			<p class="text-xs text-gray-500 mt-1">Select a character to generate ControlNet poses</p>
+			<p class="text-xs text-gray-500 mt-1">ControlNet + IP-Adapter — generate your character in any pose</p>
 		</div>
 
 		{#if characters.length === 0}
 			<div class="text-center py-8 border-2 border-dashed border-gray-200 rounded-xl">
 				<div class="text-4xl mb-3">🚫</div>
-				<p class="text-sm font-medium text-gray-600">No styled characters found</p>
+				<p class="text-sm font-medium text-gray-600">No styled characters yet</p>
 				<p class="text-xs text-gray-400 mt-1">
-					Use the <strong>Create</strong> tab to create a character with a styled idle first.
+					Use the <strong>Create</strong> tab first to make a styled character.
 				</p>
 			</div>
 		{:else}
@@ -223,7 +204,6 @@
 						class="w-full flex items-center gap-3 p-3 border-2 border-gray-200 rounded-xl hover:border-purple-400 hover:bg-purple-50/50 transition-all text-left cursor-pointer group"
 						onclick={() => selectCharacter(char)}
 					>
-						<!-- Styled idle thumbnail -->
 						<div class="w-16 h-16 rounded-lg overflow-hidden border border-gray-300 bg-gray-100 flex-shrink-0">
 							{#if char.styledImage && char.styledImage !== 'stored'}
 								<img src={char.styledImage} alt={char.name} class="w-full h-full object-contain" />
@@ -231,14 +211,12 @@
 								<div class="w-full h-full flex items-center justify-center text-2xl">🧙</div>
 							{/if}
 						</div>
-
 						<div class="flex-1 min-w-0">
 							<p class="font-semibold text-gray-800 group-hover:text-purple-700 truncate">{char.name}</p>
 							<p class="text-[10px] text-gray-500">
-								{char.poseCount} pose{char.poseCount !== 1 ? 's' : ''} generated
+								{char.poseCount} pose{char.poseCount !== 1 ? 's' : ''} saved
 							</p>
 						</div>
-
 						<div class="text-gray-400 group-hover:text-purple-500 text-lg">→</div>
 					</button>
 				{/each}
@@ -246,19 +224,15 @@
 		{/if}
 
 	<!-- ═══════════════════════════════════════════════ -->
-	<!-- STEP: Configure Pose                           -->
+	<!-- CONFIGURE POSE                                 -->
 	<!-- ═══════════════════════════════════════════════ -->
 	{:else if step === 'configure'}
-		<div class="text-center mb-2">
-			<p class="text-lg font-bold text-gray-800">Configure Pose</p>
-			<p class="text-xs text-gray-500 mt-1">{selectedCharacter?.name} — pick a pose and generate</p>
-		</div>
 
-		<!-- Character reference bar -->
+		<!-- Character bar -->
 		<div class="flex items-center gap-2 border border-gray-200 rounded-lg p-2 bg-gray-50">
 			<button
 				class="flex-shrink-0 cursor-pointer"
-				onclick={() => openPreview(selectedCharacter?.styledImage, 'Styled Idle')}
+				onclick={() => openPreview(selectedCharacter?.styledImage, 'Styled Character')}
 			>
 				{#if selectedCharacter?.styledImage && selectedCharacter.styledImage !== 'stored'}
 					<img src={selectedCharacter.styledImage} alt="Styled" class="w-12 h-12 object-contain rounded border border-amber-300 bg-white" />
@@ -266,91 +240,71 @@
 			</button>
 			<div class="text-left text-[10px] text-gray-600 min-w-0 flex-1">
 				<p class="font-medium text-gray-800 truncate">{selectedCharacter?.name}</p>
-				<p>🎨 Styled Idle · {selectedCharacter?.poseCount || 0} poses</p>
+				<p>IP-Adapter will lock this character's identity</p>
 			</div>
 			<button
-				class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200"
+				class="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-200 cursor-pointer"
 				onclick={backToSelect}
-			>← Change</button>
+			>← Back</button>
 		</div>
 
-		<!-- ── Pose Preset Grid ──────────────────────── -->
+		<!-- Pose description -->
 		<div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
-			<p class="text-xs font-semibold text-gray-700 mb-2">🦴 Pose Preset</p>
-
-			{#each Object.entries(presetsByCategory) as [category, presets]}
-				<p class="text-[10px] font-medium text-gray-500 uppercase tracking-wider mb-1.5 mt-2 first:mt-0">
-					{category}
-				</p>
-				<div class="grid grid-cols-3 gap-1.5 mb-2">
-					{#each presets as preset}
-						<button
-							class="py-1.5 px-1 rounded-lg text-center transition-all text-[10px] leading-tight cursor-pointer
-								{selectedPresetId === preset.id
-									? 'bg-purple-500 text-white border-2 border-purple-600 shadow-sm'
-									: 'bg-white border border-gray-200 text-gray-600 hover:border-purple-300 hover:bg-purple-50'}"
-							onclick={() => selectPreset(preset.id)}
-						>
-							<div class="text-base">{preset.icon}</div>
-							<div class="font-medium">{preset.name}</div>
-						</button>
-					{/each}
-				</div>
-			{/each}
-		</div>
-
-		<!-- ── Skeleton Preview + Character Side-by-Side ── -->
-		<div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
-			<p class="text-xs font-semibold text-gray-700 mb-2">👁️ Preview</p>
-			<div class="grid grid-cols-2 gap-2">
-				<!-- Styled idle reference -->
-				<div class="text-center">
-					<button
-						class="w-full aspect-square rounded-lg overflow-hidden border border-amber-300 bg-gray-100 cursor-pointer hover:border-amber-500 transition-colors"
-						onclick={() => openPreview(selectedCharacter?.styledImage, 'Styled Idle')}
-					>
-						{#if selectedCharacter?.styledImage && selectedCharacter.styledImage !== 'stored'}
-							<img src={selectedCharacter.styledImage} alt="Styled" class="w-full h-full object-contain" />
-						{/if}
-					</button>
-					<p class="text-[9px] text-gray-500 mt-1">🎨 Styled Idle</p>
-				</div>
-
-				<!-- Skeleton preview -->
-				<div class="text-center">
-					<button
-						class="w-full aspect-square rounded-lg overflow-hidden border border-purple-300 bg-black cursor-pointer hover:border-purple-500 transition-colors"
-						onclick={() => { if (skeletonPreview) openPreview(skeletonPreview, `Skeleton: ${selectedPreset?.name}`); }}
-					>
-						{#if skeletonPreview}
-							<img src={skeletonPreview} alt="Skeleton" class="w-full h-full object-contain" />
-						{/if}
-					</button>
-					<p class="text-[9px] text-gray-500 mt-1">🦴 {selectedPreset?.name} Skeleton</p>
-				</div>
-			</div>
-			<p class="text-[9px] text-gray-400 mt-2 text-center">Skeleton guides ControlNet pose generation. Draggable joints coming soon.</p>
-		</div>
-
-		<!-- ── Prompt ─────────────────────────────────── -->
-		<div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
-			<div class="flex items-center justify-between mb-1">
-				<p class="text-xs font-semibold text-gray-700">✏️ Prompt</p>
-				<button
-					class="text-[10px] text-purple-600 hover:text-purple-800 underline"
-					onclick={() => {
-						if (selectedPreset && selectedCharacter) {
-							customPrompt = `${selectedCharacter.name} in a ${selectedPreset.name.toLowerCase()} pose, ${selectedPreset.desc.toLowerCase()}`;
-						}
-					}}
-				>Reset to default</button>
-			</div>
+			<p class="text-xs font-semibold text-gray-700 mb-1">✏️ Describe the pose</p>
+			<p class="text-[10px] text-gray-400 mb-2">What should the character be doing?</p>
 			<textarea
-				bind:value={customPrompt}
+				bind:value={posePrompt}
 				class="w-full px-3 py-2 border border-gray-300 rounded-lg text-xs focus:border-purple-500 focus:ring-1 focus:ring-purple-500 outline-none resize-none bg-white"
 				rows="3"
-				placeholder="Describe the pose... (auto-filled from preset)"
+				placeholder="e.g. attacking with sword raised overhead, 3/4 view facing right"
 			></textarea>
+		</div>
+
+		<!-- Pose reference image (optional) -->
+		<div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
+			<p class="text-xs font-semibold text-gray-700 mb-1">📷 Pose reference image <span class="font-normal text-gray-400">(optional)</span></p>
+			<p class="text-[10px] text-gray-400 mb-2">
+				Upload any image of a person/character in the pose you want. DWPose will extract the skeleton automatically.
+			</p>
+
+			{#if poseReferencePreview}
+				<div class="relative inline-block">
+					<button
+						class="cursor-pointer"
+						onclick={() => openPreview(poseReferencePreview, 'Pose Reference')}
+					>
+						<img src={poseReferencePreview} alt="Pose reference" class="w-32 h-32 object-contain rounded-lg border border-purple-300 bg-white" />
+					</button>
+					<button
+						class="absolute -top-2 -right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600 cursor-pointer shadow"
+						onclick={removeReference}
+					>✕</button>
+				</div>
+			{:else}
+				<button
+					class="w-full py-4 border-2 border-dashed border-gray-300 rounded-lg text-gray-500 hover:border-purple-400 hover:text-purple-600 transition-colors cursor-pointer text-xs"
+					onclick={() => fileInput?.click()}
+				>
+					📤 Click to upload a pose reference
+				</button>
+				<input
+					bind:this={fileInput}
+					type="file"
+					accept="image/*"
+					class="hidden"
+					onchange={handleReferenceUpload}
+				/>
+			{/if}
+		</div>
+
+		<!-- How it works -->
+		<div class="border border-gray-200 rounded-lg p-3 bg-blue-50/50">
+			<p class="text-[10px] font-medium text-blue-700 mb-1">How it works:</p>
+			<ul class="text-[10px] text-blue-600 space-y-0.5">
+				<li><strong>IP-Adapter</strong> — locks your character's face, colors, and details</li>
+				<li><strong>ControlNet</strong> — if you upload a reference, DWPose extracts the skeleton to control the pose</li>
+				<li><strong>Text prompt</strong> — describes what the character should be doing</li>
+			</ul>
 		</div>
 
 		{#if error}
@@ -359,43 +313,32 @@
 			</div>
 		{/if}
 
-		<!-- Action buttons -->
-		<div class="flex gap-2">
-			<button
-				class="px-4 py-2.5 text-xs bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 cursor-pointer"
-				onclick={backToSelect}
-			>← Back</button>
-			<button
-				class="flex-1 px-4 py-2.5 bg-purple-500 text-white rounded-lg hover:bg-purple-600 font-medium text-xs disabled:bg-gray-400 cursor-pointer"
-				onclick={generatePose}
-				disabled={isGenerating || !selectedCharacter}
-			>🦴 Generate Pose →</button>
-		</div>
+		<button
+			class="w-full px-4 py-2.5 bg-purple-500 text-white rounded-lg hover:bg-purple-600 font-medium text-xs disabled:bg-gray-400 cursor-pointer"
+			onclick={generatePose}
+			disabled={isGenerating}
+		>🦴 Generate Pose →</button>
 
 	<!-- ═══════════════════════════════════════════════ -->
-	<!-- STEP: Generating                               -->
+	<!-- GENERATING                                     -->
 	<!-- ═══════════════════════════════════════════════ -->
 	{:else if step === 'generating'}
 		<div class="text-center py-8">
 			<div class="text-5xl mb-4 animate-pulse">🦴</div>
 			<p class="text-lg font-bold text-gray-800">Generating Pose</p>
-			<p class="text-xs text-gray-500 mt-1">
-				{selectedCharacter?.name} — {selectedPreset?.name}
-			</p>
+			<p class="text-xs text-gray-500 mt-1">{selectedCharacter?.name}</p>
 
-			<div class="mt-4 grid grid-cols-2 gap-2">
-				<!-- Styled reference -->
-				<div class="aspect-square rounded-lg overflow-hidden border border-amber-300 bg-gray-100">
-					{#if selectedCharacter?.styledImage && selectedCharacter.styledImage !== 'stored'}
-						<img src={selectedCharacter.styledImage} alt="Reference" class="w-full h-full object-contain" />
-					{/if}
-				</div>
-				<!-- Skeleton -->
-				<div class="aspect-square rounded-lg overflow-hidden border border-purple-300 bg-black">
-					{#if skeletonPreview}
-						<img src={skeletonPreview} alt="Target pose" class="w-full h-full object-contain" />
-					{/if}
-				</div>
+			<div class="mt-4 flex justify-center gap-2">
+				{#if selectedCharacter?.styledImage && selectedCharacter.styledImage !== 'stored'}
+					<div class="w-24 h-24 rounded-lg overflow-hidden border border-amber-300 bg-gray-100">
+						<img src={selectedCharacter.styledImage} alt="Identity" class="w-full h-full object-contain" />
+					</div>
+				{/if}
+				{#if poseReferencePreview}
+					<div class="w-24 h-24 rounded-lg overflow-hidden border border-purple-300 bg-gray-100">
+						<img src={poseReferencePreview} alt="Pose ref" class="w-full h-full object-contain" />
+					</div>
+				{/if}
 			</div>
 
 			<div class="mt-6 flex items-center justify-center gap-2">
@@ -403,58 +346,51 @@
 					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 					<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 				</svg>
-				<span class="text-sm text-purple-600">ControlNet processing...</span>
+				<span class="text-sm text-purple-600">
+					{poseReference ? 'DWPose extracting skeleton → ControlNet + IP-Adapter...' : 'IP-Adapter generating...'}
+				</span>
 			</div>
-
-			{#if error}
-				<div class="mt-4 bg-red-50 border border-red-200 rounded-lg p-3">
-					<p class="text-xs text-red-600">{error}</p>
-					<button
-						class="mt-2 px-4 py-1.5 text-xs bg-red-500 text-white rounded hover:bg-red-600 cursor-pointer"
-						onclick={() => { error = ''; step = 'configure'; }}
-					>← Back to Configure</button>
-				</div>
-			{/if}
+			<p class="text-[10px] text-gray-400 mt-3">First run may take 2-3 min (GPU cold start)</p>
 		</div>
 
 	<!-- ═══════════════════════════════════════════════ -->
-	<!-- STEP: Approve                                  -->
+	<!-- APPROVE                                        -->
 	<!-- ═══════════════════════════════════════════════ -->
 	{:else if step === 'approve'}
 		<div class="text-center mb-2">
-			<p class="text-lg font-bold text-gray-800">Pose Generated</p>
-			<p class="text-xs text-gray-500 mt-1">{selectedCharacter?.name} — {selectedPreset?.name}</p>
+			<p class="text-lg font-bold text-gray-800">Approve Pose</p>
+			<p class="text-xs text-gray-500 mt-1">{selectedCharacter?.name}</p>
 		</div>
 
-		<!-- Side-by-side: styled idle vs generated pose -->
 		<div class="grid grid-cols-2 gap-2 mb-3">
+			<!-- Reference: styled idle -->
 			<button
 				class="border rounded-lg overflow-hidden cursor-pointer hover:border-amber-400 transition-colors text-left"
-				onclick={() => openPreview(selectedCharacter?.styledImage, 'Styled Idle (Reference)')}
+				onclick={() => openPreview(selectedCharacter?.styledImage, 'Styled Character (Identity Source)')}
 			>
 				{#if selectedCharacter?.styledImage && selectedCharacter.styledImage !== 'stored'}
 					<img src={selectedCharacter.styledImage} alt="Reference" class="w-full aspect-square object-contain bg-gray-100" />
 				{/if}
-				<p class="text-[10px] text-center py-1 text-gray-500">🎨 Styled Idle</p>
+				<p class="text-[10px] text-center py-1 text-gray-500">🎨 Identity Source</p>
 			</button>
+
+			<!-- Generated pose -->
 			<button
 				class="border-2 border-purple-400 rounded-lg overflow-hidden cursor-pointer hover:border-purple-600 transition-colors text-left"
-				onclick={() => openPreview(generatedPose, `Pose: ${selectedPreset?.name}`)}
+				onclick={() => openPreview(generatedPose, 'Generated Pose')}
 			>
 				{#if generatedPose}
 					<img src={generatedPose} alt="Generated pose" class="w-full aspect-square object-contain bg-gray-100" />
 				{/if}
-				<p class="text-[10px] text-center py-1 font-medium text-purple-600">🦴 {selectedPreset?.name}</p>
+				<p class="text-[10px] text-center py-1 font-medium text-purple-600">🦴 Generated Pose</p>
 			</button>
 		</div>
 
-		<!-- Skeleton reference -->
-		<div class="flex items-center gap-2 border border-gray-200 rounded-lg p-2 bg-gray-50 mb-3">
-			{#if skeletonPreview}
-				<img src={skeletonPreview} alt="Skeleton" class="w-10 h-10 rounded bg-black object-contain" />
-			{/if}
-			<p class="text-[10px] text-gray-500">Skeleton guide used for this pose</p>
-		</div>
+		{#if posePrompt}
+			<div class="bg-gray-50 border border-gray-200 rounded-lg p-2 mb-3">
+				<p class="text-[10px] text-gray-500">Prompt: <span class="text-gray-700">{posePrompt}</span></p>
+			</div>
+		{/if}
 
 		<div class="flex gap-2">
 			<button
@@ -463,23 +399,17 @@
 			>✕ Discard</button>
 			<button
 				class="px-3 py-2.5 bg-amber-100 text-amber-700 rounded-lg hover:bg-amber-200 font-medium text-xs cursor-pointer"
-				onclick={regeneratePose}
+				onclick={generatePose}
 			>🔄 Redo</button>
 			<button
 				class="flex-1 px-3 py-2.5 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium text-xs cursor-pointer"
 				onclick={approvePose}
 			>✅ Save Pose</button>
 		</div>
-
-		<p class="text-[9px] text-gray-400 text-center mt-1">
-			Saved poses go into the character's folder and can be used for animation later.
-		</p>
 	{/if}
 </div>
 
-<!-- ═══════════════════════════════════════════════════ -->
-<!-- Full Image Preview Popup                           -->
-<!-- ═══════════════════════════════════════════════════ -->
+<!-- Full Image Preview -->
 {#if fullPreviewImage}
 	<div
 		class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
