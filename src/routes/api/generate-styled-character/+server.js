@@ -235,11 +235,11 @@ Generate the image now.`
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 min
 
-		// Try multiple models for best quality — higher-quality models first
+		// Try multiple models for best quality — highest quality first
 		const models = [
-			'gemini-2.0-flash-exp',          // Best image gen quality currently
-			'gemini-2.5-flash-preview-05-20', // Newer flash variant
-			'gemini-2.5-flash-image',         // Original fallback
+			'gemini-3-pro-image-preview',              // Best quality — Gemini 3 Pro
+			'gemini-2.0-flash-exp-image-generation',   // Good quality — 2.0 Flash experimental
+			'gemini-2.5-flash-image',                  // Fallback — basic flash
 		];
 
 		let response = null;
