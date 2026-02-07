@@ -7,9 +7,13 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 
-const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent';
+// Best model first, fallback to weaker ones
+const GEMINI_MODELS = [
+	'gemini-3-pro-image-preview',
+	'gemini-2.0-flash-exp-image-generation',
+	'gemini-2.5-flash-image',
+];
 
-/** Extract base64 payload from a data URL */
 function stripDataUrl(dataUrl) {
 	if (dataUrl.startsWith('data:')) {
 		const idx = dataUrl.indexOf(',');
@@ -18,18 +22,14 @@ function stripDataUrl(dataUrl) {
 	return dataUrl;
 }
 
-/** Extract first generated image from a Gemini response */
 function extractImage(result) {
-	if (result.candidates?.[0]?.content?.parts) {
-		for (const part of result.candidates[0].content.parts) {
-			const data = part.inlineData?.data || part.inline_data?.data;
-			if (data) return `data:image/png;base64,${data}`;
-		}
+	for (const part of result.candidates?.[0]?.content?.parts || []) {
+		const data = part.inlineData?.data || part.inline_data?.data;
+		if (data) return `data:image/png;base64,${data}`;
 	}
 	return null;
 }
 
-/** Call Gemini with images + text, return raw JSON */
 async function callGemini(apiKey, imageParts, textPrompt, aspectRatio = '1:1', timeoutMs = 5 * 60 * 1000) {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -41,26 +41,37 @@ async function callGemini(apiKey, imageParts, textPrompt, aspectRatio = '1:1', t
 	}
 	parts.push({ text: textPrompt });
 
-	try {
-		const response = await fetch(`${GEMINI_URL}?key=${apiKey}`, {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			signal: controller.signal,
-			body: JSON.stringify({
-				contents: [{ parts }],
-				generationConfig: {
-					responseModalities: ['TEXT', 'IMAGE'],
-					imageConfig: { aspectRatio }
-				}
-			})
-		});
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			throw new Error(`Gemini API error ${response.status}: ${errorText}`);
+	const body = JSON.stringify({
+		contents: [{ parts }],
+		generationConfig: {
+			responseModalities: ['TEXT', 'IMAGE'],
 		}
+	});
 
-		return await response.json();
+	try {
+		for (const model of GEMINI_MODELS) {
+			console.log(`[Sheet] Trying ${model}...`);
+			try {
+				const response = await fetch(
+					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+					{
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						signal: controller.signal,
+						body,
+					}
+				);
+				if (response.ok) {
+					console.log(`[Sheet] ✓ ${model}`);
+					return await response.json();
+				}
+				console.warn(`[Sheet] ${model} → ${response.status}`);
+			} catch (e) {
+				if (e.name === 'AbortError') throw e;
+				console.warn(`[Sheet] ${model} error: ${e.message}`);
+			}
+		}
+		throw new Error('All Gemini models failed');
 	} finally {
 		clearTimeout(timeout);
 	}
