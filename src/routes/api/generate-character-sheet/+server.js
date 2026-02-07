@@ -1,81 +1,16 @@
 /**
- * Character Sheet Generation — Single-pass using Google Gemini
- * 
+ * Character Sheet Generation — turnaround reference using @google/genai SDK
+ *
  * Generates a basic turnaround (front, right side, back, left side)
+ * using the Gemini model cascade from gemini.js.
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-
-// Best model first, fallback to weaker ones
-const GEMINI_MODELS = [
-	'gemini-3-pro-image-preview',
-	'gemini-2.0-flash-exp-image-generation',
-	'gemini-2.5-flash-image',
-];
-
-function stripDataUrl(dataUrl) {
-	if (dataUrl.startsWith('data:')) {
-		const idx = dataUrl.indexOf(',');
-		return idx !== -1 ? dataUrl.substring(idx + 1) : dataUrl;
-	}
-	return dataUrl;
-}
-
-function extractImage(result) {
-	for (const part of result.candidates?.[0]?.content?.parts || []) {
-		const data = part.inlineData?.data || part.inline_data?.data;
-		if (data) return `data:image/png;base64,${data}`;
-	}
-	return null;
-}
-
-async function callGemini(apiKey, imageParts, textPrompt, aspectRatio = '1:1', timeoutMs = 5 * 60 * 1000) {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), timeoutMs);
-
-	const parts = [];
-	for (const img of imageParts) {
-		parts.push({ text: img.label });
-		parts.push({ inline_data: { mime_type: 'image/png', data: img.base64 } });
-	}
-	parts.push({ text: textPrompt });
-
-	const body = JSON.stringify({
-		contents: [{ parts }],
-		generationConfig: {
-			responseModalities: ['TEXT', 'IMAGE'],
-		}
-	});
-
-	try {
-		for (const model of GEMINI_MODELS) {
-			console.log(`[Sheet] Trying ${model}...`);
-			try {
-				const response = await fetch(
-					`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-					{
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						signal: controller.signal,
-						body,
-					}
-				);
-				if (response.ok) {
-					console.log(`[Sheet] ✓ ${model}`);
-					return await response.json();
-				}
-				console.warn(`[Sheet] ${model} → ${response.status}`);
-			} catch (e) {
-				if (e.name === 'AbortError') throw e;
-				console.warn(`[Sheet] ${model} error: ${e.message}`);
-			}
-		}
-		throw new Error('All Gemini models failed');
-	} finally {
-		clearTimeout(timeout);
-	}
-}
+import {
+	generateWithCascade,
+	extractImage,
+	stripDataUrl,
+} from '$lib/server/gemini.js';
 
 export async function POST({ request, locals }) {
 	try {
@@ -88,19 +23,19 @@ export async function POST({ request, locals }) {
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required' }, { status: 400 });
 		}
-		if (!env.GEMINI_API_KEY) {
-			return json({ error: 'Gemini API key not configured' }, { status: 500 });
-		}
 
 		const refBase64 = stripDataUrl(referenceImage);
 		const name = characterName || 'Character';
 
-		// ═════════════════════════════════════════════════
-		// Generate basic cardinal turnaround
-		// ═════════════════════════════════════════════════
-		console.log(`[Sheet] Generating turnaround for: ${name}`);
+		// ── Build multimodal parts ───────────────────────
+		/** @type {import('@google/genai').Part[]} */
+		const parts = [];
 
-		const prompt = `TASK: Create a BASIC TURNAROUND REFERENCE SHEET for this character/creature.
+		parts.push({ text: 'ORIGINAL REFERENCE — replicate this subject exactly:' });
+		parts.push({ inlineData: { mimeType: 'image/png', data: refBase64 } });
+
+		parts.push({
+			text: `TASK: Create a BASIC TURNAROUND REFERENCE SHEET for this character/creature.
 
 CHARACTER NAME: ${name}
 
@@ -129,27 +64,30 @@ PROPORTIONS — THIS IS THE MOST IMPORTANT RULE:
 - The silhouette width/height should be consistent across all 4 views (only depth changes)
 - If the character is lean, keep it lean in every view. If muscular, keep the same muscle mass in every view
 
-Accuracy and consistency across all 4 views are the top priority.`;
+Accuracy and consistency across all 4 views are the top priority.`,
+		});
 
-		const result = await callGemini(
-			env.GEMINI_API_KEY,
-			[{ label: 'ORIGINAL REFERENCE — replicate this subject exactly:', base64: refBase64 }],
-			prompt,
-			'16:9'
-		);
+		console.log(`[Sheet] Generating turnaround for: ${name}`);
 
-		const sheetImage = extractImage(result);
+		// ── Generate with model cascade ──────────────────
+		const { response, model } = await generateWithCascade(parts, {
+			temperature: 0.3, // stricter adherence for reference sheets
+		});
+
+		const sheetImage = extractImage(response);
 		if (!sheetImage) {
-			console.error('[Sheet] No image in response:', result);
-			return json({ error: 'Character sheet generation failed — no image generated', details: JSON.stringify(result) }, { status: 500 });
+			console.error('[Sheet] No image in response');
+			return json(
+				{ error: 'Character sheet generation failed — no image generated' },
+				{ status: 500 },
+			);
 		}
 
-		console.log('[Sheet] ✓ Turnaround generated');
-
+		console.log(`[Sheet] ✓ Turnaround generated via ${model}`);
 		return json({ sheet: sheetImage });
 
 	} catch (error) {
-		console.error('[Character Sheet] Error:', error);
+		console.error('[Sheet] Error:', error);
 		return json({ error: error.message }, { status: 500 });
 	}
 }

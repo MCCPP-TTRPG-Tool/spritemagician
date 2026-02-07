@@ -319,8 +319,8 @@
 
 		isGenerating = true;
 		generationError = null;
-		const frameCount = Math.round(duration * project.fps);
-		progress = { currentFrame: 0, totalFrames: frameCount, status: 'starting', message: `Starting ${duration}s animation...` };
+		const totalFrameCount = Math.round(duration * project.fps);
+		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: `Starting ${duration}s animation...` };
 		jobId = null;
 
 		// Add job to queue
@@ -337,7 +337,7 @@
 
 		try {
 			// Calculate frame count from duration and FPS
-			const frameCount = Math.round(duration * project.fps);
+			const requestedFrameCount = Math.round(duration * project.fps);
 			
 			// Build prompt from pose preset
 			let posePrompt;
@@ -364,7 +364,7 @@
 					endImage: useInterpolation ? endFrame : null, // For interpolation mode
 					prompt: posePrompt,
 					pose: selectedPose,
-					frameCount: frameCount,
+					frameCount: requestedFrameCount,
 					duration: duration,
 					motionAmount: motionAmount,
 					fps: project.fps,

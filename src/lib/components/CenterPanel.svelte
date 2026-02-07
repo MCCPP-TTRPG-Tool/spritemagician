@@ -180,9 +180,15 @@
 			else if (type === 'building' || type === 'plant') category = 'scenery';
 			else if (type === 'effect') category = 'effects';
 			
-			// Auto-save to gallery
-			const assetName = description?.slice(0, 30) || 'Sprite';
-			assetStore.addAsset(category, assetName, image);
+		// Auto-save to gallery
+		const assetName = description?.slice(0, 30) || 'Sprite';
+		assetStore.addAsset(category, {
+			name: assetName,
+			imageData: image,
+			description,
+			type,
+			style
+		});
 			console.log(`Auto-saved sprite "${assetName}" to ${category}`);
 		});
 	}

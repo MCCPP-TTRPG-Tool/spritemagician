@@ -86,9 +86,13 @@
 {#if jobs.length > 0}
 	<div class="border-t border-gray-200 bg-gray-50">
 		<!-- Header -->
-		<button
-			class="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			class="w-full flex items-center justify-between px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
 			onclick={() => isCollapsed = !isCollapsed}
+			onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') isCollapsed = !isCollapsed; }}
+			role="button"
+			tabindex="0"
 		>
 			<div class="flex items-center gap-2">
 				<span>{isCollapsed ? '▶' : '▼'}</span>
@@ -108,7 +112,7 @@
 					>Clear done</button>
 				{/if}
 			</div>
-		</button>
+		</div>
 		
 		<!-- Job List -->
 		{#if !isCollapsed}

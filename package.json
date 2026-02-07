@@ -20,6 +20,7 @@
 		"vite": "^7.3.1"
 	},
 	"dependencies": {
+		"@google/genai": "^1.40.0",
 		"firebase-admin": "^13.6.0"
 	}
 }

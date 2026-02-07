@@ -1,9 +1,27 @@
 /**
  * Proxy endpoint to fetch images and return as base64
  * Bypasses CORS issues with Firebase Storage
+ *
+ * Domain allowlist prevents SSRF — only trusted origins are fetched.
  */
 
 import { json } from '@sveltejs/kit';
+
+const ALLOWED_DOMAINS = [
+	'firebasestorage.googleapis.com',
+	'storage.googleapis.com',
+	'replicate.delivery',
+	'pbxt.replicate.delivery',
+];
+
+function isAllowedUrl(urlStr) {
+	try {
+		const parsed = new URL(urlStr);
+		return ALLOWED_DOMAINS.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d));
+	} catch {
+		return false;
+	}
+}
 
 export async function POST({ request }) {
 	try {
@@ -11,6 +29,10 @@ export async function POST({ request }) {
 
 		if (!url) {
 			return json({ error: 'URL required' }, { status: 400 });
+		}
+
+		if (!isAllowedUrl(url)) {
+			return json({ error: 'Domain not allowed' }, { status: 403 });
 		}
 
 		// Fetch the image
