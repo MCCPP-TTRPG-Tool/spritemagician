@@ -92,20 +92,21 @@ export async function POST({ request, locals }) {
 
 		// ── PHASE 1: Learn the art style ──────────────────
 		parts.push({
-			text: `PHASE 1 — LEARN THE ART STYLE
+			text: `PHASE 1 — LEARN THE ART STYLE (study OBSESSIVELY)
 
-You are about to re-render a character in a specific art style. First, study these ${styleImages.length} example sprites carefully. Every detail of their rendering technique is what you must replicate in your output.
+You are about to re-render a character in a very specific, extremely detailed art style. These ${styleImages.length} example sprites ARE the standard. Your output must be INDISTINGUISHABLE from them in quality, detail density, and rendering technique.
 
-Pay close attention to:
-- How pixels are individually placed (this is PIXEL ART, not smooth digital painting)
-- How dithering is used for color transitions
-- How lighting comes from the upper-left with dramatic shadows
-- How outlines are thin, dark, and crisp (1-2 pixels)
-- How materials are rendered (metal = bright pixel highlights, fur = individual pixel strands, etc.)
-- The saturated, bold color palette with deep blacks
-- The overall "pre-rendered 3D miniature" aesthetic — volumetric, detailed, isometric game sprites
+ZOOM IN AND STUDY:
+- PIXEL DENSITY: Every single square pixel is deliberately placed. There are HUNDREDS of individually colored pixels per limb. This is NOT simple pixel art — it's HYPER-DETAILED pixel art, closer to a downscaled 3D render than typical 16-bit sprites
+- TEXTURE WORK: Look at the fabric folds on robes — each fold has 5+ shading steps using individual pixels. Metal armor has specular pixel highlights. Skin has sub-surface scattering approximated through warm pixel tones. Hair/fur has individual strands rendered pixel by pixel
+- DITHERING: Transitions between colors use organized dithering patterns — checkerboard, gradient, and scattered pixel placement. There are NO smooth gradients or soft blending anywhere
+- LIGHTING: Dramatic directional light from upper-left. The light-to-shadow transition happens over just 3-5 pixels but creates convincing volume. Highlights are bright, almost white. Shadows are near-black. The contrast ratio is EXTREME
+- OUTLINES: Dark pixel outlines (1-2px) define silhouette edges, but interior detail lines are softer/colored. The outline color shifts — warmer on lit sides, cooler in shadow
+- MATERIAL DISTINCTION: You can TELL what material everything is made of just by the pixel technique: cloth drapes with soft dithered folds, metal gleams with hard specular dots, leather has subtle grain, bone/horn is smooth with hard light edges, magical effects use bright saturated pixels with scattered particle dots
+- FACES: Even small faces have individually pixeled eyes, nose shadows, mouth lines, cheekbone highlights — every facial feature is READABLE at sprite size
+- OVERALL IMPRESSION: These look like miniature oil paintings rendered in pixels. Rich, dense, lavish detail. Nothing is left empty or flat. Every surface has texture
 
-These are your ONLY reference for the rendering style:`
+Your output MUST match this EXACT quality level. If your output has smooth areas, flat colors, or missing texture detail — it is WRONG. Study these samples:`
 		});
 
 		for (const img of styleImages) {
@@ -184,15 +185,21 @@ WHAT STAYS THE SAME (from the character images you just studied):
 - Facial features, expression — EXACTLY as shown
 - Every distinctive feature — if you can see it in the reference, it MUST be in your output
 
-WHAT CHANGES (ONLY these):
-- Rendering technique → match the ${styleImages.length} style samples from Phase 1
-- Pixel art with visible individual pixels, dithering, crisp outlines
-- Strong upper-left lighting with dramatic shadows
-- Saturated, bold colors with deep blacks
-- Pre-rendered 3D miniature aesthetic
-- NO smooth digital painting, NO airbrushing, NO soft gradients
+WHAT CHANGES (ONLY the rendering — match the style samples EXACTLY):
+- HYPER-DETAILED PIXEL ART — hundreds of individually placed pixels per body part
+- Every surface MUST have texture: cloth has dithered folds, metal has specular pixel highlights, skin has warm tonal pixels, scales/fur rendered individually
+- Dramatic upper-left lighting with EXTREME contrast — bright highlights to near-black shadows
+- Organized dithering for ALL color transitions — NO smooth gradients, NO soft blending
+- Dark pixel outlines (1-2px) on silhouette, softer colored lines for interior detail
+- Saturated, bold, rich colors — deep blacks in shadows, punchy highlights
+- Faces must have readable features — individual pixel eyes, nose shadow, mouth
+- The overall look is a "miniature oil painting rendered in pixels" — dense, lavish, NOTHING flat or empty
+- NO smooth digital painting, NO airbrushing, NO soft brushstrokes, NO flat areas
+- If ANY part of your output looks "smooth" or "digitally painted" rather than made of VISIBLE INDIVIDUAL PIXELS — you have FAILED
 
-SIDE-BY-SIDE TEST: If your output was placed next to the character reference, someone should say "that's the SAME character, just rendered as pixel art." If they would say "that's a DIFFERENT character" — you have failed.
+QUALITY TEST: Place your output next to the style samples from Phase 1. They should look like they came from the SAME game, rendered by the SAME artist, at the SAME detail level. If yours looks simpler or smoother — regenerate with MORE detail.
+
+IDENTITY TEST: Place your output next to the character reference. Someone should say "that's the SAME character, just in pixel art style." If they'd say "that's a DIFFERENT character" — you have failed.
 
 ═══════════════════════════════════════════════════
 SPRITE SIZE & FRAMING
@@ -211,8 +218,14 @@ OUTPUT SPEC
 - 3/4 VIEW facing RIGHT (body angled ~45°, head/chest toward right)
 - Idle stance — neutral, weight settled, all limbs visible and in natural position
 - Solid grey background (#808080)
-- PIXEL ART matching the style samples — visible pixels, dithering, NOT smooth/painted
+- HYPER-DETAILED PIXEL ART at the SAME quality/density as the style samples
+- Every body part textured with individually placed pixels — no flat or smooth areas
+- Dramatic lighting with extreme contrast
+- Dithered transitions, crisp outlines, readable face details
 - Must be INSTANTLY RECOGNIZABLE as the same character from the reference images
+- Must be VISUALLY INDISTINGUISHABLE in quality from the ${styleImages.length} style samples
+
+DETAIL LEVEL REMINDER: Look at the style samples one more time. See how DENSE the pixel work is. Your output must be EQUALLY dense. If a wizard's robe in the style sample has 50+ individually shaded pixel folds, your character's equivalent surfaces need the SAME density. Do not simplify. Do not smooth. Every pixel matters.
 
 Generate the image now.`
 		});
@@ -222,25 +235,49 @@ Generate the image now.`
 		const controller = new AbortController();
 		const timeoutId = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 min
 
-		let response;
+		// Try multiple models for best quality — higher-quality models first
+		const models = [
+			'gemini-2.0-flash-exp',          // Best image gen quality currently
+			'gemini-2.5-flash-preview-05-20', // Newer flash variant
+			'gemini-2.5-flash-image',         // Original fallback
+		];
+
+		let response = null;
+
 		try {
-			response = await fetch(
-				`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`,
-				{
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					signal: controller.signal,
-					body: JSON.stringify({
-						contents: [{ parts }],
-						generationConfig: {
-							responseModalities: ['TEXT', 'IMAGE'],
-							imageConfig: {
-								aspectRatio: '1:1'
-							}
+			for (const model of models) {
+				console.log(`[Style Transfer] Trying model: ${model}`);
+				try {
+					response = await fetch(
+						`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${env.GEMINI_API_KEY}`,
+						{
+							method: 'POST',
+							headers: { 'Content-Type': 'application/json' },
+							signal: controller.signal,
+							body: JSON.stringify({
+								contents: [{ parts }],
+								generationConfig: {
+									responseModalities: ['TEXT', 'IMAGE'],
+									temperature: 0.8,
+								}
+							})
 						}
-					})
+					);
+					
+					if (response.ok) {
+						console.log(`[Style Transfer] ✓ Model ${model} responded OK`);
+						break;
+					}
+					
+					const errText = await response.text();
+					console.warn(`[Style Transfer] Model ${model} failed (${response.status}): ${errText.slice(0, 200)}`);
+					response = null;
+				} catch (fetchErr) {
+					if (fetchErr.name === 'AbortError') throw fetchErr;
+					console.warn(`[Style Transfer] Model ${model} error: ${fetchErr.message}`);
+					response = null;
 				}
-			);
+			}
 		} finally {
 			clearTimeout(timeoutId);
 		}
