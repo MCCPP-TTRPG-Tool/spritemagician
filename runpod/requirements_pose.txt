@@ -1,0 +1,27 @@
+# RunPod Pose Handler Dependencies
+# ControlNet + IP-Adapter on SD 1.5
+#
+# COMPATIBILITY: diffusers >=0.25 required for IP-Adapter support
+# Using diffusers 0.30+ for latest IP-Adapter improvements
+
+runpod>=1.0.0
+requests>=2.31.0
+pillow>=10.0.0
+numpy<2
+
+# === Pin PyTorch to match base image ===
+torch==2.4.0
+torchvision==0.19.0
+
+# === Diffusers with ControlNet + IP-Adapter support ===
+diffusers>=0.30.0,<0.32.0
+transformers>=4.38.0,<4.45.0
+accelerate>=0.28.0
+huggingface-hub>=0.23.0
+safetensors>=0.4.0
+
+# Image processing
+opencv-python-headless>=4.8.0
+
+# Optional: faster attention
+xformers>=0.0.26
