@@ -10,6 +10,7 @@
 	let isDragging = $state(false);
 	let imgWidth = $state(0);
 	let imgHeight = $state(0);
+	let lightboxSrc = $state(null);
 
 	function handleFileChange(e) {
 		const file = e.target.files?.[0];
@@ -215,14 +216,14 @@
 	{:else}
 		<!-- Source Image Preview -->
 		<div class="relative">
-			<div class="bg-gray-100 rounded-lg p-1">
+			<button class="w-full bg-gray-100 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
 				<img
 					src={sourceImage}
 					alt="Source"
 					class="w-full max-h-48 object-contain rounded"
 					style="image-rendering: pixelated;"
 				/>
-			</div>
+			</button>
 			<button
 				onclick={clearImage}
 				class="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600"
@@ -275,6 +276,17 @@
 
 	<!-- Prompt & Generate -->
 	{#if sourceImage}
+		<!-- Quick Actions -->
+		{#if mode === 'edit'}
+			<button
+				onclick={() => { editPrompt = 'remove the background and objects, show the full character at 3/4 view facing to the right'; generate(); }}
+				disabled={generating}
+				class="w-full px-2 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+			>
+				🎭 Isolate Character (3/4 view, no background)
+			</button>
+		{/if}
+
 		<div>
 			<label for="edit-prompt" class="block text-xs font-medium text-gray-700 mb-1">
 				{mode === 'edit' ? 'Edit Instructions' : 'What to generate in the expanded area'}
@@ -314,14 +326,14 @@
 	{#if resultImage}
 		<div class="space-y-2">
 			<p class="text-xs font-medium text-green-700">✅ Result</p>
-			<div class="bg-gray-100 rounded-lg p-1">
+			<button class="w-full bg-gray-100 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = resultImage}>
 				<img
 					src={resultImage}
 					alt="Edited result"
 					class="w-full max-h-64 object-contain rounded"
 					style="image-rendering: pixelated;"
 				/>
-			</div>
+			</button>
 
 			<div class="flex gap-2">
 				<button
@@ -348,3 +360,24 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Lightbox -->
+{#if lightboxSrc}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="fixed inset-0 z-[999] bg-black/80 flex items-center justify-center cursor-zoom-out"
+		onclick={() => lightboxSrc = null}
+		onkeydown={(e) => { if (e.key === 'Escape') lightboxSrc = null; }}
+	>
+		<img
+			src={lightboxSrc}
+			alt="Full size preview"
+			class="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
+			style="image-rendering: pixelated;"
+		/>
+		<button
+			class="absolute top-4 right-4 w-10 h-10 bg-white/20 hover:bg-white/40 text-white rounded-full text-xl flex items-center justify-center transition-colors"
+			onclick={() => lightboxSrc = null}
+		>✕</button>
+	</div>
+{/if}

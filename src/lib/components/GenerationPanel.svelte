@@ -316,6 +316,11 @@
 			generationError = 'Reference image is required. Upload your sprite first.';
 			return;
 		}
+		
+		if (useInterpolation && !endFrame) {
+			generationError = 'End frame is required for interpolation mode. Upload an end frame.';
+			return;
+		}
 
 		isGenerating = true;
 		generationError = null;
@@ -557,14 +562,16 @@
 		</div>
 	{/if}
 
-	<!-- Model Selection - Compact -->
+	<!-- Model Selection - Compact (disabled during interpolation since fal.ai is used) -->
 	<div class="flex flex-wrap gap-1">
-		{#each videoModels.slice(0, 5) as model}
+		{#each videoModels as model}
 			<button
 				type="button"
-				class="px-2 py-0.5 text-[10px] border rounded transition-colors {selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
-				onclick={() => selectedModel = model.id}
-				title={model.quality}
+				class="px-2 py-0.5 text-[10px] border rounded transition-colors 
+					{useInterpolation ? 'opacity-40 cursor-not-allowed border-gray-200' : selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
+				onclick={() => { if (!useInterpolation) selectedModel = model.id; }}
+				title={useInterpolation ? 'Interpolation uses RunPod FLF2V or fal.ai FLF2V' : model.quality}
+				disabled={useInterpolation}
 			>
 				{model.id === 'wan22' ? '💰Wan' : model.id === 'ltxv' ? 'LTX' : model.id === 'hailuo' ? 'Hailuo' : model.id === 'live2d' ? 'Live2D' : model.id === 'svd' ? 'SVD💸' : model.name}
 			</button>
@@ -572,12 +579,17 @@
 	</div>
 
 	<!-- Generate Button -->
+	{#if useInterpolation}
+		<p class="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
+			⚡ Will use <strong>RunPod Serverless WAN 2.2 FLF2V</strong> (if configured) or <strong>fal.ai FLF2V</strong> — First/Last Frame to Video
+		</p>
+	{/if}
 	<button
-		class="w-full px-3 py-2 text-sm bg-blue-500 text-white rounded hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+		class="w-full px-3 py-2 text-sm text-white rounded disabled:bg-gray-400 disabled:cursor-not-allowed font-medium {useInterpolation ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-500 hover:bg-blue-600'}"
 		onclick={generateFrames}
-		disabled={isGenerating || !project.firstFrame}
+		disabled={isGenerating || !project.firstFrame || (useInterpolation && !endFrame)}
 	>
-		{isGenerating ? 'Generating...' : 'Generate Animation'}
+		{isGenerating ? 'Generating...' : useInterpolation ? 'Interpolate Frames' : 'Generate Animation'}
 	</button>
 
 	<!-- Progress / Error -->

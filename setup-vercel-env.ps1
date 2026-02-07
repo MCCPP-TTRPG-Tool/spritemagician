@@ -44,6 +44,12 @@ Write-Host "`n=== REQUIRED API KEYS ===" -ForegroundColor Yellow
 Add-VercelEnv "GEMINI_API_KEY" "Google AI API key (from aistudio.google.com/apikey)"
 Add-VercelEnv "REPLICATE_API_TOKEN" "Replicate API token (from replicate.com/account/api-tokens)"
 
+Write-Host "`n=== INTERPOLATION (RunPod preferred, fal.ai fallback) ===" -ForegroundColor Yellow
+
+Add-VercelEnv "RUNPOD_API_KEY" "RunPod API key (from runpod.io/console/user/settings)" $false
+Add-VercelEnv "RUNPOD_ENDPOINT_ID" "RunPod Serverless endpoint ID (from your ComfyUI endpoint)" $false
+Add-VercelEnv "FAL_KEY" "fal.ai API key — fallback if RunPod not set (from fal.ai/dashboard/keys)" $false
+
 Write-Host "`n=== FIREBASE (for cloud save) ===" -ForegroundColor Yellow
 
 Add-VercelEnv "FIREBASE_PROJECT_ID" "Your Firebase project ID" $false
