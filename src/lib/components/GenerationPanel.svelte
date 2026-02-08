@@ -6,6 +6,7 @@
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	import { pixelateFrames } from '$lib/utils/pixelate.js';
+	import { cleanupBackgrounds } from '$lib/utils/backgroundCleanup.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
 	let savedPoses = $state({ poses: [] });
@@ -80,7 +81,7 @@
 		{ 
 			id: 'idle', 
 			name: 'Idle', 
-			description: `${HOMM3_STYLE}, idle breathing animation, subtle chest movement, gentle sway, stationary feet, looping`
+			description: `${HOMM3_STYLE}, standing in place, feet do not move, focus on micro-movements, rhythmic chest expansion from breathing, slight weight redistribution in the hips, subtle tension in the neck muscles, static background, volumetric lighting, 8k resolution, crisp textures, high-fidelity render.`
 		},
 		{ 
 			id: 'cast', 
@@ -243,7 +244,18 @@
 							});
 						}
 						
-						finalFrames = transparentFrames;
+						// Post-process: Clean up any remaining background pixels (aggressive mode)
+						progress = { ...progress, message: 'Cleaning up remaining background...' };
+						if (queueJobId) {
+							jobQueue.updateJob(queueJobId, { message: 'Cleaning up background...' });
+						}
+						
+						// Use aggressive cleanup with lower threshold for better results
+						const cleanedFrames = await cleanupBackgrounds(transparentFrames, 80, (done, total) => {
+							progress = { ...progress, message: `Cleaning BG (${done}/${total})...` };
+						});
+						
+						finalFrames = cleanedFrames;
 					}
 					
 				// Step 4: Pixelate frames (if enabled) - force pixel art look

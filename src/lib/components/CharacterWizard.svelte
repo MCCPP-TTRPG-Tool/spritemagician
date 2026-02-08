@@ -1,5 +1,6 @@
 <script>
 	import { browser } from '$app/environment';
+	import { get } from 'svelte/store';
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { completedJobs } from '$lib/stores/completedJobs.js';
@@ -143,7 +144,13 @@
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.error || data.details || 'Generation failed');
 
+			// Clear old image first to ensure we're using the new one
+			if (generatedCharacter && generatedCharacter.startsWith('blob:')) {
+				URL.revokeObjectURL(generatedCharacter);
+			}
+			
 			generatedCharacter = data.image;
+			console.log('[CharacterWizard] Generated new character:', { imageLength: data.image?.length, timestamp: Date.now() });
 			onGenerated?.(data.image);
 
 			// Add to completed jobs for review
@@ -194,7 +201,12 @@
 	}
 
 	async function performSave() {
-		if (!generatedCharacter || !saveFolderId) return;
+		// Get the current generatedCharacter value at save time (not from closure)
+		const imageToSave = generatedCharacter;
+		if (!imageToSave || !saveFolderId) {
+			console.warn('[CharacterWizard] Save: missing image or folder', { hasImage: !!imageToSave, hasFolder: !!saveFolderId });
+			return;
+		}
 
 		try {
 			const uid = userFiles.getUid();
@@ -204,11 +216,13 @@
 			}
 
 			const filename = `${(description || 'character').slice(0, 30)}.png`;
+			console.log('[CharacterWizard] Saving image:', { filename, imageLength: imageToSave.length, folder: saveFolderId });
+			
 			const res = await fetch('/api/upload-file', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					imageData: generatedCharacter,
+					imageData: imageToSave,
 					filename,
 					folder: saveFolderId
 				})
@@ -220,16 +234,35 @@
 			}
 
 			const { url } = await res.json();
-			await createFile(uid, saveFolderId, filename, url, 'image', {
+			
+			// Normalize parentId: null for root, otherwise use the folder ID
+			const parentId = saveFolderId === 'root' || saveFolderId === null ? null : saveFolderId;
+			
+			console.log('[CharacterWizard] Creating file entry:', { filename, parentId, url: url.substring(0, 50) + '...' });
+			const fileId = await createFile(uid, parentId, filename, url, 'image', {
 				sourceType: 'generation',
 				prompt: description,
 				assetType: 'character',
 				style: homm3Mode ? 'homm3' : 'custom'
 			});
+			console.log('[CharacterWizard] File created with ID:', fileId);
+
+			// Refresh the file tree to show the new file
+			// The real-time listener should update automatically, but refresh to be sure
+			// Check if we're viewing the folder where we just saved
+			const fsState = get(userFiles);
+			const currentFolderId = fsState.currentFolderId;
+			
+			if (currentFolderId === parentId || (currentFolderId === null && parentId === null)) {
+				console.log('[CharacterWizard] Refreshing file tree for current folder');
+				userFiles.refreshCurrentFolder();
+			} else {
+				console.log('[CharacterWizard] File saved to different folder, no refresh needed', { currentFolderId, parentId });
+			}
 
 			alert('Character saved successfully!');
 		} catch (err) {
-			console.error('Save error:', err);
+			console.error('[CharacterWizard] Save error:', err);
 			alert('Failed to save character: ' + err.message);
 		}
 	}

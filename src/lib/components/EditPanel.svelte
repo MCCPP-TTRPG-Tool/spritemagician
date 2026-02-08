@@ -78,53 +78,83 @@
 		onChange?.(null);
 	}
 
-	function buildExpandedImage() {
-		return new Promise((resolve) => {
-			const img = new Image();
-			img.onload = () => {
-				let newWidth = img.width;
-				let newHeight = img.height;
-				let offsetX = 0;
-				let offsetY = 0;
-
-				switch (expandDirection) {
-					case 'down':
-						newHeight += expandAmount;
-						break;
-					case 'up':
-						newHeight += expandAmount;
-						offsetY = expandAmount;
-						break;
-					case 'left':
-						newWidth += expandAmount;
-						offsetX = expandAmount;
-						break;
-					case 'right':
-						newWidth += expandAmount;
-						break;
-					case 'all':
-						newWidth += expandAmount * 2;
-						newHeight += expandAmount * 2;
-						offsetX = expandAmount;
-						offsetY = expandAmount;
-						break;
+	async function buildExpandedImage() {
+		// If source image is a URL (not data URL), proxy it through our API to avoid CORS
+		let imageToUse = sourceImage;
+		if (!sourceImage.startsWith('data:')) {
+			try {
+				const res = await fetch('/api/proxy-image', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ url: sourceImage })
+				});
+				if (!res.ok) {
+					const data = await res.json();
+					throw new Error(data.error || 'Failed to proxy image');
 				}
+				const { dataUrl } = await res.json();
+				imageToUse = dataUrl;
+			} catch (e) {
+				throw new Error(`Failed to load source image: ${e.message}`);
+			}
+		}
 
-				const canvas = document.createElement('canvas');
-				canvas.width = newWidth;
-				canvas.height = newHeight;
-				const ctx = canvas.getContext('2d');
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			
+			img.onload = () => {
+				try {
+					let newWidth = img.width;
+					let newHeight = img.height;
+					let offsetX = 0;
+					let offsetY = 0;
 
-				// Fill expansion area with solid gray
-				ctx.fillStyle = '#C0C0C0';
-				ctx.fillRect(0, 0, newWidth, newHeight);
+					switch (expandDirection) {
+						case 'down':
+							newHeight += expandAmount;
+							break;
+						case 'up':
+							newHeight += expandAmount;
+							offsetY = expandAmount;
+							break;
+						case 'left':
+							newWidth += expandAmount;
+							offsetX = expandAmount;
+							break;
+						case 'right':
+							newWidth += expandAmount;
+							break;
+						case 'all':
+							newWidth += expandAmount * 2;
+							newHeight += expandAmount * 2;
+							offsetX = expandAmount;
+							offsetY = expandAmount;
+							break;
+					}
 
-				// Draw original image in position
-				ctx.drawImage(img, offsetX, offsetY);
+					const canvas = document.createElement('canvas');
+					canvas.width = newWidth;
+					canvas.height = newHeight;
+					const ctx = canvas.getContext('2d');
 
-				resolve(canvas.toDataURL('image/png'));
+					// Fill expansion area with solid gray
+					ctx.fillStyle = '#C0C0C0';
+					ctx.fillRect(0, 0, newWidth, newHeight);
+
+					// Draw original image in position
+					ctx.drawImage(img, offsetX, offsetY);
+
+					resolve(canvas.toDataURL('image/png'));
+				} catch (e) {
+					reject(new Error('Failed to build expanded image: ' + e.message));
+				}
 			};
-			img.src = sourceImage;
+			
+			img.onerror = () => {
+				reject(new Error('Failed to load source image for expansion'));
+			};
+			
+			img.src = imageToUse;
 		});
 	}
 
@@ -161,7 +191,13 @@
 			let promptToSend = editPrompt;
 
 			if (mode === 'expand') {
-				imageToSend = await buildExpandedImage();
+				try {
+					imageToSend = await buildExpandedImage();
+				} catch (expandError) {
+					error = `Failed to build expanded image: ${expandError.message}. Make sure the image is from the same origin or has CORS enabled.`;
+					generating = false;
+					return;
+				}
 				promptToSend = `OUTPAINTING: The provided image has gray (#C0C0C0) border areas where the canvas was expanded. The original artwork is intact in its position. Generate new content ONLY in the gray areas to seamlessly extend the scene. Keep the original pixels untouched. Expansion direction: ${expandDirection}. What to generate in the new space: ${editPrompt}`;
 			} else {
 				// Use user's prompt directly - don't override with background instructions
@@ -374,15 +410,30 @@
 	<!-- Prompt & Generate -->
 	{#if sourceImage}
 		<!-- Quick Actions -->
-		{#if mode === 'edit'}
-			<button
-				onclick={() => { editPrompt = 'remove the background and objects, show the full character at 3/4 view facing to the right'; generate(); }}
-				disabled={generating}
-				class="w-full px-2 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-			>
-				🎭 Isolate Character (3/4 view, no background)
-			</button>
-		{/if}
+		<div class="space-y-2">
+			{#if mode === 'edit'}
+				<button
+					onclick={() => { editPrompt = 'remove the background and objects, show the full character at 3/4 view facing to the right'; generate(); }}
+					disabled={generating}
+					class="w-full px-2 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					🎭 Isolate Character (3/4 view, no background)
+				</button>
+				<button
+					onclick={() => { 
+						mode = 'expand';
+						expandDirection = 'all';
+						expandAmount = 128;
+						editPrompt = 'increase padding around character';
+						generate();
+					}}
+					disabled={generating}
+					class="w-full px-2 py-1.5 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					🔲 Expand Canvas (add padding around character)
+				</button>
+			{/if}
+		</div>
 
 		<div>
 			<label for="edit-prompt" class="block text-xs font-medium text-gray-700 mb-1">

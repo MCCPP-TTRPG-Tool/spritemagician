@@ -11,40 +11,54 @@
  * @returns {Promise<Blob>} - GIF blob
  */
 export async function generateGif(frames, frameSize = 256, fps = 12) {
-	const delay = Math.round(100 / fps); // GIF delay is in 1/100th of a second
+	// GIF delay is in 1/100th of a second (centiseconds)
+	// Calculate delay: 100 centiseconds = 1 second, so delay = 100 / fps
+	const delay = Math.max(1, Math.round(100 / fps));
 	
 	// Load all images first
 	const images = await Promise.all(frames.map(loadImage));
 	
+	// Determine actual dimensions from first frame
+	// Use the larger dimension to ensure frames aren't too small
+	const firstImg = images[0];
+	const maxDimension = Math.max(firstImg.width, firstImg.height);
+	// Use the larger of frameSize or actual frame dimensions to prevent tiny sprites
+	const gifSize = frameSize > 0 ? Math.max(frameSize, maxDimension) : maxDimension;
+	
+	console.log(`[GIF] Frame dimensions: ${firstImg.width}x${firstImg.height}, GIF size: ${gifSize}x${gifSize}`);
+	
 	// Create encoder
-	const encoder = new GifEncoder(frameSize, frameSize);
+	const encoder = new GifEncoder(gifSize, gifSize);
 	encoder.setRepeat(0); // Loop forever
-	encoder.setDelay(delay * 10); // Delay in ms
+	encoder.setDelay(delay * 10); // setDelay expects milliseconds, so multiply by 10
 	encoder.setQuality(10);
 	encoder.start();
 	
 	// Create canvas for rendering
 	const canvas = document.createElement('canvas');
-	canvas.width = frameSize;
-	canvas.height = frameSize;
+	canvas.width = gifSize;
+	canvas.height = gifSize;
 	const ctx = canvas.getContext('2d', { willReadFrequently: true });
+	
+	// Disable smoothing to preserve crisp quality
+	ctx.imageSmoothingEnabled = false;
 	
 	// Add each frame
 	for (const img of images) {
-		// Clear canvas with grey background
-		ctx.fillStyle = '#808080';
-		ctx.fillRect(0, 0, frameSize, frameSize);
+		// Clear canvas with white background (GIFs need opaque background)
+		ctx.fillStyle = '#FFFFFF';
+		ctx.fillRect(0, 0, gifSize, gifSize);
 		
-		// Draw image centered/scaled
-		const scale = Math.min(frameSize / img.width, frameSize / img.height);
+		// Scale to fill canvas while maintaining aspect ratio
+		const scale = Math.min(gifSize / img.width, gifSize / img.height);
 		const width = img.width * scale;
 		const height = img.height * scale;
-		const x = (frameSize - width) / 2;
-		const y = (frameSize - height) / 2;
+		const x = (gifSize - width) / 2;
+		const y = (gifSize - height) / 2;
 		ctx.drawImage(img, x, y, width, height);
 		
 		// Get image data and add frame
-		const imageData = ctx.getImageData(0, 0, frameSize, frameSize);
+		const imageData = ctx.getImageData(0, 0, gifSize, gifSize);
 		encoder.addFrame(imageData.data);
 	}
 	
@@ -125,14 +139,15 @@ class GifEncoder {
 		const w = this.width;
 		const h = this.height;
 		this.pixels = new Uint8Array(w * h * 3);
-		const data = this.image;
+		const data = this.image; // ImageData.data is RGBA format
 		let count = 0;
 		for (let i = 0; i < h; i++) {
 			for (let j = 0; j < w; j++) {
 				const b = (i * w * 4) + j * 4;
-				this.pixels[count++] = data[b];
-				this.pixels[count++] = data[b + 1];
-				this.pixels[count++] = data[b + 2];
+				// ImageData is RGBA, extract RGB (alpha already handled by canvas white background)
+				this.pixels[count++] = data[b];     // R
+				this.pixels[count++] = data[b + 1]; // G
+				this.pixels[count++] = data[b + 2]; // B
 			}
 		}
 	}

@@ -3,6 +3,7 @@
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
+	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
 	let isLooped = $state(false);
@@ -218,8 +219,10 @@
 
 			const { images } = await res.json();
 			if (images && images[0]) {
+				// Clean up any remaining background pixels (more aggressive for gray artifacts)
+				const cleaned = await cleanupBackground(images[0], 80, true, true, true);
 				const newFrames = [...project.frames];
-				newFrames[cf] = images[0];
+				newFrames[cf] = cleaned;
 				projectStore.update(p => ({ ...p, frames: newFrames }));
 			}
 		} catch (err) {
@@ -261,17 +264,19 @@
 
 				const { images } = await res.json();
 				if (images) {
-					// Update frames in this batch
+					// Update frames in this batch and clean up remaining background
 					for (let j = 0; j < images.length && (i + j) < newFrames.length; j++) {
 						if (images[j]) {
-							newFrames[i + j] = images[j];
+							// Clean up any remaining background pixels (more aggressive for gray artifacts)
+							const cleaned = await cleanupBackground(images[j], 80, true, true, true);
+							newFrames[i + j] = cleaned;
 						}
 					}
 				}
 			}
 
 			projectStore.update(p => ({ ...p, frames: newFrames }));
-			alert(`Background removed from ${newFrames.length} frames!`);
+			alert(`Background removed and cleaned from ${newFrames.length} frames!`);
 		} catch (err) {
 			console.error('Background removal error:', err);
 			alert('Failed to remove backgrounds: ' + err.message);

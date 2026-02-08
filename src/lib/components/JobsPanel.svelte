@@ -27,6 +27,10 @@
 	let saveFolderPath   = $state(null);
 	let isSaving         = $state(false);
 
+	// Multi-select
+	let selectedJobIds = $state(new Set());
+	let isSelectionMode = $derived(selectedJobIds.size > 0);
+
 	jobQueue.subscribe(v => { queue = v; });
 	completedJobs.subscribe(v => { completed = v; });
 
@@ -36,19 +40,20 @@
 	const allJobs = $derived([...activeJobs, ...failedJobs, ...completed.jobs]);
 
 	// ── animation loop for expanded preview ─────────────────
-	$effect(() => {
-		if (animInterval) { clearInterval(animInterval); animInterval = null; }
-		animFrame = 0;
-		const job = expandedJob;
-		if (job?.type === 'animation' && job.frames?.length > 1) {
-			const fps = job.fps || 12;
-			let f = 0;
-			animInterval = setInterval(() => {
-				f = (f + 1) % job.frames.length;
-				animFrame = f;
-			}, 1000 / fps);
-		}
-	});
+	// Note: expandedJob functionality removed - this effect is disabled
+	// $effect(() => {
+	// 	if (animInterval) { clearInterval(animInterval); animInterval = null; }
+	// 	animFrame = 0;
+	// 	const job = expandedJob;
+	// 	if (job?.type === 'animation' && job.frames?.length > 1) {
+	// 		const fps = job.fps || 12;
+	// 		let f = 0;
+	// 		animInterval = setInterval(() => {
+	// 			f = (f + 1) % job.frames.length;
+	// 			animFrame = f;
+	// 		}, 1000 / fps);
+	// 	}
+	// });
 	onDestroy(() => { if (animInterval) clearInterval(animInterval); });
 
 	// ── helpers ──────────────────────────────────────────────
@@ -94,6 +99,10 @@
 		saveFolderId = folderId;
 		saveFolderPath = folderPath;
 		showFolderPicker = false;
+		// If single save, continue with confirmSave
+		if (savingJobId !== null) {
+			// confirmSave will be called by the save dialog
+		}
 	}
 
 	function cancelSaveDialog() {
@@ -191,6 +200,159 @@
 		}
 		menuItemId = null;
 	}
+
+	// ── multi-select actions ────────────────────────────────────
+	function toggleSelect(jobId, e) {
+		e.stopPropagation();
+		if (selectedJobIds.has(jobId)) {
+			selectedJobIds.delete(jobId);
+		} else {
+			selectedJobIds.add(jobId);
+		}
+		selectedJobIds = new Set(selectedJobIds); // Trigger reactivity
+	}
+
+	function selectAll() {
+		const selectableJobs = allJobs.filter(j => {
+			const isActive = j.status === 'pending' || j.status === 'processing';
+			const isFailed = j.status === 'failed';
+			return !isActive; // Can select completed and failed jobs
+		});
+		selectedJobIds = new Set(selectableJobs.map(j => j.id));
+	}
+
+	function deselectAll() {
+		selectedJobIds = new Set();
+	}
+
+	function getSelectedJobs() {
+		return allJobs.filter(j => selectedJobIds.has(j.id));
+	}
+
+	async function batchDelete() {
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+		if (!confirm(`Delete ${selected.length} job${selected.length !== 1 ? 's' : ''}?`)) return;
+
+		for (const job of selected) {
+			discard(job);
+		}
+		deselectAll();
+	}
+
+	async function batchSaveToFolder() {
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+		
+		// Show folder picker first
+		showFolderPicker = true;
+		savingJobId = null; // Use null to indicate batch mode
+	}
+
+	async function batchDownload() {
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+
+		for (const job of selected) {
+			download(job);
+			// Small delay to prevent browser blocking multiple downloads
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		deselectAll();
+	}
+
+	async function batchUseForProject() {
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+		
+		// Use the first selected job
+		const firstJob = selected[0];
+		useForProject(firstJob);
+		deselectAll();
+	}
+
+	async function onBatchFolderSelect(folderId, folderPath) {
+		saveFolderId = folderId;
+		saveFolderPath = folderPath;
+		showFolderPicker = false;
+		
+		if (!saveFolderId) return;
+
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+
+		isSaving = true;
+		const uid = userFiles.getUid();
+		if (!uid) {
+			alert('You must be signed in to save files');
+			isSaving = false;
+			return;
+		}
+
+		try {
+			for (const job of selected) {
+				const fileName = job.name || (job.type === 'sprite' ? 'sprite' : 'animation');
+				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
+
+				if (job.type === 'sprite' && job.image) {
+					const res = await fetch('/api/upload-file', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							imageData: job.image,
+							filename: `${safeName}.png`,
+							folder: saveFolderId
+						})
+					});
+					if (!res.ok) throw new Error('Upload failed');
+					const { url } = await res.json();
+					await createFile(uid, saveFolderId, `${safeName}.png`, url, 'image', {
+						sourceType: 'generation', prompt: job.description || job.name
+					});
+				} else if (job.frames?.length) {
+					const res = await fetch('/api/save-animation', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							name: safeName,
+							frames: job.frames,
+							fps: job.fps || 12,
+							prompt: job.description || job.name || ''
+						})
+					});
+					if (!res.ok) {
+						const errData = await res.json().catch(() => ({}));
+						throw new Error(errData.error || 'Upload failed');
+					}
+					const { url, frameCount, thumbnailUrl } = await res.json();
+					await createFile(uid, saveFolderId, `${safeName}.anim.json`, url, 'animation', {
+						sourceType: 'animation',
+						frameCount,
+						fps: job.fps || 12,
+						animationName: safeName,
+						prompt: job.description || job.name || '',
+						thumbnailUrl: thumbnailUrl || null
+					});
+				} else if (job.videoUrl) {
+					await createFile(uid, saveFolderId, `${safeName}.mp4`, job.videoUrl, 'video', {
+						sourceType: 'animation-video', prompt: job.name
+					});
+				}
+
+				// Remove job after successful save
+				completedJobs.removeJob(job.id);
+			}
+
+			deselectAll();
+			saveFolderId = null;
+			saveFolderPath = null;
+		} catch (err) {
+			console.error('[JobsPanel] Batch save error:', err);
+			alert('Batch save failed: ' + err.message);
+		} finally {
+			isSaving = false;
+		}
+	}
 </script>
 
 <!-- Close dropdown when clicking anywhere -->
@@ -201,6 +363,54 @@
      JOBS PANEL — file grid layout
      ═══════════════════════════════════════════════════════════ -->
 <div class="flex flex-col h-full text-xs">
+	<!-- Selection toolbar -->
+	{#if isSelectionMode}
+		<div class="flex items-center justify-between px-3 py-2 bg-blue-50 border-b border-blue-200 flex-shrink-0">
+			<div class="flex items-center gap-2">
+				<span class="text-xs font-medium text-blue-700">
+					{selectedJobIds.size} selected
+				</span>
+			</div>
+			<div class="flex items-center gap-1">
+				<button
+					class="px-2 py-1 text-[10px] bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
+					onclick={batchUseForProject}
+					title="Use first selected for project"
+				>
+					▶ Use
+				</button>
+				<button
+					class="px-2 py-1 text-[10px] bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
+					onclick={batchSaveToFolder}
+					title="Save selected to folder"
+				>
+					💾 Save
+				</button>
+				<button
+					class="px-2 py-1 text-[10px] bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
+					onclick={batchDownload}
+					title="Download selected"
+				>
+					📥 Download
+				</button>
+				<button
+					class="px-2 py-1 text-[10px] bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
+					onclick={batchDelete}
+					title="Delete selected"
+				>
+					🗑 Delete
+				</button>
+				<button
+					class="px-2 py-1 text-[10px] bg-gray-300 text-gray-700 rounded hover:bg-gray-400 transition-colors"
+					onclick={deselectAll}
+					title="Deselect all"
+				>
+					✕ Cancel
+				</button>
+			</div>
+		</div>
+	{/if}
+
 	<div class="flex-1 overflow-y-auto p-2">
 		{#if !completed.loaded && allJobs.length === 0}
 			<div class="flex items-center justify-center h-32 text-gray-400">
@@ -222,11 +432,26 @@
 					{@const isActive = job.status === 'pending' || job.status === 'processing'}
 					{@const isFailed = job.status === 'failed'}
 					{@const isCompleted = !isActive && !isFailed}
+					{@const isSelected = selectedJobIds.has(job.id)}
+					{@const canSelect = !isActive}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all aspect-square bg-gray-100
-							{isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : 'border-transparent hover:border-gray-300'}"
+							{isSelected ? 'border-blue-500 ring-2 ring-blue-300' : isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : 'border-transparent hover:border-gray-300'}"
 					>
+						<!-- Selection checkbox -->
+						{#if canSelect}
+							<button
+								class="absolute top-1 left-1 z-20 w-4 h-4 rounded border-2 flex items-center justify-center transition-all
+									{isSelected ? 'bg-blue-500 border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}"
+								onclick={(e) => toggleSelect(job.id, e)}
+								title={isSelected ? 'Deselect' : 'Select'}
+							>
+								{#if isSelected}
+									<span class="text-white text-[8px] leading-none">✓</span>
+								{/if}
+							</button>
+						{/if}
 						<div class="aspect-square flex items-center justify-center overflow-hidden rounded-t-md">
 							{#if thumb}
 								<img src={thumb} alt={job.name} class="w-full h-full object-contain" />
@@ -245,7 +470,7 @@
 						{/if}
 
 						<!-- Status indicator -->
-						<div class="absolute top-1 left-1 px-1 py-0.5 rounded text-[8px] font-bold leading-none
+						<div class="absolute top-1 right-1 px-1 py-0.5 rounded text-[8px] font-bold leading-none z-10
 							{isActive ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-500 text-white' : job.type === 'sprite' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white'}">
 							{#if isActive}
 								⚡
@@ -261,7 +486,7 @@
 						<!-- Menu button (only for completed jobs) -->
 						{#if isCompleted}
 							<button
-								class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/40 text-white text-xs flex items-center justify-center
+								class="absolute top-6 right-1 w-6 h-6 rounded-full bg-black/40 text-white text-xs flex items-center justify-center
 									opacity-0 group-hover:opacity-100 hover:bg-black/60 transition-all z-10"
 								onclick={(e) => toggleMenu(job.id, e)}
 								title="Actions"
@@ -319,8 +544,19 @@
 
 	<!-- Status bar -->
 	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
-		<span>{allJobs.length} job{allJobs.length !== 1 ? 's' : ''} ({activeJobs.length} active, {completed.jobs.length} completed)</span>
-		{#if completed.jobs.length > 0}
+		<div class="flex items-center gap-2">
+			<span>{allJobs.length} job{allJobs.length !== 1 ? 's' : ''} ({activeJobs.length} active, {completed.jobs.length} completed)</span>
+			{#if !isSelectionMode && allJobs.filter(j => !(j.status === 'pending' || j.status === 'processing')).length > 0}
+				<button
+					class="text-blue-500 hover:text-blue-700 transition-colors"
+					onclick={selectAll}
+					title="Select all"
+				>
+					Select all
+				</button>
+			{/if}
+		</div>
+		{#if completed.jobs.length > 0 && !isSelectionMode}
 			<button
 				class="text-red-400 hover:text-red-600 transition-colors"
 				onclick={() => completedJobs.clearAll()}
@@ -387,7 +623,7 @@
 <!-- ── FOLDER PICKER MODAL ────────────────────────────────── -->
 {#if showFolderPicker}
 	<FolderPicker
-		onSelect={onFolderSelect}
+		onSelect={savingJobId === null ? onBatchFolderSelect : onFolderSelect}
 		onClose={() => showFolderPicker = false}
 	/>
 {/if}

@@ -6,8 +6,11 @@
 		createFile,
 		renameItem,
 		deleteItem,
-		deleteFolderRecursive
+		deleteFolderRecursive,
+		moveItem
 	} from '$lib/firebase/firestore.js';
+	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
+	import FolderPicker from './FolderPicker.svelte';
 
 	// ── reactive state ──────────────────────────────────────
 	let fs = $state({
@@ -24,6 +27,12 @@
 	let uploading     = $state(false);
 	let menuItemId    = $state(null);     // which item's dropdown is open
 	let fileInputEl;
+	
+	// Multi-select
+	let selectedItemIds = $state(new Set());
+	let isSelectionMode = $derived(selectedItemIds.size > 0);
+	let showMoveFolderPicker = $state(false);
+	let movingItemIds = $state(null);
 
 	const folders = $derived(fs.items.filter(i => i.isFolder));
 	const files   = $derived(fs.items.filter(i => !i.isFolder));
@@ -66,7 +75,113 @@
 	}
 
 	function clickItem(item) {
-		selectedId = selectedId === item.id ? null : item.id;
+		// If selection mode is active, toggle selection instead of single selection
+		if (isSelectionMode) {
+			toggleSelect(item.id);
+		} else {
+			selectedId = selectedId === item.id ? null : item.id;
+		}
+	}
+	
+	function toggleSelect(itemId, e) {
+		if (e) e.stopPropagation();
+		if (selectedItemIds.has(itemId)) {
+			selectedItemIds.delete(itemId);
+		} else {
+			selectedItemIds.add(itemId);
+		}
+		selectedItemIds = new Set(selectedItemIds); // Trigger reactivity
+	}
+	
+	function selectAll() {
+		selectedItemIds = new Set(fs.items.map(i => i.id));
+	}
+	
+	function deselectAll() {
+		selectedItemIds = new Set();
+	}
+	
+	function getSelectedItems() {
+		return fs.items.filter(i => selectedItemIds.has(i.id));
+	}
+	
+	async function batchDelete() {
+		const selected = getSelectedItems();
+		if (selected.length === 0) return;
+		
+		const folders = selected.filter(i => i.isFolder);
+		const files = selected.filter(i => !i.isFolder);
+		
+		let msg = `Delete ${selected.length} item${selected.length !== 1 ? 's' : ''}?`;
+		if (folders.length > 0) {
+			msg += `\n\nThis includes ${folders.length} folder${folders.length !== 1 ? 's' : ''} and all their contents.`;
+		}
+		
+		if (!confirm(msg)) return;
+		
+		try {
+			for (const item of selected) {
+				if (item.isFolder) {
+					await deleteFolderRecursive(fs.uid, item.id);
+				} else {
+					await deleteItem(fs.uid, item.id);
+				}
+			}
+			deselectAll();
+		} catch (e) {
+			alert('Delete failed: ' + e.message);
+		}
+	}
+	
+	async function batchMoveToFolder() {
+		const selected = getSelectedItems();
+		if (selected.length === 0) return;
+		
+		movingItemIds = selected.map(i => i.id);
+		showMoveFolderPicker = true;
+	}
+	
+	async function onMoveFolderSelect(folderId, folderPath) {
+		showMoveFolderPicker = false;
+		
+		if (!movingItemIds || movingItemIds.length === 0) return;
+		
+		const selected = fs.items.filter(i => movingItemIds.includes(i.id));
+		if (selected.length === 0) return;
+		
+		try {
+			for (const item of selected) {
+				// Don't move into itself
+				if (item.id === folderId) {
+					continue;
+				}
+				
+				await moveItem(fs.uid, item.id, folderId || null);
+			}
+			
+			// Refresh the file tree
+			userFiles.refreshCurrentFolder();
+			deselectAll();
+			movingItemIds = null;
+		} catch (e) {
+			alert('Move failed: ' + e.message);
+			movingItemIds = null;
+		}
+	}
+	
+	async function batchDownload() {
+		const selected = getSelectedItems().filter(i => !i.isFolder && i.url);
+		if (selected.length === 0) return;
+		
+		for (const item of selected) {
+			const a = document.createElement('a');
+			a.href = item.url;
+			a.download = item.name;
+			a.click();
+			// Small delay to prevent browser blocking multiple downloads
+			await new Promise(resolve => setTimeout(resolve, 100));
+		}
+		deselectAll();
 	}
 
 	function dblClickItem(item) {
@@ -200,6 +315,67 @@
 		e.stopPropagation();
 		menuItemId = menuItemId === itemId ? null : itemId;
 	}
+	
+	async function removeBackgroundFromFile(item) {
+		if (!item.url || item.isFolder) return;
+		
+		if (!confirm(`Remove background from "${item.name}"?`)) return;
+		
+		menuItemId = null;
+		
+		try {
+			// Call remove-background API
+			const res = await fetch('/api/remove-background', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ images: [item.url] })
+			});
+			
+			if (!res.ok) {
+				const data = await res.json();
+				throw new Error(data.error || 'Background removal failed');
+			}
+			
+			const { images } = await res.json();
+			if (!images || !images[0]) {
+				throw new Error('No image returned from background removal');
+			}
+			
+			// Clean up any remaining background artifacts
+			const cleanedImage = await cleanupBackground(images[0], 80, true, true, true);
+			
+			// Upload the cleaned image to Firebase Storage via API
+			const uploadRes = await fetch('/api/upload-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					imageData: cleanedImage,
+					filename: item.name
+				})
+			});
+			
+			if (!uploadRes.ok) {
+				const uploadData = await uploadRes.json();
+				throw new Error(uploadData.error || 'Upload failed');
+			}
+			
+			const { url: newUrl } = await uploadRes.json();
+			
+			// Update the file in Firestore with the new URL
+			const { updateDoc, doc, serverTimestamp } = await import('firebase/firestore');
+			const { db } = await import('$lib/firebase/client.js');
+			const fileRef = doc(db, 'users', fs.uid, 'files', item.id);
+			await updateDoc(fileRef, { url: newUrl, updatedAt: serverTimestamp() });
+			
+			// Refresh the file tree
+			userFiles.refreshCurrentFolder();
+			
+			alert('Background removed successfully!');
+		} catch (err) {
+			console.error('[FileTree] Remove background error:', err);
+			alert('Failed to remove background: ' + err.message);
+		}
+	}
 
 	// ── helpers ─────────────────────────────────────────────
 
@@ -308,7 +484,26 @@
 			onclick={triggerUpload}>
 			{uploading ? '⏳…' : '⬆ Upload'}
 		</button>
+		{#if !isSelectionMode}
+			<button class="px-2 py-1 rounded bg-gray-50 text-gray-700 hover:bg-gray-100 font-medium text-xs ml-auto"
+				onclick={selectAll}>
+				☑ Select All
+			</button>
+		{/if}
 	</div>
+	
+	<!-- ═══ SELECTION TOOLBAR ═══ -->
+	{#if isSelectionMode}
+		<div class="flex items-center justify-between px-2 py-1 bg-blue-100 text-blue-800 text-[11px] flex-shrink-0">
+			<span class="font-medium">{selectedItemIds.size} selected</span>
+			<div class="flex gap-2">
+				<button class="px-2 py-1 rounded hover:bg-blue-200" onclick={batchMoveToFolder}>📁 Move</button>
+				<button class="px-2 py-1 rounded hover:bg-blue-200" onclick={batchDownload}>📥 Download</button>
+				<button class="px-2 py-1 rounded hover:bg-blue-200 text-red-700 hover:bg-red-200" onclick={batchDelete}>🗑 Delete</button>
+				<button class="px-2 py-1 rounded hover:bg-blue-200" onclick={deselectAll}>✕ Cancel</button>
+			</div>
+		</div>
+	{/if}
 
 	<!-- ═══ NEW FOLDER INPUT (inline) ═══ -->
 	{#if showNewFolder}
@@ -343,13 +538,26 @@
 		{:else if viewMode === 'grid'}
 			<div class="grid grid-cols-4 gap-2">
 				{#each fs.items as item (item.id)}
+					{@const isSelected = selectedItemIds.has(item.id)}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all
-							{selectedId === item.id ? 'border-blue-500 bg-blue-50' : 'border-transparent hover:border-gray-300 bg-white'}"
+							{isSelected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : selectedId === item.id ? 'border-blue-500 bg-blue-50' : 'border-transparent hover:border-gray-300 bg-white'}"
 						onclick={() => clickItem(item)}
 						ondblclick={() => dblClickItem(item)}
 					>
+						<!-- Selection checkbox -->
+						<button
+							class="absolute top-1 left-1 z-20 w-4 h-4 rounded border-2 flex items-center justify-center transition-all
+								{isSelected ? 'bg-blue-500 border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}"
+							onclick={(e) => toggleSelect(item.id, e)}
+							title={isSelected ? 'Deselect' : 'Select'}
+						>
+							{#if isSelected}
+								<span class="text-white text-[8px] leading-none">✓</span>
+							{/if}
+						</button>
+						
 						<div class="aspect-square flex items-center justify-center bg-gray-50 rounded-t-md overflow-hidden">
 							{#if item.isFolder}
 								<span class="text-5xl select-none">📁</span>
@@ -391,6 +599,10 @@
 									<button class="w-full text-left px-3 py-1.5 hover:bg-purple-50 text-gray-700 flex items-center gap-2"
 										onclick={() => loadIntoStyle(item)}>
 										✨ <span>Stylize</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-orange-50 text-gray-700 flex items-center gap-2"
+										onclick={() => { removeBackgroundFromFile(item); menuItemId = null; }}>
+										🎭 <span>Remove Background</span>
 									</button>
 									<div class="border-t my-0.5"></div>
 									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
@@ -435,14 +647,26 @@
 				</thead>
 				<tbody>
 					{#each fs.items as item (item.id)}
+						{@const isSelected = selectedItemIds.has(item.id)}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
 							class="border-b border-gray-100 cursor-pointer transition-colors relative group
-								{selectedId === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'}"
+								{isSelected ? 'bg-blue-50 ring-1 ring-blue-300' : selectedId === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'}"
 							onclick={() => clickItem(item)}
 							ondblclick={() => dblClickItem(item)}
 						>
 							<td class="py-1.5 px-2 flex items-center gap-2">
+								<!-- Selection checkbox -->
+								<button
+									class="w-4 h-4 rounded border-2 flex items-center justify-center transition-all flex-shrink-0
+										{isSelected ? 'bg-blue-500 border-blue-500' : 'bg-white border-gray-300 hover:border-blue-400'}"
+									onclick={(e) => toggleSelect(item.id, e)}
+									title={isSelected ? 'Deselect' : 'Select'}
+								>
+									{#if isSelected}
+										<span class="text-white text-[8px] leading-none">✓</span>
+									{/if}
+								</button>
 								<span class="text-sm">{icon(item)}</span>
 								<span class="truncate font-medium">{item.name}</span>
 							</td>
@@ -469,25 +693,29 @@
 												🎬 <span>Open Animation</span>
 											</button>
 											<div class="border-t my-0.5"></div>
-										{:else if !item.isFolder && item.url}
-											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
-												onclick={() => loadIntoEdit(item)}>
-												✏️ <span>Edit</span>
-											</button>
-											<button class="w-full text-left px-3 py-1.5 hover:bg-purple-50 text-gray-700 flex items-center gap-2"
-												onclick={() => loadIntoStyle(item)}>
-												✨ <span>Stylize</span>
-											</button>
-											<div class="border-t my-0.5"></div>
-											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
-												onclick={() => useAsStartFrame(item)}>
-												▶ <span>Start Frame</span>
-											</button>
-											<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
-												onclick={() => useAsEndFrame(item)}>
-												⏹ <span>End Frame</span>
-											</button>
-											<div class="border-t my-0.5"></div>
+								{:else if !item.isFolder && item.url}
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => loadIntoEdit(item)}>
+										✏️ <span>Edit</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-purple-50 text-gray-700 flex items-center gap-2"
+										onclick={() => loadIntoStyle(item)}>
+										✨ <span>Stylize</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-orange-50 text-gray-700 flex items-center gap-2"
+										onclick={() => { removeBackgroundFromFile(item); menuItemId = null; }}>
+										🎭 <span>Remove Background</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAsStartFrame(item)}>
+										▶ <span>Start Frame</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAsEndFrame(item)}>
+										⏹ <span>End Frame</span>
+									</button>
+									<div class="border-t my-0.5"></div>
 										{/if}
 										<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
 											onclick={() => { doRename(item); menuItemId = null; }}>
@@ -572,4 +800,12 @@
 			{/if}
 		</div>
 	</div>
+{/if}
+
+<!-- ═══ MOVE FOLDER PICKER ═══ -->
+{#if showMoveFolderPicker}
+	<FolderPicker
+		onSelect={onMoveFolderSelect}
+		onClose={() => { showMoveFolderPicker = false; movingItemIds = null; }}
+	/>
 {/if}

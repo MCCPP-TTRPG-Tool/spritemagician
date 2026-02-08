@@ -2,6 +2,7 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { generateSpriteSheet, loadImage, downloadBlob } from '$lib/utils/spriteSheet.js';
 	import { generateGif } from '$lib/utils/gifEncoder.js';
+	import { generateMp4 } from '$lib/utils/mp4Encoder.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -15,9 +16,13 @@
 	let isExporting = $state(false);
 	let isGeneratingPreview = $state(false);
 	let isGeneratingGif = $state(false);
+	let isGeneratingMp4 = $state(false);
 	let spriteSheetPreview = $state(null);
 	let gifPreview = $state(null);
+	let mp4Preview = $state(null);
 	let showGifModal = $state(false);
+	let showMp4Modal = $state(false);
+	let useMp4 = $state(true); // Default to MP4 (more reliable)
 	let previewColumns = $state(4);
 	let frameSize = $state(128);
 	let showFullSize = $state(false);
@@ -105,36 +110,88 @@
 		}
 	}
 	
-	async function handlePreviewGif() {
+	async function handlePreviewVideo() {
 		if (project.frames.length === 0) return;
-		isGeneratingGif = true;
-		try {
-			const blob = await generateGif(project.frames, frameSize, project.fps || 12);
-			// Clean up old preview
-			if (gifPreview) {
-				URL.revokeObjectURL(gifPreview);
+		
+		if (useMp4) {
+			isGeneratingMp4 = true;
+			try {
+				const blob = await generateMp4(project.frames, frameSize, project.fps || 12);
+				// Clean up old preview
+				if (mp4Preview) {
+					URL.revokeObjectURL(mp4Preview);
+				}
+				mp4Preview = URL.createObjectURL(blob);
+				showMp4Modal = true;
+			} catch (e) {
+				console.error('MP4 generation error:', e);
+				alert('Failed to generate MP4: ' + e.message + '\n\nTrying GIF instead...');
+				// Fallback to GIF
+				useMp4 = false;
+				await handlePreviewVideo();
+			} finally {
+				isGeneratingMp4 = false;
 			}
-			gifPreview = URL.createObjectURL(blob);
-			showGifModal = true;
-		} catch (e) {
-			console.error('GIF generation error:', e);
-			alert('Failed to generate GIF: ' + e.message);
-		} finally {
-			isGeneratingGif = false;
+		} else {
+			isGeneratingGif = true;
+			try {
+				const blob = await generateGif(project.frames, frameSize, project.fps || 12);
+				// Clean up old preview
+				if (gifPreview) {
+					URL.revokeObjectURL(gifPreview);
+				}
+				gifPreview = URL.createObjectURL(blob);
+				showGifModal = true;
+			} catch (e) {
+				console.error('GIF generation error:', e);
+				alert('Failed to generate GIF: ' + e.message);
+			} finally {
+				isGeneratingGif = false;
+			}
 		}
 	}
 	
-	async function handleDownloadGif() {
+	async function handleDownloadVideo() {
 		if (project.frames.length === 0) return;
-		isGeneratingGif = true;
-		try {
-			const blob = await generateGif(project.frames, frameSize, project.fps || 12);
-			downloadBlob(blob, 'animation.gif');
-		} catch (e) {
-			console.error('GIF generation error:', e);
-			alert('Failed to generate GIF: ' + e.message);
-		} finally {
-			isGeneratingGif = false;
+		
+		if (useMp4) {
+			isGeneratingMp4 = true;
+			try {
+				const blob = await generateMp4(project.frames, frameSize, project.fps || 12);
+				downloadBlob(blob, 'animation.mp4');
+			} catch (e) {
+				console.error('MP4 generation error:', e);
+				alert('Failed to generate MP4: ' + e.message + '\n\nTrying GIF instead...');
+				// Fallback to GIF
+				useMp4 = false;
+				await handleDownloadVideo();
+			} finally {
+				isGeneratingMp4 = false;
+			}
+		} else {
+			isGeneratingGif = true;
+			try {
+				const blob = await generateGif(project.frames, frameSize, project.fps || 12);
+				downloadBlob(blob, 'animation.gif');
+			} catch (e) {
+				console.error('GIF generation error:', e);
+				alert('Failed to generate GIF: ' + e.message);
+			} finally {
+				isGeneratingGif = false;
+			}
+		}
+	}
+	
+	function closeMp4Modal() {
+		showMp4Modal = false;
+	}
+	
+	function downloadMp4FromModal() {
+		if (mp4Preview) {
+			const a = document.createElement('a');
+			a.href = mp4Preview;
+			a.download = 'animation.mp4';
+			a.click();
 		}
 	}
 	
@@ -315,7 +372,60 @@
 		</div>
 	{/if}
 	
-	<!-- GIF Preview Modal -->
+	<!-- MP4 Preview Modal -->
+	{#if showMp4Modal && mp4Preview}
+		<div 
+			class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
+			onclick={closeMp4Modal}
+			onkeydown={(e) => { if (e.key === 'Escape') closeMp4Modal(); }}
+			tabindex="0"
+			role="dialog"
+		>
+			<div class="relative max-w-full max-h-full bg-gray-900 rounded-lg p-4" onclick={(e) => e.stopPropagation()}>
+				<button
+					onclick={closeMp4Modal}
+					class="absolute top-2 right-2 text-white hover:text-gray-300 text-2xl z-10"
+					title="Close"
+				>
+					✕
+				</button>
+				
+				<h3 class="text-white text-lg font-bold mb-3 text-center">🎬 Video Preview</h3>
+				
+				<div class="bg-gray-700 rounded-lg p-2 mb-3">
+					<video 
+						src={mp4Preview} 
+						controls
+						autoplay
+						loop
+						class="max-w-full max-h-[60vh] object-contain mx-auto"
+						style="image-rendering: pixelated;"
+					/>
+				</div>
+				
+				<div class="flex justify-center gap-3">
+					<button
+						onclick={downloadMp4FromModal}
+						class="px-4 py-2 bg-pink-500 text-white rounded hover:bg-pink-600 font-medium"
+					>
+						⬇️ Download MP4
+					</button>
+					<button
+						onclick={closeMp4Modal}
+						class="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-500"
+					>
+						Close
+					</button>
+				</div>
+				
+				<p class="text-center text-gray-400 text-sm mt-3">
+					{project.frames.length} frames • {project.fps || 12} fps • {frameSize}px
+				</p>
+			</div>
+		</div>
+	{/if}
+
+	<!-- GIF Preview Modal (fallback) -->
 	{#if showGifModal && gifPreview}
 		<div 
 			class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
@@ -393,23 +503,31 @@
 		</button>
 	</div>
 	
-	<!-- GIF Buttons Row 2 -->
-	<div class="grid grid-cols-2 gap-2">
-		<button
-			class="px-2 py-1.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
-			onclick={handlePreviewGif}
-			disabled={isGeneratingGif || project.frames.length === 0}
-		>
-			{isGeneratingGif ? 'Generating...' : '🎬 Preview GIF'}
-		</button>
-		
-		<button
-			class="px-2 py-1.5 text-xs bg-pink-500 text-white rounded hover:bg-pink-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
-			onclick={handleDownloadGif}
-			disabled={isGeneratingGif || project.frames.length === 0}
-		>
-			{isGeneratingGif ? 'Generating...' : '⬇️ Download GIF'}
-		</button>
+	<!-- Video Buttons Row 2 -->
+	<div class="space-y-2">
+		<div class="flex items-center gap-2 text-[10px] text-gray-500">
+			<label class="flex items-center gap-1 cursor-pointer">
+				<input type="checkbox" bind:checked={useMp4} class="w-3 h-3" />
+				<span>Use MP4 (more reliable)</span>
+			</label>
+		</div>
+		<div class="grid grid-cols-2 gap-2">
+			<button
+				class="px-2 py-1.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+				onclick={handlePreviewVideo}
+				disabled={(isGeneratingMp4 || isGeneratingGif) || project.frames.length === 0}
+			>
+				{(isGeneratingMp4 || isGeneratingGif) ? 'Generating...' : useMp4 ? '🎬 Preview MP4' : '🎬 Preview GIF'}
+			</button>
+			
+			<button
+				class="px-2 py-1.5 text-xs bg-pink-500 text-white rounded hover:bg-pink-600 disabled:bg-gray-400 disabled:cursor-not-allowed"
+				onclick={handleDownloadVideo}
+				disabled={(isGeneratingMp4 || isGeneratingGif) || project.frames.length === 0}
+			>
+				{(isGeneratingMp4 || isGeneratingGif) ? 'Generating...' : useMp4 ? '⬇️ Download MP4' : '⬇️ Download GIF'}
+			</button>
+		</div>
 	</div>
 
 	<!-- Save to Folder -->

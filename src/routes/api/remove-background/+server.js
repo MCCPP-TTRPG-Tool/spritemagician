@@ -11,7 +11,7 @@ import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 const REMBG_VERSION = 'cjwbw/rembg:fb8af171cfa1616ddcf1242c093f9c46bcada5ad4cf6f2fbe8b81b330ec5c003';
 
 /**
- * Remove background from a single image
+ * Remove background from a single image using rembg (free on Replicate)
  */
 async function removeBackground(imageUrl) {
 	const response = await fetch('https://api.replicate.com/v1/predictions', {
@@ -68,6 +68,8 @@ async function removeBackground(imageUrl) {
  * POST - Remove background from one or more images
  * Body: { images: [base64 or URL, ...] }
  * Returns: { images: [transparent PNG URL, ...] }
+ * 
+ * Uses rembg model on Replicate (free)
  */
 export async function POST({ request }) {
 	try {
