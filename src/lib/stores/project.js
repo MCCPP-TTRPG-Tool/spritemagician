@@ -2,6 +2,7 @@ import { writable } from 'svelte/store';
 
 export const projectStore = writable({
 	frames: [],
+	currentFrame: 0,
 	fps: 12, // 12fps default, good balance of smoothness and length
 	prompt: '',
 	firstFrame: null,

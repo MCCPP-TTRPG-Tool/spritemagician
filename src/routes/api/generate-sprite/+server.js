@@ -27,19 +27,32 @@ export async function POST({ request }) {
 			// Add reference image instruction
 			parts.push({ text: 'REFERENCE IMAGE - Use this as the basis for generation:' });
 			
-			// Extract base64 from data URL
-			let base64Data = referenceImage;
-			if (referenceImage.startsWith('data:')) {
+			let mimeType = 'image/png';
+			let base64Data;
+
+			if (referenceImage.startsWith('http://') || referenceImage.startsWith('https://')) {
+				// Fetch the image from URL and convert to base64
+				const imgRes = await fetch(referenceImage);
+				if (!imgRes.ok) throw new Error(`Failed to fetch reference image: ${imgRes.status}`);
+				const buf = Buffer.from(await imgRes.arrayBuffer());
+				mimeType = imgRes.headers.get('content-type') || 'image/png';
+				base64Data = buf.toString('base64');
+			} else if (referenceImage.startsWith('data:')) {
 				const base64Index = referenceImage.indexOf(',');
 				if (base64Index !== -1) {
+					const header = referenceImage.substring(0, base64Index);
+					const mimeMatch = header.match(/data:(.*?);/);
+					if (mimeMatch) mimeType = mimeMatch[1];
 					base64Data = referenceImage.substring(base64Index + 1);
 				}
+			} else {
+				base64Data = referenceImage;
 			}
 			
 			// Add the reference image
 			parts.push({
 				inline_data: {
-					mime_type: 'image/png',
+					mime_type: mimeType,
 					data: base64Data
 				}
 			});

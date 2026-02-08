@@ -62,14 +62,29 @@ export async function POST({ request, locals }) {
 		// Part 2 — Character reference(s)
 		parts.push({ text: 'CHARACTER TO DRAW — reproduce this character exactly:' });
 
-		const refB64 = stripDataUrl(referenceImage);
-		const sheetB64 = stripDataUrl(characterSheet);
-
-		if (refB64) {
-			parts.push({ inlineData: { mimeType: 'image/png', data: refB64 } });
+		// Helper: resolve an image value to { mimeType, data } for Gemini
+		async function resolveImage(img) {
+			if (!img) return null;
+			// If it's a URL, fetch and convert to base64
+			if (typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://'))) {
+				const res = await fetch(img);
+				if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
+				const buf = Buffer.from(await res.arrayBuffer());
+				const mime = res.headers.get('content-type') || 'image/png';
+				return { mimeType: mime, data: buf.toString('base64') };
+			}
+			// Otherwise treat as base64 / data-url
+			return { mimeType: 'image/png', data: stripDataUrl(img) };
 		}
-		if (sheetB64) {
-			parts.push({ inlineData: { mimeType: 'image/png', data: sheetB64 } });
+
+		const refPart = await resolveImage(referenceImage);
+		const sheetPart = await resolveImage(characterSheet);
+
+		if (refPart) {
+			parts.push({ inlineData: refPart });
+		}
+		if (sheetPart) {
+			parts.push({ inlineData: sheetPart });
 		}
 
 		// Part 3 — Text instruction with style keywords

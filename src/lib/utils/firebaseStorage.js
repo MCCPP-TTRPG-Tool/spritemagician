@@ -59,7 +59,8 @@ function detectContentType(dataUrl, filename) {
 			webp: 'image/webp',
 			svg: 'image/svg+xml',
 			mp4: 'video/mp4',
-			webm: 'video/webm'
+			webm: 'video/webm',
+			json: 'application/json'
 		};
 		if (ext && extMap[ext]) return extMap[ext];
 	}

@@ -108,21 +108,31 @@
 					sourceType: 'generation', prompt: job.description || job.name
 				});
 			} else if (job.frames?.length) {
-				// Upload each frame
-				for (let i = 0; i < job.frames.length; i++) {
-					const fname = `${(job.name || 'anim').slice(0, 30)}_${String(i + 1).padStart(3, '0')}.png`;
-					const res = await fetch('/api/upload-file', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ imageData: job.frames[i], filename: fname })
-					});
-					if (!res.ok) throw new Error(`Frame ${i + 1} upload failed`);
-					const { url } = await res.json();
-					await createFile(uid, folderId, fname, url, 'image', {
-						sourceType: 'animation-frame', frameIndex: i,
-						totalFrames: job.frames.length, animationName: job.name, fps: job.fps
-					});
+				// Save as a single .anim.json file via dedicated endpoint
+				const animName = (job.name || 'animation').slice(0, 40);
+				const res = await fetch('/api/save-animation', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						name: animName,
+						frames: job.frames,
+						fps: job.fps || 12,
+						prompt: job.description || job.name || ''
+					})
+				});
+				if (!res.ok) {
+					const errData = await res.json().catch(() => ({}));
+					throw new Error(errData.error || 'Upload failed');
 				}
+				const { url, frameCount } = await res.json();
+				const fname = `${animName.replace(/[^a-zA-Z0-9_-]/g, '_')}.anim.json`;
+				await createFile(uid, folderId, fname, url, 'animation', {
+					sourceType: 'animation',
+					frameCount,
+					fps: job.fps || 12,
+					animationName: job.name,
+					prompt: job.description || job.name || ''
+				});
 			} else if (job.videoUrl) {
 				await createFile(uid, folderId, `${(job.name || 'animation').slice(0, 40)}.mp4`, job.videoUrl, 'video', {
 					sourceType: 'animation-video', prompt: job.name

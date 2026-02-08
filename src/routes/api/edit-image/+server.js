@@ -9,14 +9,41 @@ export async function POST({ request }) {
 			return json({ error: 'Image and prompt are required' }, { status: 400 });
 		}
 
-		// Extract base64 from data URL
-		let base64Data = stripDataUrl(image);
+		// Handle both data URLs and HTTP URLs
+		let base64Data;
 		let mimeType = 'image/png';
+		
 		if (image.startsWith('data:')) {
+			// Data URL - extract base64 and mime type
 			const match = image.match(/^data:([^;]+);base64,/);
 			if (match) {
 				mimeType = match[1];
 			}
+			base64Data = stripDataUrl(image);
+		} else if (image.startsWith('http://') || image.startsWith('https://')) {
+			// HTTP URL - download and convert to base64
+			console.log(`[Edit Image] Downloading image from URL: ${image.substring(0, 80)}...`);
+			try {
+				const response = await fetch(image);
+				if (!response.ok) {
+					throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
+				}
+				
+				const contentType = response.headers.get('content-type') || 'image/png';
+				mimeType = contentType;
+				const arrayBuffer = await response.arrayBuffer();
+				base64Data = Buffer.from(arrayBuffer).toString('base64');
+				console.log(`[Edit Image] Downloaded and converted to base64 (${(arrayBuffer.byteLength / 1024).toFixed(1)} KB)`);
+			} catch (fetchError) {
+				console.error('[Edit Image] Failed to download image:', fetchError);
+				return json({ 
+					error: 'Failed to download image from URL',
+					details: fetchError.message 
+				}, { status: 400 });
+			}
+		} else {
+			// Assume it's already base64 (no prefix)
+			base64Data = image;
 		}
 
 		console.log(`[Edit Image] Mode: ${mode}, prompt: ${prompt.substring(0, 80)}...`);

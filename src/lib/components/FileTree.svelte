@@ -161,6 +161,41 @@
 		menuItemId = null;
 	}
 
+	async function loadAnimation(item) {
+		if (!item.url) return;
+		menuItemId = null;
+		try {
+			// Use server-side proxy to avoid CORS issues with Firebase Storage
+			const res = await fetch(`/api/load-animation?url=${encodeURIComponent(item.url)}`);
+			if (!res.ok) {
+				const errData = await res.json().catch(() => ({}));
+				throw new Error(errData.error || 'Failed to fetch animation file');
+			}
+			const data = await res.json();
+			if (data.type === 'animation' && data.frames?.length) {
+				projectStore.update(p => ({
+					...p,
+					frames: data.frames,
+					fps: data.fps || 12,
+					currentFrame: 0,
+					prompt: data.prompt || p.prompt,
+					projectName: data.name || p.projectName,
+					_animationLoaded: true   // Signal +page.svelte to switch to Preview tab
+				}));
+				console.log(`[FileTree] Loaded animation: ${data.frames.length} frames, ${data.fps || 12} fps`);
+			} else {
+				alert('Invalid animation file');
+			}
+		} catch (err) {
+			console.error('[FileTree] Load animation error:', err);
+			alert('Failed to load animation: ' + err.message);
+		}
+	}
+
+	function isAnimFile(item) {
+		return !item.isFolder && (item.fileType === 'animation' || item.name?.endsWith('.anim.json'));
+	}
+
 	function toggleMenu(itemId, e) {
 		e.stopPropagation();
 		menuItemId = menuItemId === itemId ? null : itemId;
@@ -340,7 +375,13 @@
 								class="absolute top-8 left-1 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
 								onclick={(e) => e.stopPropagation()}
 							>
-								{#if !item.isFolder && item.url}
+								{#if isAnimFile(item)}
+									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+										onclick={() => loadAnimation(item)}>
+										🎬 <span>Open Animation</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+								{:else if !item.isFolder && item.url}
 									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
 										onclick={() => loadIntoEdit(item)}>
 										✏️ <span>Edit</span>
@@ -420,7 +461,13 @@
 										class="absolute top-full left-0 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
 										onclick={(e) => e.stopPropagation()}
 									>
-										{#if !item.isFolder && item.url}
+										{#if isAnimFile(item)}
+											<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+												onclick={() => loadAnimation(item)}>
+												🎬 <span>Open Animation</span>
+											</button>
+											<div class="border-t my-0.5"></div>
+										{:else if !item.isFolder && item.url}
 											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
 												onclick={() => loadIntoEdit(item)}>
 												✏️ <span>Edit</span>

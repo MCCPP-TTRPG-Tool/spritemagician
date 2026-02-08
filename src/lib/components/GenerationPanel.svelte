@@ -37,6 +37,15 @@
 	let guidanceScale = $state(null); // null = use model default (typically 7.5)
 	let seed = $state(null); // null = random seed
 	let negativePrompt = $state(''); // Additional negative prompt
+
+	// FLF-specific settings (for interpolation mode) — quality-focused defaults
+	let flfDurationSeconds = $state(3);     // 0.5–10, default 3 (shorter = better per-frame quality)
+	let flfInferenceSteps = $state(20);     // 1–30, default 20 (more steps = cleaner output)
+	let flfGuidanceScale = $state(3);       // 0–10, high noise guidance, default 3
+	let flfGuidanceScale2 = $state(3);      // 0–10, low noise guidance, default 3
+	let flfShift = $state(5);               // 1–10, scheduler shift, default 5
+	let flfSeed = $state(null);             // null = random
+	let flfNegativePrompt = $state('');     // user additions to default Chinese neg prompt
 	
 	// Interpolation mode (start → end frame)
 	let useInterpolation = $state(false);
@@ -164,7 +173,8 @@
 						}
 						
 						console.log('Starting frame extraction from:', data.videoUrl);
-						let rawFrames = await extractFrames(data.videoUrl, Math.round(duration * project.fps));
+						const extractDuration = useInterpolation ? flfDurationSeconds : duration;
+						let rawFrames = await extractFrames(data.videoUrl, Math.round(extractDuration * project.fps));
 						console.log(`Extracted ${rawFrames.length} frames`);
 						
 						if (!rawFrames || rawFrames.length === 0) {
@@ -341,8 +351,10 @@
 
 		isGenerating = true;
 		generationError = null;
-		const totalFrameCount = Math.round(duration * project.fps);
-		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: `Starting ${duration}s animation...` };
+		// When interpolating, use FLF duration (not the general slider) so frame extraction matches
+		const effectiveDuration = useInterpolation ? flfDurationSeconds : duration;
+		const totalFrameCount = Math.round(effectiveDuration * project.fps);
+		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: `Starting ${effectiveDuration}s animation...` };
 		jobId = null;
 
 		// Add job to queue
@@ -351,15 +363,15 @@
 			type: '🎬 Animation',
 			name: poseName,
 			status: 'processing',
-			message: `Starting ${duration}s animation...`
+			message: `Starting ${effectiveDuration}s animation...`
 		});
 
 		// Clear existing frames
 		projectStore.update(p => ({ ...p, frames: [] }));
 
 		try {
-			// Calculate frame count from duration and FPS
-			const requestedFrameCount = Math.round(duration * project.fps);
+			// Calculate frame count from effective duration and FPS
+			const requestedFrameCount = Math.round(effectiveDuration * project.fps);
 			
 			// Build prompt from pose preset
 			let posePrompt;
@@ -383,7 +395,7 @@
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					referenceImage: project.firstFrame,
-					endImage: useInterpolation ? endFrame : null, // For interpolation mode
+					endImage: useInterpolation ? endFrame : null,
 					prompt: posePrompt,
 					pose: selectedPose,
 					frameCount: requestedFrameCount,
@@ -392,7 +404,21 @@
 					fps: project.fps,
 					loop: shouldLoop,
 					model: selectedModel,
-					interpolate: useInterpolation
+					interpolate: useInterpolation,
+					// Standard advanced settings (non-FLF models)
+					guidanceScale: guidanceScale,
+					seed: seed,
+					negativePrompt: negativePrompt,
+					// FLF-specific parameters (interpolation mode only)
+					...(useInterpolation && {
+						flfDurationSeconds: flfDurationSeconds,
+						flfInferenceSteps: flfInferenceSteps,
+						flfGuidanceScale: flfGuidanceScale,
+						flfGuidanceScale2: flfGuidanceScale2,
+						flfShift: flfShift,
+						flfSeed: flfSeed,
+						flfNegativePrompt: flfNegativePrompt
+					})
 				})
 			});
 
@@ -515,10 +541,18 @@
 
 	<!-- Settings Row -->
 	<div class="flex items-center gap-2 text-xs">
-		<div class="flex-1">
-			<span class="text-gray-600">{duration}s</span>
-			<input type="range" min="2" max="10" step="1" bind:value={duration} class="w-full h-1" />
-		</div>
+		{#if useInterpolation}
+			<!-- FLF mode: duration is controlled by flfDurationSeconds in Advanced Settings -->
+			<div class="flex-1">
+				<span class="text-gray-600">{flfDurationSeconds}s</span>
+				<input type="range" min="1" max="10" step="0.5" bind:value={flfDurationSeconds} class="w-full h-1" />
+			</div>
+		{:else}
+			<div class="flex-1">
+				<span class="text-gray-600">{duration}s</span>
+				<input type="range" min="2" max="10" step="1" bind:value={duration} class="w-full h-1" />
+			</div>
+		{/if}
 		<div class="w-16">
 			<span class="text-gray-600">{project.fps}fps</span>
 			<select 
@@ -531,10 +565,17 @@
 				<option value={12}>12 fps</option>
 			</select>
 		</div>
-		<div class="flex-1">
-			<span class="text-gray-600">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</span>
-			<input type="range" min="50" max="180" bind:value={motionAmount} class="w-full h-1" />
-		</div>
+		{#if !useInterpolation}
+			<div class="flex-1">
+				<span class="text-gray-600">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</span>
+				<input type="range" min="50" max="180" bind:value={motionAmount} class="w-full h-1" />
+			</div>
+		{:else}
+			<div class="flex-1">
+				<span class="text-gray-600">{flfInferenceSteps} steps</span>
+				<input type="range" min="1" max="30" step="1" bind:value={flfInferenceSteps} class="w-full h-1" />
+			</div>
+		{/if}
 	</div>
 
 	<!-- Options Row -->
@@ -551,7 +592,7 @@
 			<input type="checkbox" bind:checked={pixelateOutput} class="w-3 h-3" />
 			Pixelate
 		</label>
-		<span class="ml-auto text-gray-400">~{Math.round(duration * project.fps)}f</span>
+		<span class="ml-auto text-gray-400">~{Math.round((useInterpolation ? flfDurationSeconds : duration) * project.fps)}f</span>
 	</div>
 	
 	<!-- Pixelation Settings (when enabled) -->
@@ -606,93 +647,198 @@
 	<!-- Advanced Settings Panel -->
 	{#if showAdvanced}
 		<div class="space-y-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs">
-			<p class="text-[10px] text-gray-500 font-medium mb-2">Fine-tune generation for better accuracy and loops</p>
 			
-			<!-- Guidance Scale -->
-			<div>
-				<label class="block text-[10px] text-gray-600 mb-1">
-					Guidance Scale: {guidanceScale || 'Auto (7.5)'}
-					<span class="text-gray-400">(Higher = more prompt adherence, 3-15)</span>
-				</label>
-				<div class="flex items-center gap-2">
-					<input 
-						type="range" 
-						min="3" 
-						max="15" 
-						step="0.5" 
-						bind:value={guidanceScale}
-						class="flex-1 h-1"
-					/>
+			{#if useInterpolation}
+				<!-- ═══ FLF-SPECIFIC SETTINGS (Interpolation Mode) ═══ -->
+				<p class="text-[10px] text-indigo-600 font-medium mb-1">⚡ WAN 2.2 First-Last-Frame Settings</p>
+
+				<!-- Duration -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Duration: <strong>{flfDurationSeconds}s</strong>
+						<span class="text-gray-400">(0.5–10s, longer = more frames)</span>
+					</label>
+					<input type="range" min="0.5" max="10" step="0.5" bind:value={flfDurationSeconds} class="w-full h-1" />
+				</div>
+
+				<!-- Inference Steps -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Inference Steps: <strong>{flfInferenceSteps}</strong>
+						<span class="text-gray-400">(1–30, higher = better quality, slower)</span>
+					</label>
+					<input type="range" min="1" max="30" step="1" bind:value={flfInferenceSteps} class="w-full h-1" />
+				</div>
+
+				<!-- Guidance Scales (dual) -->
+				<div class="grid grid-cols-2 gap-2">
+					<div>
+						<label class="block text-[10px] text-gray-600 mb-1">
+							Guidance (High Noise): <strong>{flfGuidanceScale}</strong>
+						</label>
+						<input type="range" min="0" max="10" step="0.5" bind:value={flfGuidanceScale} class="w-full h-1" />
+					</div>
+					<div>
+						<label class="block text-[10px] text-gray-600 mb-1">
+							Guidance (Low Noise): <strong>{flfGuidanceScale2}</strong>
+						</label>
+						<input type="range" min="0" max="10" step="0.5" bind:value={flfGuidanceScale2} class="w-full h-1" />
+					</div>
+				</div>
+				<p class="text-[9px] text-gray-400 -mt-1">Higher guidance = stricter adherence to prompt at each noise stage</p>
+
+				<!-- Shift (Scheduler) -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Scheduler Shift: <strong>{flfShift}</strong>
+						<span class="text-gray-400">(1–10, controls noise schedule)</span>
+					</label>
+					<input type="range" min="1" max="10" step="0.5" bind:value={flfShift} class="w-full h-1" />
+				</div>
+
+				<!-- Seed -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Seed: {flfSeed ?? 'Random'}
+					</label>
+					<div class="flex items-center gap-2">
+						<input type="number" bind:value={flfSeed} placeholder="Random" class="flex-1 px-2 py-1 text-xs border rounded" />
+						<button class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300" onclick={() => flfSeed = null}>Random</button>
+					</div>
+				</div>
+
+				<!-- FLF Negative Prompt -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Extra Negative Prompt <span class="text-gray-400">(added to model's default negatives)</span>
+					</label>
+					<textarea
+						bind:value={flfNegativePrompt}
+						placeholder="e.g., jittery, static, extra limbs..."
+						class="w-full px-2 py-1 text-xs border rounded resize-none"
+						rows="2"
+					></textarea>
+				</div>
+
+				<!-- Reset FLF to Defaults -->
+				<button
+					class="w-full px-2 py-1 text-[10px] bg-gray-200 text-gray-600 rounded hover:bg-gray-300"
+					onclick={() => { flfDurationSeconds = 3; flfInferenceSteps = 20; flfGuidanceScale = 3; flfGuidanceScale2 = 3; flfShift = 5; flfSeed = null; flfNegativePrompt = ''; }}
+				>
+					↺ Reset FLF to Defaults
+				</button>
+
+				<!-- Quality Presets -->
+				<div class="flex gap-1 flex-wrap">
+					<span class="text-[10px] text-gray-500 mr-1">Presets:</span>
 					<button
-						class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
-						onclick={() => guidanceScale = null}
-						title="Reset to model default"
-					>
-						Reset
-					</button>
-				</div>
-			</div>
-
-			<!-- Seed -->
-			<div>
-				<label class="block text-[10px] text-gray-600 mb-1">
-					Seed: {seed || 'Random'}
-					<span class="text-gray-400">(Same seed = reproducible results)</span>
-				</label>
-				<div class="flex items-center gap-2">
-					<input
-						type="number"
-						bind:value={seed}
-						placeholder="Random"
-						class="flex-1 px-2 py-1 text-xs border rounded"
-					/>
+						class="px-2 py-0.5 text-[10px] bg-green-100 text-green-700 rounded hover:bg-green-200"
+						onclick={() => { flfDurationSeconds = 2; flfInferenceSteps = 10; flfGuidanceScale = 2; flfGuidanceScale2 = 2; flfShift = 5; }}
+						title="Quick generation, fewer frames"
+					>⚡ Fast</button>
 					<button
-						class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
-						onclick={() => seed = null}
-						title="Use random seed"
-					>
-						Random
-					</button>
+						class="px-2 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+						onclick={() => { flfDurationSeconds = 3; flfInferenceSteps = 20; flfGuidanceScale = 3; flfGuidanceScale2 = 3; flfShift = 5; }}
+						title="Default quality — good balance"
+					>⚖️ Balanced</button>
+					<button
+						class="px-2 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
+						onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 30; flfGuidanceScale = 5; flfGuidanceScale2 = 5; flfShift = 5; }}
+						title="Best quality, slower & more frames"
+					>💎 Quality</button>
 				</div>
-			</div>
 
-			<!-- Negative Prompt -->
-			<div>
-				<label class="block text-[10px] text-gray-600 mb-1">
-					Negative Prompt
-					<span class="text-gray-400">(Things to avoid - added to default negatives)</span>
-				</label>
-				<textarea
-					bind:value={negativePrompt}
-					placeholder="e.g., jittery, flickering, color shift..."
-					class="w-full px-2 py-1 text-xs border rounded resize-none"
-					rows="2"
-				></textarea>
-				<p class="text-[9px] text-gray-400 mt-0.5">
-					Default negatives: blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts
-				</p>
-			</div>
-
-			<!-- Loop Tips -->
-			{#if shouldLoop}
-				<div class="p-2 bg-blue-50 border border-blue-200 rounded">
-					<p class="text-[10px] text-blue-800 font-medium mb-1">💡 Loop Tips:</p>
-					<ul class="text-[9px] text-blue-700 space-y-0.5 list-disc list-inside">
-						<li>Lower motion amount (30-60) for smoother loops</li>
-						<li>Use seed for reproducible loop attempts</li>
-						<li>Higher guidance (8-12) helps maintain consistency</li>
-						<li>Ping-pong loop button creates seamless back-and-forth</li>
-					</ul>
+			{:else}
+				<!-- ═══ STANDARD I2V SETTINGS ═══ -->
+				<p class="text-[10px] text-gray-500 font-medium mb-2">Fine-tune generation for better accuracy and loops</p>
+				
+				<!-- Guidance Scale -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Guidance Scale: {guidanceScale || 'Auto (7.5)'}
+						<span class="text-gray-400">(Higher = more prompt adherence, 3-15)</span>
+					</label>
+					<div class="flex items-center gap-2">
+						<input 
+							type="range" 
+							min="3" 
+							max="15" 
+							step="0.5" 
+							bind:value={guidanceScale}
+							class="flex-1 h-1"
+						/>
+						<button
+							class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
+							onclick={() => guidanceScale = null}
+							title="Reset to model default"
+						>
+							Reset
+						</button>
+					</div>
 				</div>
+
+				<!-- Seed -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Seed: {seed || 'Random'}
+						<span class="text-gray-400">(Same seed = reproducible results)</span>
+					</label>
+					<div class="flex items-center gap-2">
+						<input
+							type="number"
+							bind:value={seed}
+							placeholder="Random"
+							class="flex-1 px-2 py-1 text-xs border rounded"
+						/>
+						<button
+							class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
+							onclick={() => seed = null}
+							title="Use random seed"
+						>
+							Random
+						</button>
+					</div>
+				</div>
+
+				<!-- Negative Prompt -->
+				<div>
+					<label class="block text-[10px] text-gray-600 mb-1">
+						Negative Prompt
+						<span class="text-gray-400">(Things to avoid - added to default negatives)</span>
+					</label>
+					<textarea
+						bind:value={negativePrompt}
+						placeholder="e.g., jittery, flickering, color shift..."
+						class="w-full px-2 py-1 text-xs border rounded resize-none"
+						rows="2"
+					></textarea>
+					<p class="text-[9px] text-gray-400 mt-0.5">
+						Default negatives: blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts
+					</p>
+				</div>
+
+				<!-- Loop Tips -->
+				{#if shouldLoop}
+					<div class="p-2 bg-blue-50 border border-blue-200 rounded">
+						<p class="text-[10px] text-blue-800 font-medium mb-1">💡 Loop Tips:</p>
+						<ul class="text-[9px] text-blue-700 space-y-0.5 list-disc list-inside">
+							<li>Lower motion amount (30-60) for smoother loops</li>
+							<li>Use seed for reproducible loop attempts</li>
+							<li>Higher guidance (8-12) helps maintain consistency</li>
+							<li>Ping-pong loop button creates seamless back-and-forth</li>
+						</ul>
+					</div>
+				{/if}
 			{/if}
 		</div>
 	{/if}
 
 	<!-- Generate Button -->
 	{#if useInterpolation}
-		<p class="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
-			⚡ Will use <strong>Replicate WAN 2.2 First-Last-Frame</strong> — same API key as I2V
-		</p>
+		<div class="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1.5 rounded space-y-0.5">
+			<p>⚡ <strong>Replicate WAN 2.2 FLF</strong> — {flfDurationSeconds}s, {flfInferenceSteps} steps, guidance {flfGuidanceScale}/{flfGuidanceScale2}, shift {flfShift}</p>
+			<p class="text-indigo-400">Open Advanced Settings to fine-tune all parameters</p>
+		</div>
 	{/if}
 	<button
 		class="w-full px-3 py-2 text-sm text-white rounded disabled:bg-gray-400 disabled:cursor-not-allowed font-medium {useInterpolation ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-500 hover:bg-blue-600'}"

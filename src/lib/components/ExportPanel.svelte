@@ -4,7 +4,6 @@
 	import { generateGif } from '$lib/utils/gifEncoder.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
-	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import FolderPicker from './FolderPicker.svelte';
 	
 	let project = $state({ frames: [], fps: 12 });
@@ -166,21 +165,40 @@
 
 		isSaving = true;
 		try {
+			const uid = userFiles.getUid();
+			if (!uid) throw new Error('Not signed in');
+
 			const animationName = project.prompt || `animation_${Date.now()}`;
 			const sanitizedName = animationName.slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
 
-			// Save animation to completedJobs (like the queue) so it can be loaded back into the editor
-			// This stores all frames as data URLs in IndexedDB, just like generated animations
-			await completedJobs.addAnimation({
-				name: sanitizedName,
-				frames: project.frames, // Store all frames as data URLs
-				fps: project.fps,
-				pose: project.prompt || '',
-				saveFolderId: saveFolderId || null,
-				saveFolderPath: saveFolderPath || null
+			// Use the dedicated save-animation endpoint (avoids double-base64 overhead)
+			const res = await fetch('/api/save-animation', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					name: sanitizedName,
+					frames: project.frames,
+					fps: project.fps || 12,
+					prompt: project.prompt || ''
+				})
+			});
+			if (!res.ok) {
+				const errData = await res.json().catch(() => ({}));
+				throw new Error(errData.error || 'Upload failed');
+			}
+			const { url, frameCount } = await res.json();
+
+			// Create a Firestore file entry so it appears in the file tree
+			const fname = `${sanitizedName}.anim.json`;
+			await createFile(uid, saveFolderId, fname, url, 'animation', {
+				sourceType: 'animation',
+				frameCount,
+				fps: project.fps || 12,
+				animationName: sanitizedName,
+				prompt: project.prompt || ''
 			});
 
-			alert(`Animation saved! Check the Jobs tab to load it back.`);
+			alert(`Animation saved! ${frameCount} frames → ${saveFolderPath || 'root'}`);
 		} catch (err) {
 			console.error('Save error:', err);
 			alert('Failed to save animation: ' + err.message);

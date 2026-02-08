@@ -12,6 +12,7 @@
 	import { goto } from '$app/navigation';
 	
 	let activeTab = $state('wizard'); // 'wizard' | 'edit' | 'style' | 'animate'
+	let rightTab = $state('preview'); // 'preview' | 'export'
 	let showUserMenu = $state(false);
 
 	// Images passed from FileTree → store → here → component props
@@ -63,6 +64,14 @@
 			activeTab = 'animate';
 		}
 		prevLastFrame = frame;
+	});
+
+	// React to animation being loaded from FileTree → auto-switch to Preview tab
+	$effect(() => {
+		if ($projectStore._animationLoaded) {
+			rightTab = 'preview';
+			projectStore.update(s => ({ ...s, _animationLoaded: false }));
+		}
 	});
 
 	async function logout() {
@@ -174,13 +183,26 @@
 			<CenterPanel />
 		</div>
 
-		<!-- Right Column: Preview & Export -->
-		<div class="flex flex-col gap-2 overflow-hidden">
-			<div class="bg-white rounded shadow p-3 flex-1 overflow-y-auto">
-				<AnimationPreview />
+		<!-- Right Column: Preview / Export (tabbed) -->
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
+			<div class="flex border-b flex-shrink-0">
+				<button
+					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {rightTab === 'preview' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+					onclick={() => rightTab = 'preview'}
+				>🎬 Preview</button>
+				<button
+					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {rightTab === 'export' ? 'bg-green-50 text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-50'}"
+					onclick={() => rightTab = 'export'}
+				>📦 Export</button>
 			</div>
-			<div class="bg-white rounded shadow p-3 flex-shrink-0">
-				<ExportPanel />
+			<div class="flex-1 min-h-0 overflow-hidden">
+				{#if rightTab === 'preview'}
+					<AnimationPreview />
+				{:else}
+					<div class="p-3 overflow-y-auto h-full">
+						<ExportPanel />
+					</div>
+				{/if}
 			</div>
 		</div>
 

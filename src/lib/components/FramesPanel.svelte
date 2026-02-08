@@ -85,8 +85,9 @@
 					<div
 						class="relative group rounded-lg border-2 cursor-move transition-all aspect-square bg-gray-100
 							{dragIdx === index ? 'opacity-50 scale-95 border-blue-400' : ''}
-							{overIdx === index ? 'border-blue-500 scale-105' : 'border-transparent hover:border-gray-300'}"
+							{overIdx === index ? 'border-blue-500 scale-105' : project.currentFrame === index ? 'border-blue-500 ring-1 ring-blue-300' : 'border-transparent hover:border-gray-300'}"
 						draggable="true"
+						onclick={() => projectStore.update(p => ({ ...p, currentFrame: index }))}
 						ondragstart={() => onDragStart(index)}
 						ondragover={(e) => onDragOver(e, index)}
 						ondrop={(e) => onDrop(e, index)}

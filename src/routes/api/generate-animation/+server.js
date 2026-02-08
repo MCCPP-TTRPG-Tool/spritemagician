@@ -66,19 +66,76 @@ const FLF_MODEL_VERSION = '003fd8a38ff17cb6022c3117bb90f7403cb632062ba2b09871073
 
 /**
  * Run WAN 2.2 First-Last-Frame interpolation via Replicate.
- * Uses lucataco/wan-2.2-first-last-frame — same REPLICATE_API_TOKEN as I2V.
+ * Full parameter support per model schema:
+ *   start_image, end_image, prompt, negative_prompt, duration_seconds,
+ *   num_inference_steps, guidance_scale (high noise), guidance_scale_2 (low noise),
+ *   shift (scheduler), seed
  */
-async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataUrl, prompt, frameCount, fps) {
+async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataUrl, prompt, frameCount, fps, flfOptions = {}) {
 	const REPLICATE_API_TOKEN = env.REPLICATE_API_TOKEN;
 	if (!REPLICATE_API_TOKEN) {
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	const PIXEL_ART_PRESERVE = 'pixel art style, crisp pixels, no smoothing, no blur, pixelated aesthetic, consistent character design';
-	const LOOP_INSTRUCTIONS = 'SEAMLESS TRANSITION: Smooth morph from first frame to last frame. First and last frames must match perfectly for looping. No visible jump or discontinuity. Perfect frame continuity.';
-	const enhancedPrompt = prompt
-		? `${LOOP_INSTRUCTIONS} ${PIXEL_ART_PRESERVE}. ${prompt}. Consistent character appearance, stable camera, smooth motion, no jitter, high quality interpolation`
-		: `${LOOP_INSTRUCTIONS} ${PIXEL_ART_PRESERVE}. Subtle idle animation transition, smooth and natural motion`;
+	// FLF works best with SHORT, focused prompts — the start/end images already
+	// provide all the visual information. Long prompts confuse the model and degrade quality.
+	let enhancedPrompt;
+	if (prompt) {
+		// Strip the giant HOMM3_STYLE preamble if present — extract just the action keywords
+		const actionMatch = prompt.match(/(?:idle|cast|attack|walk|hit|death|breathing|swing|stride|spellcast|damage|fall)/i);
+		const actionWord = actionMatch ? actionMatch[0].toLowerCase() : '';
+		
+		// Keep it short — just the core motion description
+		if (actionWord === 'idle' || prompt.toLowerCase().includes('idle')) {
+			enhancedPrompt = 'subtle idle breathing animation, gentle sway, smooth motion';
+		} else if (actionWord === 'walk' || prompt.toLowerCase().includes('walk')) {
+			enhancedPrompt = 'smooth walking cycle, natural stride, looping motion';
+		} else if (actionWord === 'attack' || prompt.toLowerCase().includes('attack')) {
+			enhancedPrompt = 'attack swing animation, powerful strike motion';
+		} else if (actionWord === 'cast' || prompt.toLowerCase().includes('cast')) {
+			enhancedPrompt = 'spellcasting animation, magical energy, smooth motion';
+		} else if (actionWord === 'hit' || prompt.toLowerCase().includes('damage')) {
+			enhancedPrompt = 'damage reaction, body recoils, quick flinch';
+		} else if (actionWord === 'death' || prompt.toLowerCase().includes('death')) {
+			enhancedPrompt = 'death animation, character collapses';
+		} else {
+			// Custom prompt — trim to essentials, cap length
+			const trimmed = prompt
+				.replace(/Heroes of Might and Magic[^,]*,?/gi, '')
+				.replace(/pixel art style[^,]*,?/gi, '')
+				.replace(/no smoothing[^,]*,?/gi, '')
+				.replace(/no anti-aliasing[^,]*,?/gi, '')
+				.replace(/transparent background[^,]*,?/gi, '')
+				.replace(/isolated character[^,]*,?/gi, '')
+				.replace(/crisp pixels[^,]*,?/gi, '')
+				.replace(/\s{2,}/g, ' ')
+				.trim();
+			enhancedPrompt = trimmed.length > 150 ? trimmed.substring(0, 150) : trimmed;
+			if (!enhancedPrompt) enhancedPrompt = 'smooth animation transition';
+		}
+	} else {
+		enhancedPrompt = 'smooth animation transition';
+	}
+
+	console.log('[FLF] Cleaned prompt:', enhancedPrompt);
+
+	// Negative prompt: model's Chinese default + English quality terms + user additions
+	const DEFAULT_FLF_NEGATIVE = '色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝';
+	const ENGLISH_QUALITY_NEG = 'blurry, distorted, morphing, melting, extra limbs, duplicated body parts, low quality, artifacts, jittery, flickering';
+	const userNeg = flfOptions.negativePrompt || '';
+	const negParts = [DEFAULT_FLF_NEGATIVE, ENGLISH_QUALITY_NEG];
+	if (userNeg) negParts.push(userNeg);
+	const finalNegativePrompt = negParts.join(', ');
+
+	// Resolve FLF-specific parameters — quality-focused defaults
+	const durationSeconds = flfOptions.durationSeconds ?? 3;       // 0.5–10, default 3 (shorter = better per-frame quality)
+	const numInferenceSteps = flfOptions.numInferenceSteps ?? 20;  // 1–30, default 20 (more steps = cleaner)
+	const guidanceScale = flfOptions.guidanceScale ?? 3;           // 0–10, high noise guidance, default 3
+	const guidanceScale2 = flfOptions.guidanceScale2 ?? 3;         // 0–10, low noise guidance, default 3
+	const shift = flfOptions.shift ?? 5;                           // 1–10, scheduler shift, default 5
+	const seed = flfOptions.seed;                                  // nullable integer
+
+	console.log('[FLF] Parameters:', { durationSeconds, numInferenceSteps, guidanceScale, guidanceScale2, shift, seed: seed ?? 'random' });
 
 	// 1. Ensure both frames are public URLs (Replicate requires URLs)
 	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Uploading start & end frames...' });
@@ -95,8 +152,23 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 	console.log('[FLF] Start URL:', startUrl);
 	console.log('[FLF] End URL:', endUrl);
 
-	// 2. Submit prediction
-	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Submitting to Replicate FLF...' });
+	// 2. Submit prediction with full parameter set
+	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `Submitting to Replicate FLF (${durationSeconds}s, ${numInferenceSteps} steps)...` });
+
+	const inputPayload = {
+		start_image: startUrl,
+		end_image: endUrl,
+		prompt: enhancedPrompt,
+		negative_prompt: finalNegativePrompt,
+		duration_seconds: durationSeconds,
+		num_inference_steps: numInferenceSteps,
+		guidance_scale: guidanceScale,
+		guidance_scale_2: guidanceScale2,
+		shift: shift,
+		...(seed != null && { seed: seed })
+	};
+
+	console.log('[FLF] Full input payload:', { ...inputPayload, start_image: '(url)', end_image: '(url)' });
 
 	const submitRes = await fetch('https://api.replicate.com/v1/predictions', {
 		method: 'POST',
@@ -106,11 +178,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		},
 		body: JSON.stringify({
 			version: FLF_MODEL_VERSION,
-			input: {
-				start_image: startUrl,
-				end_image: endUrl,
-				prompt: enhancedPrompt
-			}
+			input: inputPayload
 		})
 	});
 
@@ -182,7 +250,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 // Main async processor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, guidanceScale = null, seed = null, negativePrompt = null) {
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}) {
 	const isInterpolation = !!endImage;
 	
 	// Enhanced prompt engineering for better accuracy and loops
@@ -211,7 +279,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		// ── Interpolation Mode (Start → End frame via Replicate FLF) ────────
 		if (isInterpolation) {
 			console.log('[Animation] Interpolation → Replicate WAN 2.2 FLF');
-			const videoUrl = await runReplicateInterpolation(jobId, referenceImage, endImage, prompt, frameCount, fps);
+			const videoUrl = await runReplicateInterpolation(jobId, referenceImage, endImage, prompt, frameCount, fps, flfOptions);
 
 			setProgress(jobId, {
 				currentFrame: frameCount,
@@ -523,7 +591,12 @@ export async function POST({ request }) {
 	const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
 	try {
-		const { referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate, guidanceScale, seed, negativePrompt } = await request.json();
+		const { 
+			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate, 
+			guidanceScale, seed, negativePrompt,
+			// FLF-specific parameters (for interpolation mode)
+			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
+		} = await request.json();
 
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required. Upload an image first.' }, { status: 400 });
@@ -554,6 +627,17 @@ export async function POST({ request }) {
 				: `Initializing ${selectedModel.name}...`
 		});
 		
+		// Build FLF options object for interpolation mode
+		const flfOptions = isInterpolation ? {
+			durationSeconds: flfDurationSeconds ?? undefined,
+			numInferenceSteps: flfInferenceSteps ?? undefined,
+			guidanceScale: flfGuidanceScale ?? undefined,
+			guidanceScale2: flfGuidanceScale2 ?? undefined,
+			shift: flfShift ?? undefined,
+			seed: flfSeed ?? undefined,
+			negativePrompt: flfNegativePrompt || negativePrompt || null
+		} : {};
+
 		processAnimationAsync(
 			jobId, 
 			referenceImage, 
@@ -566,7 +650,8 @@ export async function POST({ request }) {
 			loop || false,
 			guidanceScale || null,
 			seed || null,
-			negativePrompt || null
+			negativePrompt || null,
+			flfOptions
 		);
 
 		return json({
