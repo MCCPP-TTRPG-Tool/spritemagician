@@ -95,67 +95,104 @@ export async function extractFramesFromWebP(webpUrl, numFrames = 8) {
 
 /**
  * Extract frames from a video URL (mp4, webm)
- * Seeks through the video and captures frames at intervals
  */
 export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 	return new Promise((resolve, reject) => {
 		const timeout = setTimeout(() => {
 			console.error('Video extraction timed out');
 			reject(new Error('Video extraction timed out - CORS issue likely'));
-		}, 60000); // 60 second timeout
+		}, 60000);
 		
 		const video = document.createElement('video');
 		video.crossOrigin = 'anonymous';
 		video.muted = true;
 		video.playsInline = true;
+		// CRITICAL: Set video to natural size - prevent CSS scaling
+		video.style.width = 'auto';
+		video.style.height = 'auto';
+		video.style.position = 'absolute';
+		video.style.visibility = 'hidden';
+		video.style.pointerEvents = 'none';
 		
 		const frames = [];
 		let currentFrame = 0;
 		
-		video.onloadedmetadata = () => {
-			console.log(`Video loaded: ${video.duration}s, ${video.videoWidth}x${video.videoHeight}`);
+		let canvas, ctx, videoWidth, videoHeight, duration, interval;
+		
+		function initializeExtraction() {
+			videoWidth = video.videoWidth;
+			videoHeight = video.videoHeight;
 			
-			const duration = video.duration;
+			if (!videoWidth || !videoHeight) {
+				clearTimeout(timeout);
+				reject(new Error('Video dimensions not available'));
+				return;
+			}
+			
+			duration = video.duration;
 			if (!duration || duration <= 0) {
 				clearTimeout(timeout);
 				reject(new Error('Invalid video duration'));
 				return;
 			}
 			
-			const interval = duration / numFrames;
+			console.log(`Video loaded: ${duration}s, ${videoWidth}x${videoHeight}`);
 			
-			const canvas = document.createElement('canvas');
-			canvas.width = video.videoWidth || 512;
-			canvas.height = video.videoHeight || 512;
-			const ctx = canvas.getContext('2d');
+			interval = duration / numFrames;
 			
-			function captureFrame() {
-				if (currentFrame >= numFrames) {
-					clearTimeout(timeout);
-					console.log(`Extracted ${frames.length} frames`);
-					resolve(frames);
-					return;
-				}
-				
-				const targetTime = currentFrame * interval;
-				video.currentTime = Math.min(targetTime, duration - 0.01);
+			canvas = document.createElement('canvas');
+			// Use exact video resolution - no scaling
+			canvas.width = videoWidth;
+			canvas.height = videoHeight;
+			ctx = canvas.getContext('2d', { willReadFrequently: true });
+			
+			// Disable smoothing to preserve crisp quality from video
+			// This prevents browser from blurring frames during extraction
+			ctx.imageSmoothingEnabled = false;
+			
+			// Start capturing frames
+			captureFrame();
+		}
+		
+		function captureFrame() {
+			if (currentFrame >= numFrames) {
+				clearTimeout(timeout);
+				console.log(`Extracted ${frames.length} frames at ${videoWidth}x${videoHeight}`);
+				// Clean up video element
+				video.remove();
+				resolve(frames);
+				return;
 			}
 			
-			video.onseeked = () => {
-				try {
-					ctx.drawImage(video, 0, 0);
-					const dataUrl = canvas.toDataURL('image/png');
-					frames.push(dataUrl);
-					currentFrame++;
-					captureFrame();
-				} catch (e) {
-					console.error('Frame capture error:', e);
-					clearTimeout(timeout);
-					reject(new Error('CORS blocked frame capture'));
-				}
-			};
-			
-			captureFrame();
+			const targetTime = currentFrame * interval;
+			video.currentTime = Math.min(targetTime, duration - 0.01);
+		}
+		
+		video.onseeked = () => {
+			try {
+				// Draw video frame at exact resolution - use natural video dimensions
+				ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
+				// PNG is lossless - no quality parameter needed
+				const dataUrl = canvas.toDataURL('image/png');
+				frames.push(dataUrl);
+				currentFrame++;
+				captureFrame();
+			} catch (e) {
+				console.error('Frame capture error:', e);
+				clearTimeout(timeout);
+				video.remove();
+				reject(new Error('CORS blocked frame capture'));
+			}
+		};
+		
+		video.onloadedmetadata = () => {
+			// Check if video is already ready
+			if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+				initializeExtraction();
+			} else {
+				// Wait for video to be ready
+				video.oncanplaythrough = initializeExtraction;
+			}
 		};
 		
 		video.onerror = (e) => {

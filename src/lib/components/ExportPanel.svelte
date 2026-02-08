@@ -26,6 +26,7 @@
 	let showFolderPicker = $state(false);
 	let saveFolderId = $state(null);
 	let saveFolderPath = $state(null);
+	let saveName = $state('');
 	let isSaving = $state(false);
 
 	function closePreview() {
@@ -168,8 +169,8 @@
 			const uid = userFiles.getUid();
 			if (!uid) throw new Error('Not signed in');
 
-			const animationName = project.prompt || `animation_${Date.now()}`;
-			const sanitizedName = animationName.slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+			const animationName = saveName.trim() || project.prompt || `animation_${Date.now()}`;
+			const sanitizedName = animationName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
 
 			// Use the dedicated save-animation endpoint (avoids double-base64 overhead)
 			const res = await fetch('/api/save-animation', {
@@ -186,7 +187,7 @@
 				const errData = await res.json().catch(() => ({}));
 				throw new Error(errData.error || 'Upload failed');
 			}
-			const { url, frameCount } = await res.json();
+			const { url, frameCount, thumbnailUrl } = await res.json();
 
 			// Create a Firestore file entry so it appears in the file tree
 			const fname = `${sanitizedName}.anim.json`;
@@ -195,7 +196,8 @@
 				frameCount,
 				fps: project.fps || 12,
 				animationName: sanitizedName,
-				prompt: project.prompt || ''
+				prompt: project.prompt || '',
+				thumbnailUrl: thumbnailUrl || null
 			});
 
 			alert(`Animation saved! ${frameCount} frames → ${saveFolderPath || 'root'}`);
@@ -412,8 +414,20 @@
 
 	<!-- Save to Folder -->
 	{#if project.frames.length > 0}
-		<div class="border-t pt-2 mt-2">
-			<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mb-2">
+		<div class="border-t pt-2 mt-2 space-y-2">
+			<!-- Name input -->
+			<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+				<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Name:</span>
+				<input
+					type="text"
+					class="flex-1 px-2 py-1 text-[11px] rounded border border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none bg-white"
+					bind:value={saveName}
+					placeholder="Enter file name…"
+				/>
+			</div>
+
+			<!-- Folder picker -->
+			<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
 				<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Save to:</span>
 				<button
 					class="flex-1 text-left px-2 py-1 text-[11px] rounded border transition-colors truncate
@@ -432,6 +446,7 @@
 					>✕</button>
 				{/if}
 			</div>
+
 			<button
 				class="w-full px-2 py-1.5 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
 				onclick={saveToFolder}

@@ -19,8 +19,12 @@
 	let menuItemId = $state(null);
 
 	// Save-to-folder
+	let showSaveDialog   = $state(false);
 	let showFolderPicker = $state(false);
 	let savingJobId      = $state(null);
+	let saveFileName     = $state('');
+	let saveFolderId     = $state(null);
+	let saveFolderPath   = $state(null);
 	let isSaving         = $state(false);
 
 	jobQueue.subscribe(v => { queue = v; });
@@ -79,14 +83,33 @@
 
 	function startSave(job) {
 		savingJobId = job.id;
-		showFolderPicker = true;
+		saveFileName = job.name || (job.type === 'sprite' ? 'sprite' : 'animation');
+		saveFolderId = null;
+		saveFolderPath = null;
+		showSaveDialog = true;
 		menuItemId = null;
 	}
 
-	async function onFolderSelect(folderId, folderPath) {
+	function onFolderSelect(folderId, folderPath) {
+		saveFolderId = folderId;
+		saveFolderPath = folderPath;
 		showFolderPicker = false;
+	}
+
+	function cancelSaveDialog() {
+		showSaveDialog = false;
+		savingJobId = null;
+		saveFileName = '';
+		saveFolderId = null;
+		saveFolderPath = null;
+	}
+
+	async function confirmSave() {
 		const job = completed.jobs.find(j => j.id === savingJobId);
 		if (!job) return;
+		if (!saveFolderId) { showFolderPicker = true; return; }
+
+		const fileName = saveFileName.trim() || job.name || 'file';
 		isSaving = true;
 
 		try {
@@ -94,27 +117,27 @@
 			if (!uid) throw new Error('Not signed in');
 
 			if (job.type === 'sprite' && job.image) {
+				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
 				const res = await fetch('/api/upload-file', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
 						imageData: job.image,
-						filename: `${(job.name || 'sprite').slice(0, 40)}.png`
+						filename: `${safeName}.png`
 					})
 				});
 				if (!res.ok) throw new Error('Upload failed');
 				const { url } = await res.json();
-				await createFile(uid, folderId, `${(job.name || 'sprite').slice(0, 40)}.png`, url, 'image', {
+				await createFile(uid, saveFolderId, `${safeName}.png`, url, 'image', {
 					sourceType: 'generation', prompt: job.description || job.name
 				});
 			} else if (job.frames?.length) {
-				// Save as a single .anim.json file via dedicated endpoint
-				const animName = (job.name || 'animation').slice(0, 40);
+				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
 				const res = await fetch('/api/save-animation', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
 					body: JSON.stringify({
-						name: animName,
+						name: safeName,
 						frames: job.frames,
 						fps: job.fps || 12,
 						prompt: job.description || job.name || ''
@@ -124,28 +147,29 @@
 					const errData = await res.json().catch(() => ({}));
 					throw new Error(errData.error || 'Upload failed');
 				}
-				const { url, frameCount } = await res.json();
-				const fname = `${animName.replace(/[^a-zA-Z0-9_-]/g, '_')}.anim.json`;
-				await createFile(uid, folderId, fname, url, 'animation', {
+				const { url, frameCount, thumbnailUrl } = await res.json();
+				await createFile(uid, saveFolderId, `${safeName}.anim.json`, url, 'animation', {
 					sourceType: 'animation',
 					frameCount,
 					fps: job.fps || 12,
-					animationName: job.name,
-					prompt: job.description || job.name || ''
+					animationName: safeName,
+					prompt: job.description || job.name || '',
+					thumbnailUrl: thumbnailUrl || null
 				});
 			} else if (job.videoUrl) {
-				await createFile(uid, folderId, `${(job.name || 'animation').slice(0, 40)}.mp4`, job.videoUrl, 'video', {
+				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
+				await createFile(uid, saveFolderId, `${safeName}.mp4`, job.videoUrl, 'video', {
 					sourceType: 'animation-video', prompt: job.name
 				});
 			}
 
 			completedJobs.removeJob(job.id);
+			cancelSaveDialog();
 		} catch (err) {
 			console.error('[JobsPanel] Save error:', err);
 			alert('Save failed: ' + err.message);
 		} finally {
 			isSaving = false;
-			savingJobId = null;
 		}
 	}
 
@@ -305,10 +329,65 @@
 	</div>
 </div>
 
+<!-- ── SAVE DIALOG ───────────────────────────────────────── -->
+{#if showSaveDialog}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+		onclick={cancelSaveDialog}
+		onkeydown={(e) => { if (e.key === 'Escape') cancelSaveDialog(); }}
+		tabindex="0" role="dialog">
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="bg-white rounded-xl shadow-2xl w-full max-w-sm p-4 space-y-3" onclick={(e) => e.stopPropagation()}>
+			<h3 class="text-sm font-bold text-gray-800">💾 Save File</h3>
+
+			<!-- Name input -->
+			<div>
+				<label class="block text-[10px] font-medium text-gray-500 mb-1">File name</label>
+				<input
+					type="text"
+					class="w-full px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+					bind:value={saveFileName}
+					placeholder="Enter file name…"
+					onkeydown={(e) => { if (e.key === 'Enter') confirmSave(); }}
+				/>
+			</div>
+
+			<!-- Folder picker -->
+			<div>
+				<label class="block text-[10px] font-medium text-gray-500 mb-1">Save to folder</label>
+				<button
+					class="w-full text-left px-3 py-1.5 text-xs rounded-lg border transition-colors truncate
+						{saveFolderPath
+							? 'bg-blue-50 border-blue-300 text-blue-700 font-medium'
+							: 'bg-gray-50 border-gray-300 text-gray-400 hover:bg-gray-100'}"
+					onclick={() => showFolderPicker = true}
+				>
+					{saveFolderPath || '📁 Choose folder…'}
+				</button>
+			</div>
+
+			<!-- Actions -->
+			<div class="flex justify-end gap-2 pt-1">
+				<button
+					class="px-3 py-1.5 text-xs text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
+					onclick={cancelSaveDialog}
+				>Cancel</button>
+				<button
+					class="px-4 py-1.5 text-xs bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 disabled:bg-gray-400 font-medium transition-colors"
+					onclick={confirmSave}
+					disabled={isSaving || !saveFileName.trim() || !saveFolderId}
+				>
+					{isSaving ? '⏳ Saving…' : '💾 Save'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
 <!-- ── FOLDER PICKER MODAL ────────────────────────────────── -->
 {#if showFolderPicker}
 	<FolderPicker
 		onSelect={onFolderSelect}
-		onClose={() => { showFolderPicker = false; savingJobId = null; }}
+		onClose={() => showFolderPicker = false}
 	/>
 {/if}

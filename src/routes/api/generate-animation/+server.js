@@ -77,62 +77,23 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	// FLF works best with SHORT, focused prompts — the start/end images already
-	// provide all the visual information. Long prompts confuse the model and degrade quality.
-	let enhancedPrompt;
-	if (prompt) {
-		// Strip the giant HOMM3_STYLE preamble if present — extract just the action keywords
-		const actionMatch = prompt.match(/(?:idle|cast|attack|walk|hit|death|breathing|swing|stride|spellcast|damage|fall)/i);
-		const actionWord = actionMatch ? actionMatch[0].toLowerCase() : '';
-		
-		// Keep it short — just the core motion description
-		if (actionWord === 'idle' || prompt.toLowerCase().includes('idle')) {
-			enhancedPrompt = 'subtle idle breathing animation, gentle sway, smooth motion';
-		} else if (actionWord === 'walk' || prompt.toLowerCase().includes('walk')) {
-			enhancedPrompt = 'smooth walking cycle, natural stride, looping motion';
-		} else if (actionWord === 'attack' || prompt.toLowerCase().includes('attack')) {
-			enhancedPrompt = 'attack swing animation, powerful strike motion';
-		} else if (actionWord === 'cast' || prompt.toLowerCase().includes('cast')) {
-			enhancedPrompt = 'spellcasting animation, magical energy, smooth motion';
-		} else if (actionWord === 'hit' || prompt.toLowerCase().includes('damage')) {
-			enhancedPrompt = 'damage reaction, body recoils, quick flinch';
-		} else if (actionWord === 'death' || prompt.toLowerCase().includes('death')) {
-			enhancedPrompt = 'death animation, character collapses';
-		} else {
-			// Custom prompt — trim to essentials, cap length
-			const trimmed = prompt
-				.replace(/Heroes of Might and Magic[^,]*,?/gi, '')
-				.replace(/pixel art style[^,]*,?/gi, '')
-				.replace(/no smoothing[^,]*,?/gi, '')
-				.replace(/no anti-aliasing[^,]*,?/gi, '')
-				.replace(/transparent background[^,]*,?/gi, '')
-				.replace(/isolated character[^,]*,?/gi, '')
-				.replace(/crisp pixels[^,]*,?/gi, '')
-				.replace(/\s{2,}/g, ' ')
-				.trim();
-			enhancedPrompt = trimmed.length > 150 ? trimmed.substring(0, 150) : trimmed;
-			if (!enhancedPrompt) enhancedPrompt = 'smooth animation transition';
-		}
-	} else {
-		enhancedPrompt = 'smooth animation transition';
-	}
+	// Lightning LoRA model — works best with the model's own default prompt "animate".
+	// The start/end images provide all visual context. Complex prompts hurt quality.
+	const enhancedPrompt = (prompt && prompt.length < 80) ? prompt : 'animate';
+	console.log('[FLF] Prompt:', enhancedPrompt);
 
-	console.log('[FLF] Cleaned prompt:', enhancedPrompt);
-
-	// Negative prompt: model's Chinese default + English quality terms + user additions
-	const DEFAULT_FLF_NEGATIVE = '色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝';
-	const ENGLISH_QUALITY_NEG = 'blurry, distorted, morphing, melting, extra limbs, duplicated body parts, low quality, artifacts, jittery, flickering';
+	// Use the model's own default negative prompt (Chinese). Only add user extras if provided.
+	const MODEL_DEFAULT_NEGATIVE = '色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝，';
 	const userNeg = flfOptions.negativePrompt || '';
-	const negParts = [DEFAULT_FLF_NEGATIVE, ENGLISH_QUALITY_NEG];
-	if (userNeg) negParts.push(userNeg);
-	const finalNegativePrompt = negParts.join(', ');
+	const finalNegativePrompt = userNeg ? `${MODEL_DEFAULT_NEGATIVE} ${userNeg}` : MODEL_DEFAULT_NEGATIVE;
 
-	// Resolve FLF-specific parameters — quality-focused defaults
-	const durationSeconds = flfOptions.durationSeconds ?? 3;       // 0.5–10, default 3 (shorter = better per-frame quality)
-	const numInferenceSteps = flfOptions.numInferenceSteps ?? 20;  // 1–30, default 20 (more steps = cleaner)
-	const guidanceScale = flfOptions.guidanceScale ?? 3;           // 0–10, high noise guidance, default 3
-	const guidanceScale2 = flfOptions.guidanceScale2 ?? 3;         // 0–10, low noise guidance, default 3
-	const shift = flfOptions.shift ?? 5;                           // 1–10, scheduler shift, default 5
+	// Resolve FLF-specific parameters — using exact model defaults (matching working examples)
+	// Source: https://replicate.com/lucataco/wan-2.2-first-last-frame schema
+	const durationSeconds = flfOptions.durationSeconds ?? 5;       // model default: 5
+	const numInferenceSteps = flfOptions.numInferenceSteps ?? 8;   // model default: 8
+	const guidanceScale = flfOptions.guidanceScale ?? 1;           // model default: 1
+	const guidanceScale2 = flfOptions.guidanceScale2 ?? 1;         // model default: 1
+	const shift = flfOptions.shift ?? 8;                           // model default: 8
 	const seed = flfOptions.seed;                                  // nullable integer
 
 	console.log('[FLF] Parameters:', { durationSeconds, numInferenceSteps, guidanceScale, guidanceScale2, shift, seed: seed ?? 'random' });

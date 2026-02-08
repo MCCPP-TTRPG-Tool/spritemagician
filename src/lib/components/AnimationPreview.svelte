@@ -7,7 +7,12 @@
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
 	let isLooped = $state(false);
 	let isPlaying = $state(false);
-	let animationFrameId = $state(null);
+
+	// Plain variables (NOT $state) — used only by the rAF loop, no reactivity needed
+	let _rafId = null;
+	let _lastFrameTime = 0;
+	let _playing = false;            // mirror of isPlaying for the rAF closure
+	let _prevFrameCount = 0;         // track frame count changes for isLooped reset
 	
 	// Save frame state
 	let showFolderPicker = $state(false);
@@ -25,9 +30,12 @@
 	
 	projectStore.subscribe(value => {
 		project = value;
-		// Reset loop state when frames change
-		isLooped = false;
-		// Ensure currentFrame is within bounds if frames array changes
+		// Only reset loop flag when frame count actually changes
+		if (value.frames.length !== _prevFrameCount) {
+			isLooped = false;
+			_prevFrameCount = value.frames.length;
+		}
+		// Ensure currentFrame is within bounds
 		const cf = value.currentFrame || 0;
 		if (cf >= value.frames.length && value.frames.length > 0) {
 			setCurrentFrame(value.frames.length - 1);
@@ -37,7 +45,7 @@
 	});
 
 	function togglePlay() {
-		if (isPlaying) {
+		if (_playing) {
 			stop();
 		} else {
 			play();
@@ -46,38 +54,34 @@
 
 	function play() {
 		if (project.frames.length === 0) return;
+		_playing = true;
 		isPlaying = true;
-		animate();
+		_lastFrameTime = performance.now();
+		tick();
 	}
 
 	function stop() {
+		_playing = false;
 		isPlaying = false;
-		if (animationFrameId) {
-			cancelAnimationFrame(animationFrameId);
-			animationFrameId = null;
+		if (_rafId) {
+			cancelAnimationFrame(_rafId);
+			_rafId = null;
 		}
 	}
 
-	function animate() {
-		if (!isPlaying) return;
-		
-		const frameDelay = 1000 / project.fps;
-		const startTime = performance.now();
-		
-		function frame(timestamp) {
-			if (!isPlaying) return;
-			
-			const elapsed = timestamp - startTime;
-			const frameIndex = Math.floor((elapsed / frameDelay) % project.frames.length);
-			
-			if (frameIndex !== getCurrentFrame()) {
-				setCurrentFrame(frameIndex);
+	function tick() {
+		_rafId = requestAnimationFrame((now) => {
+			if (!_playing || project.frames.length === 0) return;
+
+			const delay = 1000 / (project.fps || 12);
+			if (now - _lastFrameTime >= delay) {
+				_lastFrameTime = now - ((now - _lastFrameTime) % delay);
+				const next = (getCurrentFrame() + 1) % project.frames.length;
+				setCurrentFrame(next);
 			}
-			
-			animationFrameId = requestAnimationFrame(frame);
-		}
-		
-		animationFrameId = requestAnimationFrame(frame);
+
+			tick();
+		});
 	}
 
 	function previousFrame() {
@@ -153,6 +157,42 @@
 			frames: newFrames,
 			currentFrame: Math.min(p.currentFrame || 0, newFrames.length - 1)
 		}));
+	}
+
+	let isFlipping = $state(false);
+
+	async function flipAllFramesHorizontal() {
+		if (project.frames.length === 0) return;
+		isFlipping = true;
+		stop();
+
+		try {
+			const flipped = await Promise.all(project.frames.map(dataUrl => flipImage(dataUrl)));
+			projectStore.update(p => ({ ...p, frames: flipped }));
+		} catch (err) {
+			console.error('Flip error:', err);
+			alert('Failed to flip frames: ' + err.message);
+		} finally {
+			isFlipping = false;
+		}
+	}
+
+	function flipImage(dataUrl) {
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => {
+				const canvas = document.createElement('canvas');
+				canvas.width = img.width;
+				canvas.height = img.height;
+				const ctx = canvas.getContext('2d');
+				ctx.translate(canvas.width, 0);
+				ctx.scale(-1, 1);
+				ctx.drawImage(img, 0, 0);
+				resolve(canvas.toDataURL('image/png'));
+			};
+			img.onerror = () => reject(new Error('Failed to load image for flipping'));
+			img.src = dataUrl;
+		});
 	}
 
 	let isRemovingBackground = $state(false);
@@ -314,8 +354,10 @@
 
 	$effect(() => {
 		return () => {
-			if (animationFrameId) {
-				cancelAnimationFrame(animationFrameId);
+			_playing = false;
+			if (_rafId) {
+				cancelAnimationFrame(_rafId);
+				_rafId = null;
 			}
 		};
 	});
@@ -337,7 +379,7 @@
 				class:max-h-[50%]={previewSize === 'md'}
 				class:max-h-full={previewSize === 'lg'}
 				class:max-w-full={true}
-				style="image-rendering: pixelated;"
+				style="image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges;"
 			/>
 		{:else}
 			<p class="text-gray-400 text-xs">No frames</p>
@@ -411,6 +453,13 @@
 				>{isLooped ? '🔄 Looped' : '🔄 Loop'}</button>
 
 				<button
+					class="h-7 px-2.5 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:opacity-30"
+					onclick={flipAllFramesHorizontal}
+					disabled={isFlipping}
+					title="Flip all frames horizontally (mirror)"
+				>{isFlipping ? '⏳' : '↔️ Flip'}</button>
+
+				<button
 					class="h-7 px-2.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
 					onclick={saveCurrentFrame}
 					disabled={isSavingFrame}
@@ -442,29 +491,27 @@
 					disabled={isRemovingBackground}
 					title="Remove background (all {project.frames.length} frames)"
 				>{isRemovingBackground ? '⏳' : '✨ All'}</button>
-			</div>
 
-			<!-- Row 4: Frame reduction -->
-			<div class="flex items-center justify-center gap-1.5 flex-wrap">
-				<span class="text-[10px] text-gray-400 font-medium">Reduce:</span>
+				<div class="w-px h-5 bg-gray-300 mx-0.5"></div>
+
 				<button
 					class="h-7 px-2.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-30"
 					onclick={() => removeEveryNthFrame(2)}
 					disabled={project.frames.length <= 2}
 					title="Remove every 2nd frame (keep {Math.ceil(project.frames.length / 2)})"
-				>½ frames</button>
+				>½</button>
 				<button
 					class="h-7 px-2.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-30"
 					onclick={() => removeEveryNthFrame(3)}
 					disabled={project.frames.length <= 3}
 					title="Remove every 3rd frame (keep {project.frames.length - Math.floor(project.frames.length / 3)})"
-				>⅔ frames</button>
+				>⅔</button>
 				<button
 					class="h-7 px-2.5 text-xs bg-orange-500 text-white rounded hover:bg-orange-600 disabled:opacity-30"
 					onclick={() => removeEveryNthFrame(4)}
 					disabled={project.frames.length <= 4}
 					title="Remove every 4th frame (keep {project.frames.length - Math.floor(project.frames.length / 4)})"
-				>¾ frames</button>
+				>¾</button>
 			</div>
 		{/if}
 	</div>

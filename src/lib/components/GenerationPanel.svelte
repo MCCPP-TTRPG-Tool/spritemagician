@@ -39,11 +39,13 @@
 	let negativePrompt = $state(''); // Additional negative prompt
 
 	// FLF-specific settings (for interpolation mode) — quality-focused defaults
-	let flfDurationSeconds = $state(3);     // 0.5–10, default 3 (shorter = better per-frame quality)
-	let flfInferenceSteps = $state(20);     // 1–30, default 20 (more steps = cleaner output)
-	let flfGuidanceScale = $state(3);       // 0–10, high noise guidance, default 3
-	let flfGuidanceScale2 = $state(3);      // 0–10, low noise guidance, default 3
-	let flfShift = $state(5);               // 1–10, scheduler shift, default 5
+	// These MUST match the server-side defaults in generate-animation/+server.js
+	// Source: lucataco/wan-2.2-first-last-frame model schema (Lightning LoRA)
+	let flfDurationSeconds = $state(5);     // model default: 5
+	let flfInferenceSteps = $state(8);      // model default: 8 (Lightning — low steps!)
+	let flfGuidanceScale = $state(1);       // model default: 1 (distilled — low guidance!)
+	let flfGuidanceScale2 = $state(1);      // model default: 1 (distilled — low guidance!)
+	let flfShift = $state(8);               // model default: 8
 	let flfSeed = $state(null);             // null = random
 	let flfNegativePrompt = $state('');     // user additions to default Chinese neg prompt
 	
@@ -124,7 +126,7 @@
 	
 	// Processing options
 	let removeBackground = $state(false); // Disabled by default for faster testing
-	let pixelateOutput = $state(true); // Force pixel art look
+	let pixelateOutput = $state(false); // Disabled by default - only enable if you want pixelation effect
 	let pixelSize = $state(2); // Size of each "pixel" (2-8)
 	let colorLevels = $state(64); // Color levels (8, 16, 32)
 
@@ -244,8 +246,8 @@
 						finalFrames = transparentFrames;
 					}
 					
-					// Step 4: Pixelate frames (if enabled) - force pixel art look
-					if (pixelateOutput && finalFrames.length > 0) {
+				// Step 4: Pixelate frames (if enabled) - force pixel art look
+				if (pixelateOutput && finalFrames.length > 0) {
 						const totalFrames = finalFrames.length;
 						progress = { ...progress, message: `Pixelating frames (0/${totalFrames})...` };
 						
@@ -723,7 +725,7 @@
 				<!-- Reset FLF to Defaults -->
 				<button
 					class="w-full px-2 py-1 text-[10px] bg-gray-200 text-gray-600 rounded hover:bg-gray-300"
-					onclick={() => { flfDurationSeconds = 3; flfInferenceSteps = 20; flfGuidanceScale = 3; flfGuidanceScale2 = 3; flfShift = 5; flfSeed = null; flfNegativePrompt = ''; }}
+					onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 8; flfGuidanceScale = 1; flfGuidanceScale2 = 1; flfShift = 8; flfSeed = null; flfNegativePrompt = ''; }}
 				>
 					↺ Reset FLF to Defaults
 				</button>
@@ -733,19 +735,24 @@
 					<span class="text-[10px] text-gray-500 mr-1">Presets:</span>
 					<button
 						class="px-2 py-0.5 text-[10px] bg-green-100 text-green-700 rounded hover:bg-green-200"
-						onclick={() => { flfDurationSeconds = 2; flfInferenceSteps = 10; flfGuidanceScale = 2; flfGuidanceScale2 = 2; flfShift = 5; }}
-						title="Quick generation, fewer frames"
+					onclick={() => { flfDurationSeconds = 2; flfInferenceSteps = 8; flfGuidanceScale = 1; flfGuidanceScale2 = 1; flfShift = 8; }}
+					title="Quick generation, fewer frames"
 					>⚡ Fast</button>
 					<button
 						class="px-2 py-0.5 text-[10px] bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
-						onclick={() => { flfDurationSeconds = 3; flfInferenceSteps = 20; flfGuidanceScale = 3; flfGuidanceScale2 = 3; flfShift = 5; }}
-						title="Default quality — good balance"
+					onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 8; flfGuidanceScale = 1; flfGuidanceScale2 = 1; flfShift = 8; }}
+					title="Model defaults — recommended starting point"
 					>⚖️ Balanced</button>
 					<button
 						class="px-2 py-0.5 text-[10px] bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
-						onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 30; flfGuidanceScale = 5; flfGuidanceScale2 = 5; flfShift = 5; }}
-						title="Best quality, slower & more frames"
+					onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 12; flfGuidanceScale = 2; flfGuidanceScale2 = 2; flfShift = 8; }}
+					title="Slightly more refined, a bit slower"
 					>💎 Quality</button>
+					<button
+						class="px-2 py-0.5 text-[10px] bg-amber-100 text-amber-700 rounded hover:bg-amber-200"
+					onclick={() => { flfDurationSeconds = 5; flfInferenceSteps = 16; flfGuidanceScale = 3; flfGuidanceScale2 = 3; flfShift = 8; }}
+					title="Maximum steps — slowest, may improve detail"
+					>👑 Max</button>
 				</div>
 
 			{:else}

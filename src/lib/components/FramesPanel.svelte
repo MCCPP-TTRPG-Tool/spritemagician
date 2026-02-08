@@ -95,7 +95,7 @@
 						role="listitem"
 					>
 						<div class="aspect-square flex items-center justify-center overflow-hidden rounded-t-md">
-							<img src={frame} alt="Frame {index + 1}" class="w-full h-full object-contain" />
+							<img src={frame} alt="Frame {index + 1}" class="w-full h-full object-contain" style="image-rendering: -webkit-optimize-contrast; image-rendering: crisp-edges;" />
 						</div>
 						
 						<!-- Frame number badge -->

@@ -353,7 +353,9 @@
 						<div class="aspect-square flex items-center justify-center bg-gray-50 rounded-t-md overflow-hidden">
 							{#if item.isFolder}
 								<span class="text-5xl select-none">📁</span>
-							{:else if item.url}
+							{:else if item.thumbnailUrl}
+								<img src={item.thumbnailUrl} alt={item.name} class="w-full h-full object-contain" loading="lazy" />
+							{:else if item.url && item.fileType !== 'animation'}
 								<img src={item.url} alt={item.name} class="w-full h-full object-contain" loading="lazy" />
 							{:else}
 								<span class="text-4xl select-none">{icon(item)}</span>
