@@ -36,15 +36,17 @@ export async function POST({ request }) {
 		
 		console.log(`[extract-frames] Actual size: ${(actualSize / 1024 / 1024).toFixed(2)} MB`);
 		
-		// If video is small enough, return as data URL
+		// If video/image is small enough, return as data URL
 		if (actualSize <= MAX_BASE64_SIZE) {
+			const mime = contentType || 'video/mp4';
 			const base64 = Buffer.from(buffer).toString('base64');
-			const dataUrl = `data:${contentType || 'video/mp4'};base64,${base64}`;
+			const dataUrl = `data:${mime};base64,${base64}`;
 			
 			return json({
 				videoDataUrl: dataUrl,
+				contentType: mime,
 				size: actualSize,
-				message: 'Video fetched - extract frames client-side'
+				message: 'Media fetched - extract frames client-side'
 			});
 		}
 		

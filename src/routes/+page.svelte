@@ -8,6 +8,7 @@
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
 	import { authStore } from '$lib/stores/auth.js';
+	import { auth } from '$lib/firebase/client.js';
 	import { goto } from '$app/navigation';
 	
 	let activeTab = $state('create'); // 'create', 'wizard', 'pose', or 'animation'
@@ -15,6 +16,9 @@
 
 	async function logout() {
 		try {
+			// Sign out client-side Firebase (clears onAuthStateChanged → userFiles store)
+			await auth.signOut();
+			// Clear server-side session cookie
 			await fetch('/api/session', { method: 'DELETE' });
 			goto('/login', { replaceState: true, invalidateAll: true });
 		} catch (err) {
@@ -122,8 +126,8 @@
 			</div>
 		</div>
 
-		<!-- Middle Column: Frames / Poses / Animations -->
-		<div class="bg-white rounded shadow p-3 overflow-hidden">
+		<!-- Middle Column: File Tree / Jobs / Frames -->
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
 			<CenterPanel />
 		</div>
 

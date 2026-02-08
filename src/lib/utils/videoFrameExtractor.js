@@ -1,6 +1,6 @@
 /**
- * Extract frames from a video or GIF URL
- * Works in browser using canvas
+ * Extract frames from a video, GIF, or animated WebP URL
+ * Works in browser using canvas and video/image elements
  */
 
 /**
@@ -39,6 +39,57 @@ export async function extractFramesFromGif(gifUrl, maxFrames = 16) {
 			clearTimeout(timeout);
 			reject(error);
 		}
+	});
+}
+
+/**
+ * Extract frames from an animated WebP URL.
+ * 
+ * Strategy:
+ * 1. Try loading as a <video> (Chrome/Edge support WebP in <video> natively)
+ * 2. Fall back to loading as <img> and capturing the visible frame
+ * 3. If both fail, route through server proxy
+ */
+export async function extractFramesFromWebP(webpUrl, numFrames = 8) {
+	// First try the video element path — Chrome can seek through animated WebP
+	try {
+		return await extractFramesFromVideo(webpUrl, numFrames);
+	} catch {
+		console.log('[WebP] Video path failed, trying image capture...');
+	}
+
+	// Fallback: load as image (only captures current/first frame)
+	return new Promise((resolve, reject) => {
+		const timeout = setTimeout(() => reject(new Error('WebP extraction timed out')), 30000);
+
+		const img = new Image();
+		img.crossOrigin = 'anonymous';
+
+		img.onload = () => {
+			clearTimeout(timeout);
+			try {
+				const canvas = document.createElement('canvas');
+				canvas.width = img.naturalWidth || img.width;
+				canvas.height = img.naturalHeight || img.height;
+				const ctx = canvas.getContext('2d');
+				ctx.drawImage(img, 0, 0);
+
+				const dataUrl = canvas.toDataURL('image/png');
+				// Duplicate the captured frame to fill the expected count
+				const frames = Array(numFrames).fill(dataUrl);
+				console.log(`[WebP] Captured first frame, duplicated to ${numFrames} frames`);
+				resolve(frames);
+			} catch (e) {
+				reject(new Error('CORS blocked WebP frame capture'));
+			}
+		};
+
+		img.onerror = () => {
+			clearTimeout(timeout);
+			reject(new Error('Failed to load animated WebP'));
+		};
+
+		img.src = webpUrl;
 	});
 }
 
@@ -122,10 +173,11 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 
 /**
  * Server-side frame extraction via API
- * Bypasses CORS by fetching video through server, then extracting client-side
+ * Bypasses CORS by fetching media through server, then extracting client-side.
+ * Handles video (mp4/webm), animated WebP, and GIF via content-type routing.
  */
 export async function extractFramesViaServer(videoUrl, numFrames = 8) {
-	console.log('Using server-side proxy for video...');
+	console.log('Using server-side proxy for media...');
 	
 	const response = await fetch('/api/extract-frames', {
 		method: 'POST',
@@ -141,12 +193,20 @@ export async function extractFramesViaServer(videoUrl, numFrames = 8) {
 	const data = await response.json();
 	
 	if (data.videoDataUrl) {
-		// Extract frames from the proxied data URL (no CORS issues)
-		console.log('Got proxied video, extracting frames...');
-		return await extractFramesFromVideo(data.videoDataUrl, numFrames);
+		const ct = (data.contentType || '').toLowerCase();
+		console.log(`Got proxied media (${ct}), extracting frames...`);
+
+		// Route by content type returned from the server
+		if (ct.includes('webp')) {
+			return await extractFramesFromWebP(data.videoDataUrl, numFrames);
+		} else if (ct.includes('gif')) {
+			return await extractFramesFromGif(data.videoDataUrl, numFrames);
+		} else {
+			return await extractFramesFromVideo(data.videoDataUrl, numFrames);
+		}
 	}
 	
-	throw new Error('No video data returned from server');
+	throw new Error('No media data returned from server');
 }
 
 /**
@@ -169,16 +229,19 @@ export async function extractFrames(url, numFrames = 8) {
 	
 	// Determine type
 	const isGif = lowerUrl.includes('.gif');
+	const isWebP = lowerUrl.includes('.webp');
 	const isVideo = lowerUrl.includes('.mp4') || lowerUrl.includes('.webm') || lowerUrl.includes('.mov') || lowerUrl.includes('replicate.delivery');
 	
 	// Try client-side first
 	try {
 		if (isGif) {
 			return await extractFramesFromGif(videoUrl, numFrames);
+		} else if (isWebP) {
+			return await extractFramesFromWebP(videoUrl, numFrames);
 		} else if (isVideo) {
 			return await extractFramesFromVideo(videoUrl, numFrames);
 		} else {
-			// Try video first
+			// Unknown format — try video first
 			return await extractFramesFromVideo(videoUrl, numFrames);
 		}
 	} catch (clientError) {

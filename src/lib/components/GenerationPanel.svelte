@@ -562,7 +562,7 @@
 		</div>
 	{/if}
 
-	<!-- Model Selection - Compact (disabled during interpolation since fal.ai is used) -->
+	<!-- Model Selection - Compact (disabled during interpolation) -->
 	<div class="flex flex-wrap gap-1">
 		{#each videoModels as model}
 			<button
@@ -570,7 +570,7 @@
 				class="px-2 py-0.5 text-[10px] border rounded transition-colors 
 					{useInterpolation ? 'opacity-40 cursor-not-allowed border-gray-200' : selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
 				onclick={() => { if (!useInterpolation) selectedModel = model.id; }}
-				title={useInterpolation ? 'Interpolation uses RunPod FLF2V or fal.ai FLF2V' : model.quality}
+				title={useInterpolation ? 'Interpolation uses Replicate WAN 2.2 FLF' : model.quality}
 				disabled={useInterpolation}
 			>
 				{model.id === 'wan22' ? '💰Wan' : model.id === 'ltxv' ? 'LTX' : model.id === 'hailuo' ? 'Hailuo' : model.id === 'live2d' ? 'Live2D' : model.id === 'svd' ? 'SVD💸' : model.name}
@@ -581,7 +581,7 @@
 	<!-- Generate Button -->
 	{#if useInterpolation}
 		<p class="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1 rounded">
-			⚡ Will use <strong>RunPod Serverless WAN 2.2 FLF2V</strong> (if configured) or <strong>fal.ai FLF2V</strong> — First/Last Frame to Video
+			⚡ Will use <strong>Replicate WAN 2.2 First-Last-Frame</strong> — same API key as I2V
 		</p>
 	{/if}
 	<button

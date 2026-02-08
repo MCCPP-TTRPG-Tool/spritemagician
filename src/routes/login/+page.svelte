@@ -22,16 +22,18 @@
 				body: JSON.stringify({ idToken })
 			});
 
-			if (!response.ok) {
-				const data = await response.json();
-				throw new Error(data.error || 'Failed to create session');
-			}
+		if (!response.ok) {
+			const data = await response.json();
+			throw new Error(data.error || 'Failed to create session');
+		}
 
-			// 3. Sign out of client-side Firebase (session cookie handles auth now)
-			await auth.signOut();
+		// 3. Keep client-side Firebase auth signed in — the userFiles store
+		//    and Firestore security rules rely on onAuthStateChanged to get
+		//    the uid and auth token.  The session cookie handles server-side
+		//    auth (API routes, page loads) in parallel.
 
-			// 4. Redirect to app
-			goto('/', { replaceState: true, invalidateAll: true });
+		// 4. Redirect to app
+		goto('/', { replaceState: true, invalidateAll: true });
 		} catch (err) {
 			console.error('Sign-in error:', err);
 
