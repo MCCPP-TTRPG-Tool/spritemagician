@@ -20,59 +20,8 @@
 			activeTab = 'frames';
 		});
 
-		// Auto-save a sprite into the Firebase file tree
-		window.addEventListener('autoSaveSprite', async (e) => {
-			const { image, description, type } = e.detail || {};
-			if (!image) return;
-			try {
-				const uid = userFiles.getUid();
-				if (!uid) { console.warn('[CenterPanel] No UID – cannot auto-save'); return; }
-
-				// Upload via our existing endpoint
-				const res = await fetch('/api/upload-file', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ imageData: image, filename: `${(description || 'sprite').slice(0, 30)}.png`, folder: 'root' })
-				});
-				if (!res.ok) throw new Error((await res.json()).error || 'Upload failed');
-				const { url } = await res.json();
-
-				// Record in Firestore under the current folder (or root)
-				const state = /** @type {any} */ (null);
-				// We don't have direct access to the store value here, so save to root
-				await createFile(uid, null, `${(description || 'sprite').slice(0, 30)}.png`, url, 'image', {
-					sourceType: 'generation', prompt: description, assetType: type
-				});
-				console.log('[CenterPanel] Auto-saved sprite to Firebase');
-			} catch (err) {
-				console.error('[CenterPanel] Auto-save error:', err);
-			}
-		});
-
-		// Legacy: saveSpriteToGallery → also save to Firebase
-		window.addEventListener('saveSpriteToGallery', async (e) => {
-			const { image, description, type, style } = e.detail || {};
-			if (!image) return;
-			try {
-				const uid = userFiles.getUid();
-				if (!uid) return;
-
-				const res = await fetch('/api/upload-file', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ imageData: image, filename: `${(description || 'sprite').slice(0, 30)}.png`, folder: 'root' })
-				});
-				if (!res.ok) throw new Error((await res.json()).error || 'Upload failed');
-				const { url } = await res.json();
-
-				await createFile(uid, null, `${(description || 'sprite').slice(0, 30)}.png`, url, 'image', {
-					sourceType: 'generation', prompt: description, assetType: type, style
-				});
-				activeTab = 'files';
-			} catch (err) {
-				console.error('[CenterPanel] Save sprite error:', err);
-			}
-		});
+		// Auto-save disabled - users should explicitly save from Jobs panel
+		// Removed autoSaveSprite and saveSpriteToGallery listeners to prevent unwanted saves to root folder
 	}
 </script>
 

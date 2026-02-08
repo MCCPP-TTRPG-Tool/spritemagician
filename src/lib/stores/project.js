@@ -10,7 +10,13 @@ export const projectStore = writable({
 	frameCount: 8,
 	duration: null, // in seconds
 	projectName: 'Untitled Project',
-	lastSaved: null
+	lastSaved: null,
+	// Set by FileTree to load an image into a standalone panel + switch tab
+	editImage: null,
+	styleImage: null,
+	// Pre-selected save folder for animations
+	animSaveFolderId: null,
+	animSaveFolderPath: null
 });
 
 export function addFrame(frameData) {

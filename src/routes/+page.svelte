@@ -1,18 +1,69 @@
 <script>
-	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
-	import SpriteGenerator from '$lib/components/SpriteGenerator.svelte';
-	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
-	import PosePanel from '$lib/components/PosePanel.svelte';
+	import AssetWizard from '$lib/components/AssetWizard.svelte';
 	import EditPanel from '$lib/components/EditPanel.svelte';
+	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
+	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
 	import { authStore } from '$lib/stores/auth.js';
 	import { auth } from '$lib/firebase/client.js';
+	import { projectStore } from '$lib/stores/project.js';
 	import { goto } from '$app/navigation';
 	
-	let activeTab = $state('create'); // 'create', 'wizard', 'pose', or 'animation'
+	let activeTab = $state('wizard'); // 'wizard' | 'edit' | 'style' | 'animate'
 	let showUserMenu = $state(false);
+
+	// Images passed from FileTree → store → here → component props
+	let editImage = $state(null);
+	let styleImage = $state(null);
+
+	// React to FileTree setting editImage in the store
+	$effect(() => {
+		const img = $projectStore.editImage;
+		if (img) {
+			editImage = img;
+			activeTab = 'edit';
+			// Clear the store value immediately to allow re-triggering with same image
+			projectStore.update(s => ({ ...s, editImage: null }));
+		}
+	});
+
+	// React to FileTree setting styleImage in the store
+	$effect(() => {
+		const img = $projectStore.styleImage;
+		if (img) {
+			styleImage = img;
+			activeTab = 'style';
+			// Clear the store value immediately to allow re-triggering with same image
+			projectStore.update(s => ({ ...s, styleImage: null }));
+		}
+	});
+
+	// Track previous frame values to detect when they're newly set (not just when they exist)
+	let prevFirstFrame = $state(null);
+	let prevLastFrame = $state(null);
+
+	// React to FileTree setting firstFrame - switch to animate tab only when newly set from file tree
+	// This prevents switching when frames already exist or when set internally by components
+	$effect(() => {
+		const frame = $projectStore.firstFrame;
+		// Only switch if frame changed from null/undefined to a value AND we're not on edit/style tabs
+		if (frame && !prevFirstFrame && activeTab !== 'style' && activeTab !== 'edit') {
+			activeTab = 'animate';
+		}
+		prevFirstFrame = frame;
+	});
+
+	// React to FileTree setting lastFrame - switch to animate tab only when newly set from file tree
+	$effect(() => {
+		const frame = $projectStore.lastFrame;
+		// Only switch if frame changed from null/undefined to a value AND we're not on edit/style tabs
+		if (frame && !prevLastFrame && activeTab !== 'style' && activeTab !== 'edit') {
+			activeTab = 'animate';
+		}
+		prevLastFrame = frame;
+	});
 
 	async function logout() {
 		try {
@@ -78,25 +129,13 @@
 	<div class="flex-1 grid grid-cols-3 gap-2 p-2 overflow-hidden">
 		<!-- Left Column: Create / Animate -->
 		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
-				<div class="flex border-b">
-				<button
-					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'create' ? 'bg-green-50 text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-50'}"
-					onclick={() => activeTab = 'create'}
-				>
-					✨ Create
-				</button>
-				<button
-					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'wizard' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
-					onclick={() => activeTab = 'wizard'}
-				>
-					🧙 Wizard
-				</button>
-				<button
-					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'pose' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
-					onclick={() => activeTab = 'pose'}
-				>
-					🦴 Pose
-				</button>
+			<div class="flex border-b">
+			<button
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'wizard' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'wizard'}
+			>
+				🪄 Wizard
+			</button>
 			<button
 				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'edit' ? 'bg-teal-50 text-teal-600 border-b-2 border-teal-600' : 'text-gray-600 hover:bg-gray-50'}"
 				onclick={() => activeTab = 'edit'}
@@ -104,26 +143,30 @@
 				✏️ Edit
 			</button>
 			<button
-				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animation' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
-				onclick={() => activeTab = 'animation'}
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'style' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'style'}
+			>
+				✨ Style
+			</button>
+			<button
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animate' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'animate'}
 			>
 				🎬 Animate
 			</button>
-				</div>
-				
-				<div class="p-3 flex-1 overflow-y-auto">
-			{#if activeTab === 'create'}
-				<SpriteGenerator />
-			{:else if activeTab === 'wizard'}
-				<CharacterWizard />
-			{:else if activeTab === 'pose'}
-				<PosePanel />
-			{:else if activeTab === 'edit'}
-				<EditPanel />
-			{:else}
-				<GenerationPanel />
-			{/if}
 			</div>
+			
+			<div class="p-3 flex-1 overflow-y-auto">
+		{#if activeTab === 'wizard'}
+			<AssetWizard />
+		{:else if activeTab === 'edit'}
+			<EditPanel initialImage={editImage} />
+		{:else if activeTab === 'style'}
+			<CharacterWizard initialReferenceImage={styleImage} />
+		{:else if activeTab === 'animate'}
+			<GenerationPanel />
+		{/if}
+		</div>
 		</div>
 
 		<!-- Middle Column: File Tree / Jobs / Frames -->

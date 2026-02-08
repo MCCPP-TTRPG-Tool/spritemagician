@@ -29,8 +29,14 @@
 	// Animation settings - lower motion for 2D sprites
 	let duration = $state(5); // seconds (2-10, Wan 2.2 max ~121 frames)
 	let motionAmount = $state(50); // 1-255, lower = subtle motion for sprites
-	let shouldLoop = $state(true); // Loop animation back to first frame
+	let shouldLoop = $state(false); // Loop animation back to first frame
 	let selectedPose = $state('idle'); // Pose preset
+	
+	// Advanced settings for better accuracy and loops
+	let showAdvanced = $state(false);
+	let guidanceScale = $state(null); // null = use model default (typically 7.5)
+	let seed = $state(null); // null = random seed
+	let negativePrompt = $state(''); // Additional negative prompt
 	
 	// Interpolation mode (start → end frame)
 	let useInterpolation = $state(false);
@@ -38,11 +44,22 @@
 	
 	function handleEndFrameUpload(dataUrl) {
 		endFrame = dataUrl;
+		projectStore.update(p => ({ ...p, lastFrame: dataUrl }));
 	}
 	
 	function clearEndFrame() {
 		endFrame = null;
+		projectStore.update(p => ({ ...p, lastFrame: null }));
+		useInterpolation = false; // Disable interpolation when end frame is cleared
 	}
+	
+	// Sync endFrame with projectStore.lastFrame so file tree selection works
+	$effect(() => {
+		if (project.lastFrame && project.lastFrame !== endFrame) {
+			endFrame = project.lastFrame;
+			useInterpolation = true; // Auto-enable interpolation when end frame is set from file tree
+		}
+	});
 	
 	// HoMM3 pixel art style animation prompts
 	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
@@ -99,8 +116,8 @@
 	// Processing options
 	let removeBackground = $state(false); // Disabled by default for faster testing
 	let pixelateOutput = $state(true); // Force pixel art look
-	let pixelSize = $state(4); // Size of each "pixel" (2-8)
-	let colorLevels = $state(16); // Color levels (8, 16, 32)
+	let pixelSize = $state(2); // Size of each "pixel" (2-8)
+	let colorLevels = $state(64); // Color levels (8, 16, 32)
 
 	function handleFirstFrameUpload(dataUrl) {
 		projectStore.update(p => ({ ...p, firstFrame: dataUrl }));
@@ -577,6 +594,99 @@
 			</button>
 		{/each}
 	</div>
+
+	<!-- Advanced Settings Toggle -->
+	<button
+		class="w-full px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300 transition-colors"
+		onclick={() => showAdvanced = !showAdvanced}
+	>
+		{showAdvanced ? '▼' : '▶'} Advanced Settings {showAdvanced ? '(Hide)' : '(Show)'}
+	</button>
+
+	<!-- Advanced Settings Panel -->
+	{#if showAdvanced}
+		<div class="space-y-2 p-2 bg-gray-50 border border-gray-200 rounded text-xs">
+			<p class="text-[10px] text-gray-500 font-medium mb-2">Fine-tune generation for better accuracy and loops</p>
+			
+			<!-- Guidance Scale -->
+			<div>
+				<label class="block text-[10px] text-gray-600 mb-1">
+					Guidance Scale: {guidanceScale || 'Auto (7.5)'}
+					<span class="text-gray-400">(Higher = more prompt adherence, 3-15)</span>
+				</label>
+				<div class="flex items-center gap-2">
+					<input 
+						type="range" 
+						min="3" 
+						max="15" 
+						step="0.5" 
+						bind:value={guidanceScale}
+						class="flex-1 h-1"
+					/>
+					<button
+						class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
+						onclick={() => guidanceScale = null}
+						title="Reset to model default"
+					>
+						Reset
+					</button>
+				</div>
+			</div>
+
+			<!-- Seed -->
+			<div>
+				<label class="block text-[10px] text-gray-600 mb-1">
+					Seed: {seed || 'Random'}
+					<span class="text-gray-400">(Same seed = reproducible results)</span>
+				</label>
+				<div class="flex items-center gap-2">
+					<input
+						type="number"
+						bind:value={seed}
+						placeholder="Random"
+						class="flex-1 px-2 py-1 text-xs border rounded"
+					/>
+					<button
+						class="px-2 py-0.5 text-[10px] bg-gray-200 rounded hover:bg-gray-300"
+						onclick={() => seed = null}
+						title="Use random seed"
+					>
+						Random
+					</button>
+				</div>
+			</div>
+
+			<!-- Negative Prompt -->
+			<div>
+				<label class="block text-[10px] text-gray-600 mb-1">
+					Negative Prompt
+					<span class="text-gray-400">(Things to avoid - added to default negatives)</span>
+				</label>
+				<textarea
+					bind:value={negativePrompt}
+					placeholder="e.g., jittery, flickering, color shift..."
+					class="w-full px-2 py-1 text-xs border rounded resize-none"
+					rows="2"
+				></textarea>
+				<p class="text-[9px] text-gray-400 mt-0.5">
+					Default negatives: blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts
+				</p>
+			</div>
+
+			<!-- Loop Tips -->
+			{#if shouldLoop}
+				<div class="p-2 bg-blue-50 border border-blue-200 rounded">
+					<p class="text-[10px] text-blue-800 font-medium mb-1">💡 Loop Tips:</p>
+					<ul class="text-[9px] text-blue-700 space-y-0.5 list-disc list-inside">
+						<li>Lower motion amount (30-60) for smoother loops</li>
+						<li>Use seed for reproducible loop attempts</li>
+						<li>Higher guidance (8-12) helps maintain consistency</li>
+						<li>Ping-pong loop button creates seamless back-and-forth</li>
+					</ul>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Generate Button -->
 	{#if useInterpolation}

@@ -22,6 +22,7 @@
 	let selectedId    = $state(null);
 	let previewItem   = $state(null);
 	let uploading     = $state(false);
+	let menuItemId    = $state(null);     // which item's dropdown is open
 	let fileInputEl;
 
 	const folders = $derived(fs.items.filter(i => i.isFolder));
@@ -136,9 +137,33 @@
 		}
 	}
 
-	function useAsReference(item) {
+	function useAsStartFrame(item) {
 		if (!item.url) return;
 		projectStore.update(p => ({ ...p, firstFrame: item.url }));
+		menuItemId = null;
+	}
+
+	function useAsEndFrame(item) {
+		if (!item.url) return;
+		projectStore.update(p => ({ ...p, lastFrame: item.url }));
+		menuItemId = null;
+	}
+
+	function loadIntoEdit(item) {
+		if (!item.url) return;
+		projectStore.update(p => ({ ...p, editImage: item.url }));
+		menuItemId = null;
+	}
+
+	function loadIntoStyle(item) {
+		if (!item.url) return;
+		projectStore.update(p => ({ ...p, styleImage: item.url }));
+		menuItemId = null;
+	}
+
+	function toggleMenu(itemId, e) {
+		e.stopPropagation();
+		menuItemId = menuItemId === itemId ? null : itemId;
 	}
 
 	// ── helpers ─────────────────────────────────────────────
@@ -175,6 +200,10 @@
 	}
 </script>
 
+<!-- Close dropdown when clicking anywhere -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<svelte:window onclick={() => { menuItemId = null; }} />
+
 <!-- hidden file input -->
 <input
 	bind:this={fileInputEl}
@@ -187,66 +216,63 @@
 
 <div class="flex flex-col h-full text-xs">
 
-	<!-- ═══ BREADCRUMB BAR ═══ -->
-	<div class="flex items-center gap-1 px-2 py-1.5 bg-gray-100 border-b rounded-t text-[11px] flex-shrink-0 min-h-[32px]">
-		<!-- Back -->
+	<!-- ═══ PATH BAR ═══ -->
+	<div class="flex items-center gap-0.5 px-2 py-1.5 bg-white border-b flex-shrink-0 min-h-[34px]">
+		<!-- Back / Up -->
 		<button
-			class="p-1 rounded hover:bg-gray-200 disabled:opacity-30"
+			class="p-1 rounded hover:bg-gray-100 disabled:opacity-25 text-gray-500"
 			disabled={fs.breadcrumbs.length === 0}
 			onclick={() => userFiles.goBack()}
 			title="Back"
 		>←</button>
-		<!-- Up -->
 		<button
-			class="p-1 rounded hover:bg-gray-200 disabled:opacity-30"
+			class="p-1 rounded hover:bg-gray-100 disabled:opacity-25 text-gray-500"
 			disabled={fs.breadcrumbs.length === 0}
 			onclick={() => userFiles.goToRoot()}
 			title="Root"
 		>⬆</button>
 
-		<span class="mx-1 text-gray-300">|</span>
-
-		<!-- Crumbs -->
-		<button class="px-1 py-0.5 rounded hover:bg-gray-200 font-medium text-blue-600" onclick={() => userFiles.goToBreadcrumb(-1)}>
-			📁 My Files
-		</button>
-		{#each fs.breadcrumbs as crumb, i}
-			<span class="text-gray-400">&gt;</span>
-			<button class="px-1 py-0.5 rounded hover:bg-gray-200 font-medium text-blue-600 truncate max-w-[100px]"
-				onclick={() => userFiles.goToBreadcrumb(i)}
-			>{crumb.name}</button>
-		{/each}
-
-		<div class="flex-1"></div>
+		<!-- Path -->
+		<div class="flex-1 flex items-center gap-0.5 min-w-0 ml-1 px-2 py-1 bg-gray-50 rounded border text-[11px] overflow-x-auto">
+			<button class="shrink-0 text-gray-500 hover:text-blue-600 hover:underline" onclick={() => userFiles.goToBreadcrumb(-1)}>
+				📁
+			</button>
+			{#if fs.breadcrumbs.length > 3}
+				<span class="text-gray-300 shrink-0">/</span>
+				<button class="text-gray-400 hover:text-blue-600 shrink-0" onclick={() => userFiles.goToBreadcrumb(0)} title={fs.breadcrumbs[0].name}>
+					…
+				</button>
+			{/if}
+			{#each fs.breadcrumbs.length > 3 ? fs.breadcrumbs.slice(-3) : fs.breadcrumbs as crumb, i}
+				{@const realIdx = fs.breadcrumbs.length > 3 ? fs.breadcrumbs.length - 3 + i : i}
+				<span class="text-gray-300 shrink-0">/</span>
+				<button
+					class="shrink-0 font-medium hover:text-blue-600 hover:underline
+						{realIdx === fs.breadcrumbs.length - 1 ? 'text-gray-800' : 'text-gray-500'}"
+					onclick={() => userFiles.goToBreadcrumb(realIdx)}
+				>{crumb.name}</button>
+			{/each}
+		</div>
 
 		<!-- View toggle -->
-		<button class="p-1 rounded {viewMode === 'grid' ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-200'}"
-			onclick={() => viewMode = 'grid'} title="Grid view">⊞</button>
-		<button class="p-1 rounded {viewMode === 'list' ? 'bg-blue-100 text-blue-700' : 'hover:bg-gray-200'}"
-			onclick={() => viewMode = 'list'} title="List view">≡</button>
+		<div class="flex gap-0.5 ml-1 shrink-0">
+			<button class="p-1 rounded text-sm {viewMode === 'grid' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:bg-gray-100'}"
+				onclick={() => viewMode = 'grid'} title="Grid view">⊞</button>
+			<button class="p-1 rounded text-sm {viewMode === 'list' ? 'bg-blue-100 text-blue-600' : 'text-gray-400 hover:bg-gray-100'}"
+				onclick={() => viewMode = 'list'} title="List view">≡</button>
+		</div>
 	</div>
 
 	<!-- ═══ TOOLBAR ═══ -->
 	<div class="flex items-center gap-1.5 px-2 py-1.5 bg-white border-b flex-shrink-0">
 		<button class="px-2 py-1 rounded bg-blue-50 text-blue-700 hover:bg-blue-100 font-medium"
 			onclick={() => { showNewFolder = true; newFolderName = ''; }}>
-			📁 New Folder
+			📁 New
 		</button>
 		<button class="px-2 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100 font-medium {uploading ? 'opacity-50 pointer-events-none' : ''}"
 			onclick={triggerUpload}>
-			{uploading ? '⏳ Uploading…' : '⬆ Upload'}
+			{uploading ? '⏳…' : '⬆ Upload'}
 		</button>
-		{#if selectedId}
-			{@const sel = fs.items.find(i => i.id === selectedId)}
-			{#if sel}
-				<span class="mx-1 text-gray-300">|</span>
-				<button class="px-2 py-1 rounded hover:bg-gray-100" onclick={() => doRename(sel)} title="Rename">✏️</button>
-				{#if !sel.isFolder && sel.url}
-					<button class="px-2 py-1 rounded hover:bg-gray-100" onclick={() => useAsReference(sel)} title="Use as reference">🎯</button>
-				{/if}
-				<button class="px-2 py-1 rounded hover:bg-red-50 text-red-600" onclick={() => doDelete(sel)} title="Delete">🗑</button>
-			{/if}
-		{/if}
 	</div>
 
 	<!-- ═══ NEW FOLDER INPUT (inline) ═══ -->
@@ -284,12 +310,12 @@
 				{#each fs.items as item (item.id)}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
-						class="relative group rounded-lg border-2 overflow-hidden cursor-pointer transition-all
+						class="relative group rounded-lg border-2 cursor-pointer transition-all
 							{selectedId === item.id ? 'border-blue-500 bg-blue-50' : 'border-transparent hover:border-gray-300 bg-white'}"
 						onclick={() => clickItem(item)}
 						ondblclick={() => dblClickItem(item)}
 					>
-						<div class="aspect-square flex items-center justify-center bg-gray-50 relative">
+						<div class="aspect-square flex items-center justify-center bg-gray-50 rounded-t-md overflow-hidden">
 							{#if item.isFolder}
 								<span class="text-5xl select-none">📁</span>
 							{:else if item.url}
@@ -297,18 +323,54 @@
 							{:else}
 								<span class="text-4xl select-none">{icon(item)}</span>
 							{/if}
-
-							<!-- Hover overlay -->
-							<div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors"></div>
-
-							<!-- Quick actions (top-right) -->
-							<div class="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-								<button class="w-5 h-5 rounded-full bg-white/90 shadow text-[10px] flex items-center justify-center hover:scale-110"
-									onclick={(e) => { e.stopPropagation(); doRename(item); }} title="Rename">✏️</button>
-								<button class="w-5 h-5 rounded-full bg-red-500 text-white shadow text-[10px] flex items-center justify-center hover:scale-110"
-									onclick={(e) => { e.stopPropagation(); doDelete(item); }} title="Delete">×</button>
-							</div>
 						</div>
+
+						<!-- Menu trigger (top-right, outside overflow-hidden) -->
+						<button
+							class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/40 text-white text-xs flex items-center justify-center
+								opacity-0 group-hover:opacity-100 hover:bg-black/60 transition-all z-10"
+							onclick={(e) => toggleMenu(item.id, e)}
+							title="Actions"
+						>⋯</button>
+
+						<!-- Dropdown menu -->
+						{#if menuItemId === item.id}
+							<!-- svelte-ignore a11y_no_static_element_interactions -->
+							<div
+								class="absolute top-8 left-1 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
+								onclick={(e) => e.stopPropagation()}
+							>
+								{#if !item.isFolder && item.url}
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => loadIntoEdit(item)}>
+										✏️ <span>Edit</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-purple-50 text-gray-700 flex items-center gap-2"
+										onclick={() => loadIntoStyle(item)}>
+										✨ <span>Stylize</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAsStartFrame(item)}>
+										▶ <span>Start Frame</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAsEndFrame(item)}>
+										⏹ <span>End Frame</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+								{/if}
+								<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+									onclick={() => { doRename(item); menuItemId = null; }}>
+									📝 <span>Rename</span>
+								</button>
+								<button class="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+									onclick={() => { doDelete(item); menuItemId = null; }}>
+									🗑 <span>Delete</span>
+								</button>
+							</div>
+						{/if}
+
 						<div class="px-1.5 py-1">
 							<p class="text-[11px] truncate text-center font-medium">{item.name}</p>
 						</div>
@@ -325,13 +387,14 @@
 						<th class="py-1 px-2 font-medium w-20">Type</th>
 						<th class="py-1 px-2 font-medium w-20">Date</th>
 						<th class="py-1 px-2 font-medium w-16 text-right">Size</th>
+						<th class="py-1 px-2 font-medium w-8"></th>
 					</tr>
 				</thead>
 				<tbody>
 					{#each fs.items as item (item.id)}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
-							class="border-b border-gray-100 cursor-pointer transition-colors
+							class="border-b border-gray-100 cursor-pointer transition-colors relative group
 								{selectedId === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'}"
 							onclick={() => clickItem(item)}
 							ondblclick={() => dblClickItem(item)}
@@ -343,6 +406,51 @@
 							<td class="py-1.5 px-2 text-gray-500">{item.isFolder ? 'Folder' : (item.fileType || 'File')}</td>
 							<td class="py-1.5 px-2 text-gray-500">{fmtDate(item.createdAt)}</td>
 							<td class="py-1.5 px-2 text-gray-500 text-right">{item.isFolder ? '—' : fmtSize(item.size)}</td>
+							<td class="py-1.5 px-2 relative">
+								<button
+									class="w-5 h-5 rounded text-gray-400 hover:text-gray-700 hover:bg-gray-200 flex items-center justify-center text-xs
+										opacity-0 group-hover:opacity-100 transition-opacity"
+									onclick={(e) => toggleMenu(item.id, e)}
+									title="Actions"
+								>⋯</button>
+
+								{#if menuItemId === item.id}
+									<!-- svelte-ignore a11y_no_static_element_interactions -->
+									<div
+										class="absolute top-full left-0 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
+										onclick={(e) => e.stopPropagation()}
+									>
+										{#if !item.isFolder && item.url}
+											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+												onclick={() => loadIntoEdit(item)}>
+												✏️ <span>Edit</span>
+											</button>
+											<button class="w-full text-left px-3 py-1.5 hover:bg-purple-50 text-gray-700 flex items-center gap-2"
+												onclick={() => loadIntoStyle(item)}>
+												✨ <span>Stylize</span>
+											</button>
+											<div class="border-t my-0.5"></div>
+											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+												onclick={() => useAsStartFrame(item)}>
+												▶ <span>Start Frame</span>
+											</button>
+											<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+												onclick={() => useAsEndFrame(item)}>
+												⏹ <span>End Frame</span>
+											</button>
+											<div class="border-t my-0.5"></div>
+										{/if}
+										<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+											onclick={() => { doRename(item); menuItemId = null; }}>
+											📝 <span>Rename</span>
+										</button>
+										<button class="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+											onclick={() => { doDelete(item); menuItemId = null; }}>
+											🗑 <span>Delete</span>
+										</button>
+									</div>
+								{/if}
+							</td>
 						</tr>
 					{/each}
 				</tbody>
@@ -389,18 +497,30 @@
 			</div>
 
 			<!-- Actions -->
-			<div class="flex justify-center gap-2 mt-3">
-				{#if previewItem.url}
-					<button class="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm"
-						onclick={() => { useAsReference(previewItem); previewItem = null; }}>
-						🎯 Use as Reference
+			{#if previewItem.url}
+				<div class="flex justify-center gap-2 mt-3 flex-wrap">
+					<button class="px-3 py-1.5 bg-teal-500 text-white rounded hover:bg-teal-600 text-sm font-medium"
+						onclick={() => { loadIntoEdit(previewItem); previewItem = null; }}>
+						✏️ Edit
+					</button>
+					<button class="px-3 py-1.5 bg-purple-500 text-white rounded hover:bg-purple-600 text-sm font-medium"
+						onclick={() => { loadIntoStyle(previewItem); previewItem = null; }}>
+						✨ Stylize
+					</button>
+					<button class="px-3 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 text-sm font-medium"
+						onclick={() => { useAsStartFrame(previewItem); previewItem = null; }}>
+						▶ Start
+					</button>
+					<button class="px-3 py-1.5 bg-green-500 text-white rounded hover:bg-green-600 text-sm font-medium"
+						onclick={() => { useAsEndFrame(previewItem); previewItem = null; }}>
+						⏹ End
 					</button>
 					<a href={previewItem.url} download={previewItem.name}
-						class="px-3 py-1.5 bg-green-500 text-white rounded hover:bg-green-600 text-sm">
-						📥 Download
+						class="px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">
+						📥
 					</a>
-				{/if}
-			</div>
+				</div>
+			{/if}
 		</div>
 	</div>
 {/if}

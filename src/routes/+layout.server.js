@@ -5,20 +5,33 @@ import { redirect } from '@sveltejs/kit';
  * Also handles auth guard redirect (server-side, before page renders)
  */
 export async function load({ locals, url }) {
-	const user = locals.user || null;
-	const isLoginPage = url.pathname === '/login';
+	try {
+		const user = locals.user || null;
+		const isLoginPage = url.pathname === '/login';
 
-	// If not logged in and not on login page, redirect to login
-	if (!user && !isLoginPage) {
-		throw redirect(302, '/login');
+		// If not logged in and not on login page, redirect to login
+		if (!user && !isLoginPage) {
+			throw redirect(302, '/login');
+		}
+
+		// If logged in and on login page, redirect to app
+		if (user && isLoginPage) {
+			throw redirect(302, '/');
+		}
+
+		return {
+			user
+		};
+	} catch (error) {
+		// If it's a redirect, re-throw it
+		if (error?.status === 302 || error?.status === 301) {
+			throw error;
+		}
+		// Log other errors
+		console.error('[+layout.server] Error in load function:', error);
+		// Return empty user on error
+		return {
+			user: null
+		};
 	}
-
-	// If logged in and on login page, redirect to app
-	if (user && isLoginPage) {
-		throw redirect(302, '/');
-	}
-
-	return {
-		user
-	};
 }

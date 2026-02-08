@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { generateWithCascade, extractImage, stripDataUrl } from '$lib/server/gemini.js';
 
 export async function POST({ request }) {
 	try {
@@ -9,76 +9,66 @@ export async function POST({ request }) {
 			return json({ error: 'Image and prompt are required' }, { status: 400 });
 		}
 
-		if (!env.GEMINI_API_KEY) {
-			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
-		}
-
 		// Extract base64 from data URL
-		let base64Data = image;
+		let base64Data = stripDataUrl(image);
 		let mimeType = 'image/png';
 		if (image.startsWith('data:')) {
-			const match = image.match(/^data:([^;]+);base64,(.+)$/);
+			const match = image.match(/^data:([^;]+);base64,/);
 			if (match) {
 				mimeType = match[1];
-				base64Data = match[2];
 			}
 		}
 
 		console.log(`[Edit Image] Mode: ${mode}, prompt: ${prompt.substring(0, 80)}...`);
 
+		// Build multimodal parts using the same format as other endpoints
 		const parts = [
 			{ text: 'SOURCE IMAGE:' },
-			{ inline_data: { mime_type: mimeType, data: base64Data } },
+			{ inlineData: { mimeType, data: base64Data } },
 			{ text: prompt }
 		];
 
-		const response = await fetch(
-			`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`,
-			{
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					contents: [{ parts }],
-					generationConfig: {
-						responseModalities: ['TEXT', 'IMAGE']
-					}
-				})
+		// Use the same cascade helper as other endpoints
+		let response, model;
+		try {
+			const result = await generateWithCascade(parts, {
+				temperature: 0.4,
+			});
+			response = result.response;
+			model = result.model;
+		} catch (cascadeError) {
+			console.error('[Edit Image] Cascade failed:', cascadeError);
+			// Provide more helpful error message
+			if (cascadeError.message?.includes('All Gemini models failed')) {
+				return json({ 
+					error: 'Image editing failed. Please check your GEMINI_API_KEY is set correctly and has quota remaining.',
+					details: cascadeError.message 
+				}, { status: 500 });
 			}
-		);
-
-		if (!response.ok) {
-			const errorText = await response.text();
-			console.error('[Edit Image] Gemini API error:', response.status, errorText);
-			return json({ error: `Gemini API error: ${response.status}`, details: errorText }, { status: 500 });
+			throw cascadeError; // Re-throw to be caught by outer catch
 		}
 
-		const result = await response.json();
-		return processResult(result);
+		const generatedImage = extractImage(response);
+		if (!generatedImage) {
+			console.error('[Edit Image] No image in response from', model);
+			console.error('[Edit Image] Response structure:', JSON.stringify(response, null, 2).substring(0, 500));
+			return json({ 
+				error: 'No image generated in response',
+				details: `Model ${model} returned response but no image data was found`
+			}, { status: 500 });
+		}
+
+		console.log(`[Edit Image] Successfully generated edited image via ${model}`);
+		return json({ image: generatedImage });
 
 	} catch (error) {
 		console.error('[Edit Image] Error:', error);
-		return json({ error: error.message }, { status: 500 });
-	}
-}
-
-function processResult(result) {
-	let generatedImage = null;
-
-	if (result.candidates?.[0]?.content?.parts) {
-		for (const part of result.candidates[0].content.parts) {
-			const data = part.inlineData?.data || part.inline_data?.data;
-			if (data) {
-				generatedImage = `data:image/png;base64,${data}`;
-				break;
-			}
+		console.error('[Edit Image] Stack:', error.stack);
+		if (error.name === 'AbortError') {
+			return json({ error: 'Request timed out after 5 minutes' }, { status: 504 });
 		}
+		// Ensure error message is serializable
+		const errorMessage = error.message || 'Unknown error occurred';
+		return json({ error: errorMessage }, { status: 500 });
 	}
-
-	if (!generatedImage) {
-		console.error('[Edit Image] No image in response:', JSON.stringify(result).substring(0, 200));
-		return json({ error: 'No image generated', details: JSON.stringify(result) }, { status: 500 });
-	}
-
-	console.log('[Edit Image] Successfully generated edited image');
-	return json({ image: generatedImage });
 }

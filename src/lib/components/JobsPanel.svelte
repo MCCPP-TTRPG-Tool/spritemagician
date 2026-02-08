@@ -2,227 +2,303 @@
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { projectStore } from '$lib/stores/project.js';
-	import { animationStore } from '$lib/stores/animations.js';
+	import { userFiles } from '$lib/stores/userFiles.js';
+	import { createFile } from '$lib/firebase/firestore.js';
+	import FolderPicker from './FolderPicker.svelte';
 	import { onDestroy } from 'svelte';
 
-	// ── local copies ────────────────────────────────────────
+	// ── local state ─────────────────────────────────────────
 	let queue     = $state([]);
 	let completed = $state({ jobs: [], activeIndex: 0, loaded: false });
-	let animFrame = $state(0);
+
+	// Preview animation
+	let animFrame    = $state(0);
 	let animInterval = null;
-	let lastPreviewId = null;
+
+	// Dropdown menu
+	let menuItemId = $state(null);
+
+	// Save-to-folder
+	let showFolderPicker = $state(false);
+	let savingJobId      = $state(null);
+	let isSaving         = $state(false);
 
 	jobQueue.subscribe(v => { queue = v; });
 	completedJobs.subscribe(v => { completed = v; });
 
 	// ── derived ─────────────────────────────────────────────
-	const activeJobs  = $derived(queue.filter(j => j.status === 'pending' || j.status === 'processing'));
-	const doneJobs    = $derived(queue.filter(j => j.status === 'completed' || j.status === 'failed'));
-	const activeCompleted = $derived(completed.jobs.length > 0 ? completed.jobs[completed.activeIndex] : null);
+	const activeJobs = $derived(queue.filter(j => j.status === 'pending' || j.status === 'processing'));
+	const failedJobs = $derived(queue.filter(j => j.status === 'failed'));
+	const allJobs = $derived([...activeJobs, ...failedJobs, ...completed.jobs]);
 
-	// ── animation preview for completed animations ──────────
+	// ── animation loop for expanded preview ─────────────────
 	$effect(() => {
-		const job = activeCompleted;
-		const jobId = job?.id || null;
-		if (jobId !== lastPreviewId) {
-			lastPreviewId = jobId;
-			if (animInterval) { clearInterval(animInterval); animInterval = null; }
-			animFrame = 0;
-			if (job?.type === 'animation' && job.frames?.length > 1) {
-				const fps = job.fps || 12;
-				let f = 0;
-				animInterval = setInterval(() => { f = (f + 1) % job.frames.length; animFrame = f; }, 1000 / fps);
-			}
+		if (animInterval) { clearInterval(animInterval); animInterval = null; }
+		animFrame = 0;
+		const job = expandedJob;
+		if (job?.type === 'animation' && job.frames?.length > 1) {
+			const fps = job.fps || 12;
+			let f = 0;
+			animInterval = setInterval(() => {
+				f = (f + 1) % job.frames.length;
+				animFrame = f;
+			}, 1000 / fps);
 		}
 	});
 	onDestroy(() => { if (animInterval) clearInterval(animInterval); });
 
 	// ── helpers ──────────────────────────────────────────────
-	function statusIcon(s) {
-		switch (s) {
-			case 'pending':    return '⏳';
-			case 'processing': return '⚡';
-			case 'completed':  return '✅';
-			case 'failed':     return '❌';
-			case 'cancelled':  return '🚫';
-			default:           return '❓';
-		}
-	}
-	function statusColor(s) {
-		switch (s) {
-			case 'pending':    return 'text-yellow-700 bg-yellow-50';
-			case 'processing': return 'text-blue-700 bg-blue-50';
-			case 'completed':  return 'text-green-700 bg-green-50';
-			case 'failed':     return 'text-red-700 bg-red-50';
-			default:           return 'text-gray-600 bg-gray-50';
-		}
-	}
 	function elapsed(job) {
 		if (!job.createdAt) return '';
 		const start = new Date(job.createdAt);
-		const end = job.completedAt ? new Date(job.completedAt) : new Date();
-		const s = Math.floor((end - start) / 1000);
+		const end   = job.completedAt ? new Date(job.completedAt) : new Date();
+		const s     = Math.floor((end - start) / 1000);
 		return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
 	}
 
-	// ── completed-job actions ───────────────────────────────
-	function useAsReference() {
-		const j = activeCompleted;
-		if (!j) return;
-		if (j.type === 'sprite') projectStore.update(p => ({ ...p, firstFrame: j.image }));
-		else if (j.type === 'animation' && j.frames?.length) projectStore.update(p => ({ ...p, frames: j.frames }));
-		completedJobs.removeJob(j.id);
+	function thumbnail(job) {
+		if (job.type === 'sprite' && job.image) return job.image;
+		if (job.frames?.length) return job.frames[0];
+		return null;
 	}
-	function saveAnimation() {
-		const j = activeCompleted;
-		if (!j || j.type !== 'animation') return;
-		animationStore.addAnimation({ name: j.name, frames: j.frames, fps: j.fps });
-		completedJobs.removeJob(j.id);
+
+	// ── actions ──────────────────────────────────────────────
+	function toggleMenu(jobId, e) {
+		e.stopPropagation();
+		menuItemId = menuItemId === jobId ? null : jobId;
 	}
-	function discard() {
-		if (activeCompleted) completedJobs.removeJob(activeCompleted.id);
+
+	function useForProject(job) {
+		if (job.type === 'sprite' && job.image) {
+			projectStore.update(p => ({ ...p, firstFrame: job.image }));
+		} else if (job.frames?.length) {
+			projectStore.update(p => ({ ...p, frames: [...job.frames] }));
+		}
+		menuItemId = null;
 	}
-	function download() {
-		const j = activeCompleted;
-		if (!j) return;
+
+	function startSave(job) {
+		savingJobId = job.id;
+		showFolderPicker = true;
+		menuItemId = null;
+	}
+
+	async function onFolderSelect(folderId, folderPath) {
+		showFolderPicker = false;
+		const job = completed.jobs.find(j => j.id === savingJobId);
+		if (!job) return;
+		isSaving = true;
+
+		try {
+			const uid = userFiles.getUid();
+			if (!uid) throw new Error('Not signed in');
+
+			if (job.type === 'sprite' && job.image) {
+				const res = await fetch('/api/upload-file', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						imageData: job.image,
+						filename: `${(job.name || 'sprite').slice(0, 40)}.png`
+					})
+				});
+				if (!res.ok) throw new Error('Upload failed');
+				const { url } = await res.json();
+				await createFile(uid, folderId, `${(job.name || 'sprite').slice(0, 40)}.png`, url, 'image', {
+					sourceType: 'generation', prompt: job.description || job.name
+				});
+			} else if (job.frames?.length) {
+				// Upload each frame
+				for (let i = 0; i < job.frames.length; i++) {
+					const fname = `${(job.name || 'anim').slice(0, 30)}_${String(i + 1).padStart(3, '0')}.png`;
+					const res = await fetch('/api/upload-file', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ imageData: job.frames[i], filename: fname })
+					});
+					if (!res.ok) throw new Error(`Frame ${i + 1} upload failed`);
+					const { url } = await res.json();
+					await createFile(uid, folderId, fname, url, 'image', {
+						sourceType: 'animation-frame', frameIndex: i,
+						totalFrames: job.frames.length, animationName: job.name, fps: job.fps
+					});
+				}
+			} else if (job.videoUrl) {
+				await createFile(uid, folderId, `${(job.name || 'animation').slice(0, 40)}.mp4`, job.videoUrl, 'video', {
+					sourceType: 'animation-video', prompt: job.name
+				});
+			}
+
+			completedJobs.removeJob(job.id);
+		} catch (err) {
+			console.error('[JobsPanel] Save error:', err);
+			alert('Save failed: ' + err.message);
+		} finally {
+			isSaving = false;
+			savingJobId = null;
+		}
+	}
+
+	function download(job) {
 		const a = document.createElement('a');
-		if (j.type === 'sprite') { a.href = j.image; a.download = `${j.name || 'sprite'}.png`; }
-		else if (j.videoUrl) { a.href = j.videoUrl; a.download = `${j.name || 'anim'}.mp4`; }
-		else if (j.frames?.length) { a.href = j.frames[0]; a.download = `${j.name || 'frame'}.png`; }
+		if (job.type === 'sprite' && job.image) { a.href = job.image; a.download = `${job.name || 'sprite'}.png`; }
+		else if (job.videoUrl)   { a.href = job.videoUrl; a.download = `${job.name || 'anim'}.mp4`; }
+		else if (job.frames?.[0]) { a.href = job.frames[0]; a.download = `${job.name || 'frame'}.png`; }
 		a.click();
+	}
+
+	function discard(job) {
+		if (job.status === 'pending' || job.status === 'processing') {
+			jobQueue.cancelJob(job.id);
+		} else if (job.status === 'failed') {
+			jobQueue.removeJob(job.id);
+		} else {
+			completedJobs.removeJob(job.id);
+		}
+		menuItemId = null;
 	}
 </script>
 
-<div class="flex flex-col h-full text-xs">
-	<!-- ════════════════════════════════════════════════════════
-	     QUEUED & ACTIVE JOBS
-	     ════════════════════════════════════════════════════════ -->
-	<div class="flex-shrink-0">
-		<div class="flex items-center justify-between px-2 py-1.5 bg-gray-100 border-b rounded-t">
-			<div class="flex items-center gap-2 font-medium text-gray-700">
-				<span>⚡</span>
-				<span>Active Jobs</span>
-				{#if activeJobs.length > 0}
-					<span class="px-1.5 py-0.5 bg-blue-500 text-white text-[10px] rounded-full animate-pulse">{activeJobs.length}</span>
-				{/if}
-			</div>
-			{#if doneJobs.length > 0}
-				<button class="text-[10px] text-gray-500 hover:text-red-500" onclick={() => jobQueue.clearFinished()}>Clear done</button>
-			{/if}
-		</div>
+<!-- Close dropdown when clicking anywhere -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<svelte:window onclick={() => { menuItemId = null; }} />
 
-		{#if queue.length === 0}
-			<div class="px-3 py-4 text-center text-gray-400 text-[11px]">No jobs in queue</div>
+<!-- ═══════════════════════════════════════════════════════════
+     JOBS PANEL — file grid layout
+     ═══════════════════════════════════════════════════════════ -->
+<div class="flex flex-col h-full text-xs">
+	<div class="flex-1 overflow-y-auto p-2">
+		{#if !completed.loaded && allJobs.length === 0}
+			<div class="flex items-center justify-center h-32 text-gray-400">
+				<div class="text-center">
+					<div class="animate-spin w-5 h-5 border-2 border-gray-300 border-t-blue-500 rounded-full mx-auto mb-2"></div>
+					<p class="text-[11px]">Loading…</p>
+				</div>
+			</div>
+		{:else if allJobs.length === 0}
+			<div class="flex flex-col items-center justify-center h-full text-gray-400 gap-2 px-4">
+				<span class="text-3xl opacity-50">📭</span>
+				<p class="text-[11px] text-center">No jobs yet.<br/>Generate a sprite or animation to see results here.</p>
+			</div>
 		{:else}
-			<div class="max-h-48 overflow-y-auto">
-				{#each queue as job (job.id)}
-					<div class="flex items-center gap-2 px-3 py-1.5 border-b border-gray-100 {statusColor(job.status)}">
-						<span class="text-sm">{statusIcon(job.status)}</span>
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="font-medium truncate">{job.type || 'Job'}</span>
-								<span class="text-[10px] text-gray-400 truncate">{job.name || ''}</span>
+			<!-- Jobs Grid -->
+			<div class="grid grid-cols-4 gap-2">
+				{#each allJobs as job (job.id)}
+					{@const thumb = thumbnail(job)}
+					{@const isActive = job.status === 'pending' || job.status === 'processing'}
+					{@const isFailed = job.status === 'failed'}
+					{@const isCompleted = !isActive && !isFailed}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
+					<div
+						class="relative group rounded-lg border-2 cursor-pointer transition-all aspect-square bg-gray-100
+							{isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : 'border-transparent hover:border-gray-300'}"
+					>
+						<div class="aspect-square flex items-center justify-center overflow-hidden rounded-t-md">
+							{#if thumb}
+								<img src={thumb} alt={job.name} class="w-full h-full object-contain" />
+							{:else if job.videoUrl}
+								<div class="w-full h-full flex items-center justify-center text-2xl">🎬</div>
+							{:else}
+								<div class="w-full h-full flex items-center justify-center text-2xl text-gray-300">?</div>
+							{/if}
+						</div>
+
+						<!-- Progress percentage for active jobs -->
+						{#if isActive && job.progress > 0}
+							<div class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-t-md">
+								<span class="text-white font-bold text-lg">{job.progress}%</span>
 							</div>
-							{#if job.status === 'processing' && job.progress > 0}
-								<div class="w-full bg-gray-200 rounded-full h-1 mt-1">
-									<div class="bg-blue-500 h-1 rounded-full transition-all" style="width:{job.progress}%"></div>
+						{/if}
+
+						<!-- Status indicator -->
+						<div class="absolute top-1 left-1 px-1 py-0.5 rounded text-[8px] font-bold leading-none
+							{isActive ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-500 text-white' : job.type === 'sprite' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white'}">
+							{#if isActive}
+								⚡
+							{:else if isFailed}
+								✕
+							{:else if job.type === 'sprite'}
+								IMG
+							{:else}
+								{job.frames?.length ? `${job.frames.length}f` : 'VID'}
+							{/if}
+						</div>
+
+						<!-- Menu button (only for completed jobs) -->
+						{#if isCompleted}
+							<button
+								class="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/40 text-white text-xs flex items-center justify-center
+									opacity-0 group-hover:opacity-100 hover:bg-black/60 transition-all z-10"
+								onclick={(e) => toggleMenu(job.id, e)}
+								title="Actions"
+							>⋯</button>
+
+							<!-- Dropdown menu -->
+							{#if menuItemId === job.id}
+								<!-- svelte-ignore a11y_no_static_element_interactions -->
+								<div
+									class="absolute top-8 left-1 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
+									onclick={(e) => e.stopPropagation()}
+								>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => startSave(job)}>
+										💾 <span>Save to Folder</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useForProject(job)}>
+										▶ <span>Use for Project</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+										onclick={() => { download(job); menuItemId = null; }}>
+										📥 <span>Download</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2"
+										onclick={() => discard(job)}>
+										🗑 <span>Delete</span>
+									</button>
 								</div>
 							{/if}
-							{#if job.message}<p class="text-[10px] text-gray-500 truncate">{job.message}</p>{/if}
-							{#if job.error}<p class="text-[10px] text-red-500 truncate">{job.error}</p>{/if}
+						{/if}
+
+						<!-- Cancel button for active jobs -->
+						{#if isActive}
+							<button
+								class="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500/80 text-white text-xs flex items-center justify-center
+									opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all z-10"
+								onclick={(e) => { e.stopPropagation(); jobQueue.cancelJob(job.id); }}
+								title="Cancel"
+							>✕</button>
+						{/if}
+
+						<div class="px-1.5 py-1">
+							<p class="text-[11px] truncate text-center font-medium">{job.name || 'Job'}</p>
+							{#if job.message && isActive}
+								<p class="text-[9px] text-gray-500 text-center truncate">{job.message}</p>
+							{/if}
 						</div>
-						<span class="text-[10px] text-gray-400 whitespace-nowrap">{elapsed(job)}</span>
-						<button class="p-1 text-gray-400 hover:text-red-500"
-							onclick={() => job.status === 'pending' || job.status === 'processing' ? jobQueue.cancelJob(job.id) : jobQueue.removeJob(job.id)}>✕</button>
 					</div>
 				{/each}
 			</div>
 		{/if}
 	</div>
 
-	<!-- ════════════════════════════════════════════════════════
-	     COMPLETED GENERATIONS
-	     ════════════════════════════════════════════════════════ -->
-	<div class="flex-1 overflow-y-auto border-t">
-		<div class="flex items-center justify-between px-2 py-1.5 bg-purple-50 border-b">
-			<div class="flex items-center gap-2 font-medium text-purple-800">
-				<span>📦</span>
-				<span>Completed</span>
-				<span class="px-1.5 py-0.5 bg-purple-200 text-purple-800 text-[10px] rounded-full">{completed.jobs.length}</span>
-			</div>
-			{#if completed.jobs.length > 0}
-				<button class="text-[10px] text-red-500 hover:text-red-700" onclick={() => completedJobs.clearAll()}>Clear All</button>
-			{/if}
-		</div>
-
-		{#if !completed.loaded}
-			<div class="text-center py-4 text-purple-500 animate-pulse text-[11px]">Loading saved jobs…</div>
-		{:else if completed.jobs.length === 0}
-			<div class="px-3 py-8 text-center text-gray-400 text-[11px]">No completed jobs yet. Generate something!</div>
-		{:else}
-			<!-- Tabs for switching between completed jobs -->
-			<div class="flex gap-1 px-2 py-1.5 overflow-x-auto border-b">
-				{#each completed.jobs as cj, i (cj.id)}
-					<button
-						class="flex-shrink-0 px-2 py-1 text-[10px] rounded border-2 transition-all
-							{i === completed.activeIndex
-								? 'bg-purple-500 border-purple-600 text-white font-bold'
-								: 'bg-white border-purple-200 text-purple-700 hover:border-purple-400'}"
-						onclick={() => completedJobs.setActiveIndex(i)}
-					>{cj.type === 'sprite' ? '🖼️' : '🎬'} {cj.name}</button>
-				{/each}
-			</div>
-
-			<!-- Preview -->
-			{#if activeCompleted}
-				<div class="p-2">
-					<div class="bg-white rounded-lg border-2 border-purple-200 p-2 mb-2">
-						<div class="flex items-center gap-2 mb-2 text-[11px]">
-							<span>{activeCompleted.type === 'sprite' ? '🖼️ Sprite' : '🎬 Animation'}</span>
-							<span class="font-medium">{activeCompleted.name}</span>
-							{#if activeCompleted.type === 'animation'}
-								<span class="text-gray-500">({activeCompleted.frames?.length || 0} frames)</span>
-							{/if}
-						</div>
-
-						<div class="relative bg-gray-100 rounded-lg overflow-hidden" style="aspect-ratio:1;">
-							{#if activeCompleted.type === 'sprite'}
-								<img src={activeCompleted.image} alt={activeCompleted.name} class="w-full h-full object-contain" />
-							{:else if activeCompleted.type === 'animation' && activeCompleted.frames?.length > 0}
-								<img src={activeCompleted.frames[animFrame]} alt={activeCompleted.name} class="w-full h-full object-contain" />
-								<div class="absolute bottom-2 left-2 px-2 py-1 bg-black/60 text-white text-[10px] rounded">
-									Frame {animFrame + 1}/{activeCompleted.frames.length}
-								</div>
-							{:else if activeCompleted.videoUrl}
-								<video src={activeCompleted.videoUrl} class="w-full h-full object-contain" autoplay loop muted playsinline controls></video>
-							{:else}
-								<div class="w-full h-full flex items-center justify-center text-gray-400 text-2xl">⚠️</div>
-							{/if}
-						</div>
-					</div>
-
-					<!-- Actions -->
-					<div class="grid grid-cols-2 gap-1.5">
-						{#if activeCompleted.type === 'sprite'}
-							<button class="px-2 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 text-[11px] font-medium" onclick={useAsReference}>🎬 Use for Anim</button>
-							<button class="px-2 py-1.5 bg-green-500 text-white rounded hover:bg-green-600 text-[11px] font-medium" onclick={() => {
-								window.dispatchEvent(new CustomEvent('saveSpriteToGallery', { detail: { image: activeCompleted.image, description: activeCompleted.name } }));
-								completedJobs.removeJob(activeCompleted.id);
-							}}>💾 Save to Files</button>
-						{:else if activeCompleted.frames?.length > 0}
-							<button class="px-2 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 text-[11px] font-medium" onclick={useAsReference}>📥 Load Frames</button>
-							<button class="px-2 py-1.5 bg-green-500 text-white rounded hover:bg-green-600 text-[11px] font-medium" onclick={saveAnimation}>💾 Save Anim</button>
-						{:else if activeCompleted.videoUrl}
-							<a href={activeCompleted.videoUrl} target="_blank" class="px-2 py-1.5 bg-blue-500 text-white rounded hover:bg-blue-600 text-[11px] font-medium text-center">🎬 Open Video</a>
-							<a href={activeCompleted.videoUrl} download="animation.mp4" class="px-2 py-1.5 bg-green-500 text-white rounded hover:bg-green-600 text-[11px] font-medium text-center">📥 Download</a>
-						{/if}
-					</div>
-					<div class="flex gap-1.5 mt-1.5">
-						<button class="flex-1 px-2 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 text-[10px]" onclick={download}>📥 Download</button>
-						<button class="flex-1 px-2 py-1 bg-red-100 text-red-700 rounded hover:bg-red-200 text-[10px]" onclick={discard}>🗑️ Discard</button>
-					</div>
-				</div>
-			{/if}
+	<!-- Status bar -->
+	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
+		<span>{allJobs.length} job{allJobs.length !== 1 ? 's' : ''} ({activeJobs.length} active, {completed.jobs.length} completed)</span>
+		{#if completed.jobs.length > 0}
+			<button
+				class="text-red-400 hover:text-red-600 transition-colors"
+				onclick={() => completedJobs.clearAll()}
+			>Clear all</button>
 		{/if}
 	</div>
 </div>
+
+<!-- ── FOLDER PICKER MODAL ────────────────────────────────── -->
+{#if showFolderPicker}
+	<FolderPicker
+		onSelect={onFolderSelect}
+		onClose={() => { showFolderPicker = false; savingJobId = null; }}
+	/>
+{/if}

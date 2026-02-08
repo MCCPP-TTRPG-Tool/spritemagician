@@ -2,6 +2,10 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { generateSpriteSheet, loadImage, downloadBlob } from '$lib/utils/spriteSheet.js';
 	import { generateGif } from '$lib/utils/gifEncoder.js';
+	import { userFiles } from '$lib/stores/userFiles.js';
+	import { createFile } from '$lib/firebase/firestore.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
+	import FolderPicker from './FolderPicker.svelte';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -18,6 +22,12 @@
 	let previewColumns = $state(4);
 	let frameSize = $state(128);
 	let showFullSize = $state(false);
+
+	// Save to folder state
+	let showFolderPicker = $state(false);
+	let saveFolderId = $state(null);
+	let saveFolderPath = $state(null);
+	let isSaving = $state(false);
 
 	function closePreview() {
 		if (spriteSheetPreview) {
@@ -139,6 +149,58 @@
 			a.download = 'animation.gif';
 			a.click();
 		}
+	}
+
+	async function onFolderSelect(folderId, folderPath) {
+		saveFolderId = folderId;
+		saveFolderPath = folderPath;
+		showFolderPicker = false;
+		// Auto-save after selecting folder
+		if (project.frames.length > 0) {
+			await performSave();
+		}
+	}
+
+	async function performSave() {
+		if (!project.frames.length) return;
+
+		isSaving = true;
+		try {
+			const animationName = project.prompt || `animation_${Date.now()}`;
+			const sanitizedName = animationName.slice(0, 30).replace(/[^a-zA-Z0-9_-]/g, '_');
+
+			// Save animation to completedJobs (like the queue) so it can be loaded back into the editor
+			// This stores all frames as data URLs in IndexedDB, just like generated animations
+			await completedJobs.addAnimation({
+				name: sanitizedName,
+				frames: project.frames, // Store all frames as data URLs
+				fps: project.fps,
+				pose: project.prompt || '',
+				saveFolderId: saveFolderId || null,
+				saveFolderPath: saveFolderPath || null
+			});
+
+			alert(`Animation saved! Check the Jobs tab to load it back.`);
+		} catch (err) {
+			console.error('Save error:', err);
+			alert('Failed to save animation: ' + err.message);
+		} finally {
+			isSaving = false;
+		}
+	}
+
+	async function saveToFolder() {
+		if (!project.frames.length) {
+			alert('No frames to save');
+			return;
+		}
+		
+		if (!saveFolderId) {
+			showFolderPicker = true;
+			return;
+		}
+
+		await performSave();
 	}
 </script>
 
@@ -330,6 +392,44 @@
 		</button>
 	</div>
 
+	<!-- Save to Folder -->
+	{#if project.frames.length > 0}
+		<div class="border-t pt-2 mt-2">
+			<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mb-2">
+				<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Save to:</span>
+				<button
+					class="flex-1 text-left px-2 py-1 text-[11px] rounded border transition-colors truncate
+						{saveFolderPath
+							? 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50 font-medium'
+							: 'bg-white border-gray-300 text-gray-400 hover:bg-gray-100'}"
+					onclick={() => showFolderPicker = true}
+				>
+					{saveFolderPath || '📁 Choose folder…'}
+				</button>
+				{#if saveFolderPath}
+					<button
+						class="text-[10px] text-gray-400 hover:text-red-500"
+						onclick={() => { saveFolderId = null; saveFolderPath = null; }}
+						title="Clear"
+					>✕</button>
+				{/if}
+			</div>
+			<button
+				class="w-full px-2 py-1.5 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+				onclick={saveToFolder}
+				disabled={isSaving || project.frames.length === 0}
+			>
+				{#if isSaving}
+					<span class="inline-flex items-center gap-1.5">
+						<span class="animate-spin">⏳</span> Saving {project.frames.length} frames...
+					</span>
+				{:else}
+					💾 Save Animation to Folder
+				{/if}
+			</button>
+		</div>
+	{/if}
+
 	{#if project.frames.length > 0}
 		<p class="text-xs text-gray-600 text-center">
 			{project.frames.length} frames • {previewColumns} cols • {frameSize}px
@@ -338,3 +438,11 @@
 		<p class="text-xs text-gray-500 text-center">Generate frames to export</p>
 	{/if}
 </div>
+
+<!-- Folder Picker Modal -->
+{#if showFolderPicker}
+	<FolderPicker
+		onSelect={onFolderSelect}
+		onClose={() => showFolderPicker = false}
+	/>
+{/if}

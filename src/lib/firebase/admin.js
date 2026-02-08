@@ -14,31 +14,37 @@ let adminStorage;
  * Used for: session verification, Firestore writes, Storage uploads
  */
 function initAdmin() {
-	if (getApps().length === 0) {
-		const projectId = env.FIREBASE_PROJECT_ID;
-		const clientEmail = env.FIREBASE_CLIENT_EMAIL;
-		const privateKey = env.FIREBASE_PRIVATE_KEY;
-		const storageBucket = env.FIREBASE_STORAGE_BUCKET;
+	try {
+		if (getApps().length === 0) {
+			const projectId = env.FIREBASE_PROJECT_ID;
+			const clientEmail = env.FIREBASE_CLIENT_EMAIL;
+			const privateKey = env.FIREBASE_PRIVATE_KEY;
+			const storageBucket = env.FIREBASE_STORAGE_BUCKET;
 
-		if (!projectId || !clientEmail || !privateKey) {
-			throw new Error(
-				'Firebase Admin credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env'
-			);
+			if (!projectId || !clientEmail || !privateKey) {
+				console.error('[Firebase Admin] Missing credentials. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env');
+				throw new Error(
+					'Firebase Admin credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env'
+				);
+			}
+
+			adminApp = initializeApp({
+				credential: cert({
+					projectId,
+					clientEmail,
+					privateKey: privateKey.replace(/\\n/g, '\n')
+				}),
+				storageBucket: storageBucket || `${projectId}.firebasestorage.app`
+			});
+		} else {
+			adminApp = getApps()[0];
 		}
 
-		adminApp = initializeApp({
-			credential: cert({
-				projectId,
-				clientEmail,
-				privateKey: privateKey.replace(/\\n/g, '\n')
-			}),
-			storageBucket: storageBucket || `${projectId}.firebasestorage.app`
-		});
-	} else {
-		adminApp = getApps()[0];
+		return adminApp;
+	} catch (error) {
+		console.error('[Firebase Admin] Initialization error:', error);
+		throw error;
 	}
-
-	return adminApp;
 }
 
 /**

@@ -85,7 +85,24 @@ export async function generateWithCascade(parts, configOverrides = {}, timeoutMs
 			}
 			console.warn(`[Gemini] ${model} returned empty candidates`);
 		} catch (err) {
-			console.warn(`[Gemini] ${model} failed: ${err.message}`);
+			// Log detailed error information for debugging
+			const errorDetails = {
+				model,
+				message: err.message,
+				status: err.status || err.statusCode,
+				code: err.code,
+				response: err.response ? JSON.stringify(err.response).substring(0, 500) : undefined
+			};
+			console.warn(`[Gemini] ${model} failed:`, errorDetails);
+			
+			// If it's a quota/rate limit error, log it prominently
+			if (err.message?.toLowerCase().includes('quota') || 
+				err.message?.toLowerCase().includes('rate limit') ||
+				err.message?.includes('429') ||
+				err.status === 429 ||
+				err.statusCode === 429) {
+				console.error(`[Gemini] ⚠️ QUOTA/RATE LIMIT ERROR for ${model}:`, err.message);
+			}
 		}
 	}
 	throw new Error('All Gemini models failed — check API key & quota');

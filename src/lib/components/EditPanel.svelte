@@ -1,4 +1,11 @@
 <script>
+	import { projectStore } from '$lib/stores/project.js';
+	import { userFiles } from '$lib/stores/userFiles.js';
+	import { createFile } from '$lib/firebase/firestore.js';
+	import FolderPicker from './FolderPicker.svelte';
+
+	let { initialImage = null, onChange = null } = $props();
+
 	let mode = $state('edit'); // 'edit' or 'expand'
 	let sourceImage = $state(null);
 	let editPrompt = $state('');
@@ -11,6 +18,11 @@
 	let imgWidth = $state(0);
 	let imgHeight = $state(0);
 	let lightboxSrc = $state(null);
+	
+	// Save to folder
+	let showFolderPicker = $state(false);
+	let saveFolderId = $state(null);
+	let saveFolderPath = $state(null);
 
 	function handleFileChange(e) {
 		const file = e.target.files?.[0];
@@ -32,6 +44,7 @@
 			sourceImage = ev.target.result;
 			resultImage = null;
 			error = null;
+			onChange?.(ev.target.result);
 			const img = new Image();
 			img.onload = () => {
 				imgWidth = img.width;
@@ -42,12 +55,27 @@
 		reader.readAsDataURL(file);
 	}
 
+	// Load image from parent (wizard or store) whenever the prop changes
+	let _lastLoadedImage = null;
+	$effect(() => {
+		if (initialImage && initialImage !== _lastLoadedImage) {
+			_lastLoadedImage = initialImage;
+			sourceImage = initialImage;
+			resultImage = null;
+			error = null;
+			const img = new Image();
+			img.onload = () => { imgWidth = img.width; imgHeight = img.height; };
+			img.src = initialImage;
+		}
+	});
+
 	function clearImage() {
 		sourceImage = null;
 		resultImage = null;
 		error = null;
 		imgWidth = 0;
 		imgHeight = 0;
+		onChange?.(null);
 	}
 
 	function buildExpandedImage() {
@@ -136,6 +164,7 @@
 				imageToSend = await buildExpandedImage();
 				promptToSend = `OUTPAINTING: The provided image has gray (#C0C0C0) border areas where the canvas was expanded. The original artwork is intact in its position. Generate new content ONLY in the gray areas to seamlessly extend the scene. Keep the original pixels untouched. Expansion direction: ${expandDirection}. What to generate in the new space: ${editPrompt}`;
 			} else {
+				// Use user's prompt directly - don't override with background instructions
 				promptToSend = `Edit this image according to these instructions: ${editPrompt}. Keep everything not explicitly mentioned unchanged. Maintain the same art style, lighting, and quality.`;
 			}
 
@@ -153,6 +182,7 @@
 			if (!res.ok) throw new Error(data.error || 'Edit failed');
 
 			resultImage = data.image;
+			onChange?.(data.image);
 		} catch (e) {
 			error = e.message;
 		} finally {
@@ -178,6 +208,73 @@
 			imgHeight = img.height;
 		};
 		img.src = sourceImage;
+		onChange?.(sourceImage);
+	}
+
+	function moveToStyle() {
+		if (!resultImage) return;
+		projectStore.update(p => ({ ...p, styleImage: resultImage }));
+	}
+
+	async function onFolderSelect(folderId, folderPath) {
+		saveFolderId = folderId;
+		saveFolderPath = folderPath;
+		showFolderPicker = false;
+		// Auto-save after selecting folder
+		if (resultImage) {
+			await performSave();
+		}
+	}
+
+	async function performSave() {
+		if (!resultImage || !saveFolderId) return;
+
+		try {
+			const uid = userFiles.getUid();
+			if (!uid) {
+				alert('You must be logged in to save files');
+				return;
+			}
+
+			const filename = `edited_${Date.now()}.png`;
+			const res = await fetch('/api/upload-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					imageData: resultImage,
+					filename,
+					folder: saveFolderId
+				})
+			});
+
+			if (!res.ok) {
+				const data = await res.json();
+				throw new Error(data.error || 'Upload failed');
+			}
+
+			const { url } = await res.json();
+			await createFile(uid, saveFolderId, filename, url, 'image', {
+				sourceType: 'edit',
+				prompt: editPrompt,
+				mode
+			});
+
+			alert('Image saved successfully!');
+		} catch (err) {
+			console.error('Save error:', err);
+			alert('Failed to save image: ' + err.message);
+		}
+	}
+
+	async function saveToFiles() {
+		if (!resultImage) return;
+		
+		if (!saveFolderId) {
+			showFolderPicker = true;
+			return;
+		}
+
+		await performSave();
 	}
 </script>
 
@@ -335,19 +432,57 @@
 				/>
 			</button>
 
-			<div class="flex gap-2">
-				<button
-					onclick={downloadResult}
-					class="flex-1 px-2 py-1.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
-				>
-					📥 Download
-				</button>
-				<button
-					onclick={useResultAsSource}
-					class="flex-1 px-2 py-1.5 text-xs bg-purple-500 text-white rounded hover:bg-purple-600"
-				>
-					🔄 Edit Again
-				</button>
+			<div class="space-y-2">
+				<!-- Save to folder selector -->
+				<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
+					<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Save to:</span>
+					<button
+						class="flex-1 text-left px-2 py-1 text-[11px] rounded border transition-colors truncate
+							{saveFolderPath
+								? 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50 font-medium'
+								: 'bg-white border-gray-300 text-gray-400 hover:bg-gray-100'}"
+						onclick={() => showFolderPicker = true}
+					>
+						{saveFolderPath || '📁 Choose folder…'}
+					</button>
+					{#if saveFolderPath}
+						<button
+							class="text-[10px] text-gray-400 hover:text-red-500"
+							onclick={() => { saveFolderId = null; saveFolderPath = null; }}
+							title="Clear"
+						>✕</button>
+					{/if}
+				</div>
+
+				<!-- Action buttons -->
+				<div class="grid grid-cols-2 gap-2">
+					<button
+						onclick={saveToFiles}
+						disabled={!resultImage}
+						class="px-2 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						💾 Save to Files
+					</button>
+					<button
+						onclick={moveToStyle}
+						disabled={!resultImage}
+						class="px-2 py-1.5 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+					>
+						✨ Move to Style
+					</button>
+					<button
+						onclick={downloadResult}
+						class="px-2 py-1.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
+					>
+						📥 Download
+					</button>
+					<button
+						onclick={useResultAsSource}
+						class="px-2 py-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
+					>
+						🔄 Edit Again
+					</button>
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -380,4 +515,12 @@
 			onclick={() => lightboxSrc = null}
 		>✕</button>
 	</div>
+{/if}
+
+<!-- Folder Picker Modal -->
+{#if showFolderPicker}
+	<FolderPicker
+		onSelect={onFolderSelect}
+		onClose={() => showFolderPicker = false}
+	/>
 {/if}

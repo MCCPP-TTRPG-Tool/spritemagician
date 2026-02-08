@@ -3,6 +3,11 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { completedJobs } from '$lib/stores/completedJobs.js';
+	import { userFiles } from '$lib/stores/userFiles.js';
+	import { createFile } from '$lib/firebase/firestore.js';
+	import FolderPicker from './FolderPicker.svelte';
+
+	let { initialReferenceImage = null, onGenerated = null } = $props();
 
 	// ── Wizard step ──────────────────────────────────
 	let step = $state('create'); // 'create' | 'creating' | 'review' | 'pose-config' | 'pose-generating' | 'pose-review'
@@ -34,6 +39,20 @@
 	let styleError = $state(null);
 	let styleFileInput = $state(null);
 	let styleUploading = $state(false);
+
+	// ── Save to folder state ───────────────────────────
+	let showFolderPicker = $state(false);
+	let saveFolderId = $state(null);
+	let saveFolderPath = $state(null);
+
+	// ── Load reference from parent (wizard or store) whenever the prop changes ──
+	let _lastRefImage = null;
+	$effect(() => {
+		if (initialReferenceImage && initialReferenceImage !== _lastRefImage) {
+			_lastRefImage = initialReferenceImage;
+			referenceImage = initialReferenceImage;
+		}
+	});
 
 	// ── Load style anchor on mount ───────────────────
 	$effect(() => {
@@ -125,20 +144,17 @@
 			if (!response.ok) throw new Error(data.error || data.details || 'Generation failed');
 
 			generatedCharacter = data.image;
+			onGenerated?.(data.image);
 
-			// Auto-save
+			// Add to completed jobs for review
 			await completedJobs.addSprite({
 				name: jobName,
 				image: data.image,
 				description
 			});
-			projectStore.update(p => ({ ...p, firstFrame: data.image }));
 
-			if (browser) {
-				window.dispatchEvent(new CustomEvent('autoSaveSprite', {
-					detail: { image: data.image, description, type: 'character', style: homm3Mode ? 'homm3' : 'custom' }
-				}));
-			}
+			// Don't set firstFrame automatically - let user decide if they want to use it for animation
+			// projectStore.update(p => ({ ...p, firstFrame: data.image }));
 
 			jobQueue.completeJob(jobId);
 			step = 'review';
@@ -165,6 +181,73 @@
 	function retryCharacter() {
 		generatedCharacter = null;
 		step = 'create';
+	}
+
+	async function onFolderSelect(folderId, folderPath) {
+		saveFolderId = folderId;
+		saveFolderPath = folderPath;
+		showFolderPicker = false;
+		// Auto-save after selecting folder
+		if (generatedCharacter) {
+			await performSave();
+		}
+	}
+
+	async function performSave() {
+		if (!generatedCharacter || !saveFolderId) return;
+
+		try {
+			const uid = userFiles.getUid();
+			if (!uid) {
+				alert('You must be logged in to save files');
+				return;
+			}
+
+			const filename = `${(description || 'character').slice(0, 30)}.png`;
+			const res = await fetch('/api/upload-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					imageData: generatedCharacter,
+					filename,
+					folder: saveFolderId
+				})
+			});
+
+			if (!res.ok) {
+				const data = await res.json();
+				throw new Error(data.error || 'Upload failed');
+			}
+
+			const { url } = await res.json();
+			await createFile(uid, saveFolderId, filename, url, 'image', {
+				sourceType: 'generation',
+				prompt: description,
+				assetType: 'character',
+				style: homm3Mode ? 'homm3' : 'custom'
+			});
+
+			alert('Character saved successfully!');
+		} catch (err) {
+			console.error('Save error:', err);
+			alert('Failed to save character: ' + err.message);
+		}
+	}
+
+	async function saveToFiles() {
+		if (!generatedCharacter) return;
+		
+		if (!saveFolderId) {
+			showFolderPicker = true;
+			return;
+		}
+
+		await performSave();
+	}
+
+	function useForAnimation() {
+		if (!generatedCharacter) return;
+		projectStore.update(p => ({ ...p, firstFrame: generatedCharacter }));
 	}
 
 	// ═══════════════════════════════════════════════════
@@ -489,15 +572,55 @@
 			</div>
 		{/if}
 
-		<div class="flex gap-2 mt-2">
+		<!-- Save to folder selector -->
+		<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200 mt-2">
+			<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Save to:</span>
 			<button
-				class="flex-1 px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium"
+				class="flex-1 text-left px-2 py-1 text-[11px] rounded border transition-colors truncate
+					{saveFolderPath
+						? 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50 font-medium'
+						: 'bg-white border-gray-300 text-gray-400 hover:bg-gray-100'}"
+				onclick={() => showFolderPicker = true}
+			>
+				{saveFolderPath || '📁 Choose folder…'}
+			</button>
+			{#if saveFolderPath}
+				<button
+					class="text-[10px] text-gray-400 hover:text-red-500"
+					onclick={() => { saveFolderId = null; saveFolderPath = null; }}
+					title="Clear"
+				>✕</button>
+			{/if}
+		</div>
+
+		<!-- Action buttons -->
+		<div class="grid grid-cols-2 gap-2 mt-2">
+			<button
+				onclick={saveToFiles}
+				disabled={!generatedCharacter}
+				class="px-3 py-2 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+			>
+				💾 Save to Files
+			</button>
+			<button
+				onclick={useForAnimation}
+				disabled={!generatedCharacter}
+				class="px-3 py-2 text-xs bg-green-500 text-white rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+			>
+				🎬 Use for Animation
+			</button>
+			<button
+				class="px-3 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 text-xs font-medium"
 				onclick={retryCharacter}
-			>🔄 Retry</button>
+			>
+				🔄 Retry
+			</button>
 			<button
-				class="flex-1 px-3 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 text-xs font-medium"
+				class="px-3 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 text-xs font-medium"
 				onclick={approveCharacter}
-			>🦴 Generate Poses →</button>
+			>
+				🦴 Generate Poses →
+			</button>
 		</div>
 
 	<!-- ═══════════════════════════════════════════════ -->
@@ -715,4 +838,12 @@
 			{/if}
 		</div>
 	</div>
+{/if}
+
+<!-- Folder Picker Modal -->
+{#if showFolderPicker}
+	<FolderPicker
+		onSelect={onFolderSelect}
+		onClose={() => showFolderPicker = false}
+	/>
 {/if}

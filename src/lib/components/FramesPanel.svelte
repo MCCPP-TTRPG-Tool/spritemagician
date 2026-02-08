@@ -54,22 +54,6 @@
 </script>
 
 <div class="flex flex-col h-full text-xs">
-	<!-- Header -->
-	<div class="flex items-center justify-between px-2 py-1.5 bg-gray-100 border-b rounded-t flex-shrink-0">
-		<div class="flex items-center gap-2 font-medium text-gray-700">
-			<span>🎞️</span>
-			<span>Frames</span>
-			<span class="px-1.5 py-0.5 bg-blue-200 text-blue-800 text-[10px] rounded-full">{project.frames.length}</span>
-		</div>
-		<div class="flex items-center gap-2">
-			<span class="text-[10px] text-gray-500">{project.fps} FPS</span>
-			{#if project.frames.length > 0}
-				<button class="px-2 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium text-[10px]"
-					onclick={saveAsAnimation}>💾 Save</button>
-			{/if}
-		</div>
-	</div>
-
 	<!-- Unsaved animations tabs -->
 	{#if unsaved.animations.length > 0}
 		<div class="flex gap-1 px-2 py-1.5 bg-orange-50 border-b overflow-x-auto flex-shrink-0">
@@ -95,12 +79,13 @@
 				<p class="text-[10px]">Generate an animation to see frames here</p>
 			</div>
 		{:else}
-			<div class="grid grid-cols-5 gap-2">
+			<div class="grid grid-cols-4 gap-2">
 				{#each project.frames as frame, index (index)}
+					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
-						class="relative border rounded overflow-hidden cursor-move transition-all aspect-square
-							{dragIdx === index ? 'opacity-50 scale-95' : ''}
-							{overIdx === index ? 'border-blue-500 scale-105' : 'border-gray-300'}"
+						class="relative group rounded-lg border-2 cursor-move transition-all aspect-square bg-gray-100
+							{dragIdx === index ? 'opacity-50 scale-95 border-blue-400' : ''}
+							{overIdx === index ? 'border-blue-500 scale-105' : 'border-transparent hover:border-gray-300'}"
 						draggable="true"
 						ondragstart={() => onDragStart(index)}
 						ondragover={(e) => onDragOver(e, index)}
@@ -108,15 +93,39 @@
 						ondragend={onDragEnd}
 						role="listitem"
 					>
-						<img src={frame} alt="Frame {index + 1}" class="w-full h-full object-contain" />
-						<div class="absolute top-1 left-1 bg-black/70 text-white text-[10px] px-1 py-0.5 rounded">{index + 1}</div>
+						<div class="aspect-square flex items-center justify-center overflow-hidden rounded-t-md">
+							<img src={frame} alt="Frame {index + 1}" class="w-full h-full object-contain" />
+						</div>
+						
+						<!-- Frame number badge -->
+						<div class="absolute top-1 left-1 bg-black/70 text-white text-[10px] px-1.5 py-0.5 rounded font-bold">
+							{index + 1}
+						</div>
+
+						<!-- Delete button -->
 						<button
-							class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-4 h-4 flex items-center justify-center text-[10px] hover:bg-red-600"
-							onclick={() => removeFrame(index)}
+							class="absolute top-1 right-1 w-6 h-6 rounded-full bg-red-500/80 text-white text-xs flex items-center justify-center
+								opacity-0 group-hover:opacity-100 hover:bg-red-600 transition-all z-10"
+							onclick={(e) => { e.stopPropagation(); removeFrame(index); }}
+							title="Remove frame"
 						>×</button>
+
+						<!-- Frame label -->
+						<div class="px-1.5 py-1">
+							<p class="text-[11px] truncate text-center font-medium">Frame {index + 1}</p>
+						</div>
 					</div>
 				{/each}
 			</div>
+		{/if}
+	</div>
+
+	<!-- Status bar -->
+	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
+		<span>{project.frames.length} frame{project.frames.length !== 1 ? 's' : ''} @ {project.fps} FPS</span>
+		{#if project.frames.length > 0}
+			<button class="px-2 py-1 bg-green-100 text-green-700 rounded hover:bg-green-200 font-medium text-[10px]"
+				onclick={saveAsAnimation}>💾 Save Animation</button>
 		{/if}
 	</div>
 </div>

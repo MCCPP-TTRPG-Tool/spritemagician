@@ -74,10 +74,11 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	const PIXEL_ART_PRESERVE = 'pixel art style, crisp pixels, no smoothing, no blur, pixelated aesthetic';
+	const PIXEL_ART_PRESERVE = 'pixel art style, crisp pixels, no smoothing, no blur, pixelated aesthetic, consistent character design';
+	const LOOP_INSTRUCTIONS = 'SEAMLESS TRANSITION: Smooth morph from first frame to last frame. First and last frames must match perfectly for looping. No visible jump or discontinuity. Perfect frame continuity.';
 	const enhancedPrompt = prompt
-		? `Smooth transition from first frame to last frame, consistent character. ${PIXEL_ART_PRESERVE}. ${prompt}`
-		: `${PIXEL_ART_PRESERVE}. subtle idle animation transition`;
+		? `${LOOP_INSTRUCTIONS} ${PIXEL_ART_PRESERVE}. ${prompt}. Consistent character appearance, stable camera, smooth motion, no jitter, high quality interpolation`
+		: `${LOOP_INSTRUCTIONS} ${PIXEL_ART_PRESERVE}. Subtle idle animation transition, smooth and natural motion`;
 
 	// 1. Ensure both frames are public URLs (Replicate requires URLs)
 	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Uploading start & end frames...' });
@@ -181,11 +182,30 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 // Main async processor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null) {
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, guidanceScale = null, seed = null, negativePrompt = null) {
 	const isInterpolation = !!endImage;
 	
-	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic';
-	const enhancedPrompt = prompt ? `${PIXEL_ART_PRESERVE}. ${prompt}` : `${PIXEL_ART_PRESERVE}. subtle idle animation`;
+	// Enhanced prompt engineering for better accuracy and loops
+	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic, consistent character design';
+	
+	// Loop-specific instructions for seamless animations
+	const LOOP_INSTRUCTIONS = loop 
+		? 'SEAMLESS LOOP: The animation must end exactly where it begins. First frame and last frame must be identical. Smooth transition from last frame back to first frame. No visible jump or discontinuity. Perfect loop continuity.'
+		: '';
+	
+	// Enhanced prompt structure
+	let enhancedPrompt;
+	if (prompt) {
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
+	} else {
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, smooth and natural motion`;
+	}
+	
+	// Default negative prompt to avoid common issues
+	const defaultNegativePrompt = 'blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality';
+	const finalNegativePrompt = negativePrompt 
+		? `${defaultNegativePrompt}, ${negativePrompt}`
+		: defaultNegativePrompt;
 	
 	try {
 		// ── Interpolation Mode (Start → End frame via Replicate FLF) ────────
@@ -238,6 +258,15 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			const svdFrames = Math.min(25, Math.max(14, frameCount));
 			console.log(`SVD generating ${svdFrames} frames for ${frameCount} requested`);
 			
+			const svdMotion = motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127;
+			const svdInput = {
+				input_image: imageUrl,
+				motion_bucket_id: svdMotion,
+				fps: fps,
+				num_frames: svdFrames,
+				...(seed !== null && { seed: seed })
+			};
+			
 			const response = await fetch('https://api.replicate.com/v1/predictions', {
 				method: 'POST',
 				headers: {
@@ -246,12 +275,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				},
 				body: JSON.stringify({
 					version: svdVersion.split(':')[1],
-					input: {
-						input_image: imageUrl,
-						motion_bucket_id: motionAmount,
-						fps: fps,
-						num_frames: svdFrames
-					}
+					input: svdInput
 				})
 			});
 
@@ -339,37 +363,62 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		let input;
 		
 		if (modelId === 'hailuo') {
+			// Hailuo supports guidance_scale
+			const hailuoGuidance = guidanceScale !== null ? guidanceScale : 7.5;
 			input = {
 				prompt: enhancedPrompt,
-				first_frame_image: imageUrl
+				negative_prompt: finalNegativePrompt,
+				first_frame_image: imageUrl,
+				guidance_scale: hailuoGuidance,
+				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'ltxv') {
+			// LTX Video supports guidance_scale and motion_scale
+			const ltxGuidance = guidanceScale !== null ? guidanceScale : 7.5;
+			const ltxMotion = motionAmount ? Math.max(0.1, Math.min(2.0, motionAmount / 127)) : 1.0;
 			input = {
 				input_image: imageUrl,
 				prompt: enhancedPrompt,
+				negative_prompt: finalNegativePrompt,
 				num_frames: Math.min(65, frameCount * 3),
-				guidance_scale: 7.5,
-				motion_scale: 1.0
+				guidance_scale: ltxGuidance,
+				motion_scale: ltxMotion,
+				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'live2d') {
+			// Live2D supports guidance_scale
+			const live2dGuidance = guidanceScale !== null ? guidanceScale : 7.5;
 			input = {
 				prompt: enhancedPrompt,
-				first_frame_image: imageUrl
+				negative_prompt: finalNegativePrompt,
+				first_frame_image: imageUrl,
+				guidance_scale: live2dGuidance,
+				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan22') {
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
+			// WAN 2.2 supports motion_bucket_id for motion control
+			const wanMotion = motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127;
 			input = {
 				prompt: enhancedPrompt,
+				negative_prompt: finalNegativePrompt,
 				image: imageUrl,
 				num_frames: wanFrames,
-				fps: fps
+				fps: fps,
+				motion_bucket_id: wanMotion,
+				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan25') {
+			// WAN 2.5 supports additional parameters
+			const wan25Motion = motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127;
 			input = {
 				prompt: enhancedPrompt,
+				negative_prompt: finalNegativePrompt,
 				image: imageUrl,
 				max_area: '832x480',
-				fast_mode: 'Disabled'
+				fast_mode: 'Disabled',
+				motion_bucket_id: wan25Motion,
+				...(seed !== null && { seed: seed })
 			};
 		} else {
 			input = {
@@ -474,7 +523,7 @@ export async function POST({ request }) {
 	const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 
 	try {
-		const { referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate } = await request.json();
+		const { referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate, guidanceScale, seed, negativePrompt } = await request.json();
 
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required. Upload an image first.' }, { status: 400 });
@@ -504,8 +553,21 @@ export async function POST({ request }) {
 				? 'Interpolating with WAN 2.2 First-Last-Frame...'
 				: `Initializing ${selectedModel.name}...`
 		});
-
-		processAnimationAsync(jobId, referenceImage, prompt, numFrames, motionAmount || 127, fps || 8, modelId, isInterpolation ? endImage : null);
+		
+		processAnimationAsync(
+			jobId, 
+			referenceImage, 
+			prompt, 
+			numFrames, 
+			motionAmount || 127, 
+			fps || 8, 
+			modelId, 
+			isInterpolation ? endImage : null,
+			loop || false,
+			guidanceScale || null,
+			seed || null,
+			negativePrompt || null
+		);
 
 		return json({
 			jobId,
