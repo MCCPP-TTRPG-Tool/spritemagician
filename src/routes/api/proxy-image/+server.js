@@ -12,6 +12,9 @@ const ALLOWED_DOMAINS = [
 	'storage.googleapis.com',
 	'replicate.delivery',
 	'pbxt.replicate.delivery',
+	'runpod.net',
+	'runpod.io',
+	'runpodusercontent.com'
 ];
 
 function isAllowedUrl(urlStr) {

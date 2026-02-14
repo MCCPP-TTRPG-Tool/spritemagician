@@ -3,6 +3,7 @@
 	import EditPanel from '$lib/components/EditPanel.svelte';
 	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
 	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
+	import KeyframePanel from '$lib/components/KeyframePanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
@@ -11,7 +12,7 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { goto } from '$app/navigation';
 	
-	let activeTab = $state('wizard'); // 'wizard' | 'edit' | 'style' | 'animate'
+	let activeTab = $state('wizard'); // 'wizard' | 'edit' | 'style' | 'animate' | 'keyframes'
 	let rightTab = $state('preview'); // 'preview' | 'export'
 	let showUserMenu = $state(false);
 
@@ -163,6 +164,12 @@
 			>
 				🎬 Animate
 			</button>
+			<button
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'keyframes' ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'keyframes'}
+			>
+				🦾 Keyframes
+			</button>
 			</div>
 			
 			<div class="p-3 flex-1 overflow-y-auto">
@@ -174,6 +181,8 @@
 			<CharacterWizard initialReferenceImage={styleImage} />
 		{:else if activeTab === 'animate'}
 			<GenerationPanel />
+		{:else if activeTab === 'keyframes'}
+			<KeyframePanel />
 		{/if}
 		</div>
 		</div>
