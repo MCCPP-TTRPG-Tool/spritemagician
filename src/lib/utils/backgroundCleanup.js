@@ -14,7 +14,10 @@
  * @returns {Promise<string>} Cleaned image as data URL
  */
 export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, removeWhite = true, removeGray = true, aggressive = true) {
-	if (!imageDataUrl) return imageDataUrl;
+	if (!imageDataUrl) {
+		console.error('[cleanupBackground] No image data provided');
+		return imageDataUrl;
+	}
 
 	return new Promise((resolve, reject) => {
 		const img = new Image();
@@ -96,7 +99,6 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 				bgR = bgG = bgB = 192; // #C0C0C0
 			}
 			
-			console.log(`Detected background color: RGB(${bgR}, ${bgG}, ${bgB})`);
 
 			// First pass: Mark pixels for removal
 			const toRemove = new Set();
@@ -148,7 +150,8 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 				}
 
 				// Remove pixels that match the detected background color
-				// This is the key fix - remove pixels matching actual background, not guessing
+				// IMPORTANT: Only remove if pixel is on edge OR has low alpha OR has few opaque neighbors
+				// This prevents removing character pixels that happen to match background color
 				if (removeGray) {
 					// Calculate color distance from detected background
 					const colorDistance = Math.sqrt(
@@ -157,35 +160,48 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 						Math.pow(b - bgB, 2)
 					);
 					
-					// Remove pixels that are very close to background color
-					// Threshold: 30 color distance units (allows for slight variations)
-					if (colorDistance < 30) {
-						// If pixel matches background color closely, remove it
-						// Even if inside character - rembg often misses these
-						toRemove.add(i);
-						continue;
-					}
+					// Only remove if pixel matches background AND meets one of these conditions:
+					// 1. Very close match (< 20) AND (on edge OR low alpha OR few neighbors)
+					// 2. Close match (< 40) AND (on edge AND low alpha)
+					// 3. Moderate match (< 60) AND (on edge AND very low alpha)
 					
-					// Also remove pixels that are moderately close to background (for semi-transparent artifacts)
-					if (colorDistance < 50 && a < 200) {
-						toRemove.add(i);
-						continue;
+					if (colorDistance < 20) {
+						// Very close match - only remove if on edge, low alpha, or isolated
+						if (isOnEdge || a < 150 || opaqueNeighborCount < 2) {
+							toRemove.add(i);
+							continue;
+						}
+					} else if (colorDistance < 40) {
+						// Close match - only remove if on edge AND low alpha
+						if (isOnEdge && a < 180) {
+							toRemove.add(i);
+							continue;
+						}
+					} else if (colorDistance < 60 && a < 120) {
+						// Moderate match - only remove if on edge AND very low alpha
+						if (isOnEdge) {
+							toRemove.add(i);
+							continue;
+						}
 					}
 				}
 
 				// Edge detection: if pixel has low alpha and few opaque neighbors, remove it
+				// BUT: Protect pixels that have many opaque neighbors (definitely part of character)
 				if (aggressive) {
-					if (a < 200 && opaqueNeighborCount < 3) {
+					// Only remove if pixel has low alpha AND few neighbors
+					// If it has many neighbors, it's likely part of the character even with low alpha
+					if (a < 200 && opaqueNeighborCount < 5) {
 						toRemove.add(i);
-					} else if (isOnEdge && a < 120) {
-						// On edge of image with low alpha - likely background
+					} else if (isOnEdge && a < 120 && opaqueNeighborCount < 2) {
+						// On edge of image with low alpha and few neighbors - likely background
 						toRemove.add(i);
 					}
 				} else {
 					// Less aggressive: only remove if no neighbors
 					if (a < 180 && !hasOpaqueNeighbor) {
 						toRemove.add(i);
-					} else if (isOnEdge && a < 100) {
+					} else if (isOnEdge && a < 100 && opaqueNeighborCount < 1) {
 						toRemove.add(i);
 					}
 				}
@@ -224,7 +240,8 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 					}
 					
 					// If mostly surrounded by transparent pixels and has low alpha, remove it
-					if (transparentNeighbors >= 6 && data[i + 3] < 150) {
+					// BUT: Be more conservative - only remove if truly isolated
+					if (transparentNeighbors >= 7 && data[i + 3] < 120) {
 						data[i + 3] = 0;
 					}
 				}
@@ -236,10 +253,13 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 			}
 
 			ctx.putImageData(imageData, 0, 0);
-			resolve(canvas.toDataURL('image/png'));
+			const result = canvas.toDataURL('image/png');
+			resolve(result);
 		};
 
-		img.onerror = () => reject(new Error('Failed to load image for background cleanup'));
+		img.onerror = () => {
+			reject(new Error('Failed to load image for background cleanup'));
+		};
 		img.src = imageDataUrl;
 	});
 }

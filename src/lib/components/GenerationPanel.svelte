@@ -81,7 +81,7 @@
 		{ 
 			id: 'idle', 
 			name: 'Idle', 
-			description: `${HOMM3_STYLE}, standing in place, feet do not move, focus on micro-movements, rhythmic chest expansion from breathing, slight weight redistribution in the hips, subtle tension in the neck muscles, static background, volumetric lighting, 8k resolution, crisp textures, high-fidelity render.`
+			description: `${HOMM3_STYLE}, standing in place, feet do not move, focus on micro-movements, rhythmic chest expansion from breathing, slight weight redistribution in the hips, subtle tension in the neck muscles, mouth closed and static, no mouth movement, no talking, no jaw movement, character maintains exact same size throughout animation, no scaling, no zoom, consistent character scale, static background, volumetric lighting, 8k resolution, crisp textures, high-fidelity render.`
 		},
 		{ 
 			id: 'cast', 
@@ -101,12 +101,12 @@
 		{ 
 			id: 'hit', 
 			name: 'Take Damage', 
-			description: `${HOMM3_STYLE}, damage reaction, body recoils, flinch motion, quick recovery`
+			description: `${HOMM3_STYLE}, cinematic game sprite, character in a staggered hit-reaction pose, body recoiling backwards from impact, torso arched slightly, head snapped back, eyes wide and gritted teeth, one arm raised defensively, feet planted but skidding slightly, subtle motion blur on limbs to indicate force, particles of impact sparks, character maintains exact same size throughout animation, no scaling, no zoom, consistent character scale, high fidelity, 8k resolution, maintain identical character features and clothing.`
 		},
 		{ 
 			id: 'death', 
 			name: 'Death', 
-			description: `${HOMM3_STYLE}, death animation, character falls and collapses, lies motionless`
+			description: `${HOMM3_STYLE}, character lying completely flat on the ground, horizontal orientation, body viewed from a high bird's-eye angle, limbs sprawled out across the floor, torso and head pressed against the surface, parallel to the ground plane, no vertical depth, weighted physics, defeated pose, gritty painterly texture, high contrast shadows cast directly underneath the body, sharp edges, character maintains exact same size throughout animation, no scaling, no zoom, consistent character scale, 8k resolution, high fidelity.`
 		},
 		{ 
 			id: 'custom', 
@@ -150,7 +150,6 @@
 			const response = await fetch(`/api/generation-progress?jobId=${jobId}`);
 			if (response.ok) {
 				const data = await response.json();
-				console.log('Progress update:', data);
 				progress = data;
 				
 				// Update job queue

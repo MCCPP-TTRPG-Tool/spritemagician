@@ -99,6 +99,14 @@ export async function POST({ request, locals }) {
 				'',
 				`Output: single sprite, 3/4 isometric view facing right, idle stance,`,
 				`grey background (#808080), centered in a ${canvasPx}×${canvasPx}px canvas.`,
+				'',
+				'CRITICAL REQUIREMENTS - MUST FOLLOW:',
+				'- Absolutely NO black borders, NO black outlines, NO black edges, NO black lines, NO black strokes, NO black rims',
+				'- NO dark borders or dark outlines of any kind',
+				'- The character must blend seamlessly with the grey background - no visible separation',
+				'- All edges should be soft and blend naturally - no hard black lines',
+				'- If you see any black pixels around the character, remove them completely',
+				'- The character should appear to emerge naturally from the background without any border',
 			].join('\n'),
 		});
 

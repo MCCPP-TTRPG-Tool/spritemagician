@@ -4,6 +4,7 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
+	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { onDestroy } from 'svelte';
 
@@ -81,7 +82,23 @@
 		if (job.type === 'sprite' && job.image) {
 			projectStore.update(p => ({ ...p, firstFrame: job.image }));
 		} else if (job.frames?.length) {
+			// Reset initial state when loading a new animation (so it becomes the new initial)
+			resetInitialState();
 			projectStore.update(p => ({ ...p, frames: [...job.frames] }));
+		}
+		menuItemId = null;
+	}
+	
+	function addJobToQueue(job) {
+		if (job.frames?.length) {
+			addToQueue({
+				id: job.id,
+				name: job.name || 'Animation',
+				frames: job.frames,
+				fps: job.fps || 12,
+				url: null // Jobs don't have URLs, they're in-memory
+			});
+			console.log(`[JobsPanel] Added to queue: ${job.name} (${job.frames.length} frames)`);
 		}
 		menuItemId = null;
 	}
@@ -507,6 +524,12 @@
 										onclick={() => useForProject(job)}>
 										▶ <span>Use for Project</span>
 									</button>
+									{#if job.frames?.length}
+										<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+											onclick={() => { addJobToQueue(job); menuItemId = null; }}>
+											➕ <span>Add to Queue</span>
+										</button>
+									{/if}
 									<div class="border-t my-0.5"></div>
 									<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
 										onclick={() => { download(job); menuItemId = null; }}>

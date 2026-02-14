@@ -217,6 +217,9 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	// Enhanced prompt engineering for better accuracy and loops
 	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic, consistent character design';
 	
+	// Size consistency instructions
+	const SIZE_CONSISTENCY = 'CRITICAL: Character must maintain exact same size and scale throughout entire animation. No scaling, no zoom in or out, no size changes, consistent character dimensions from first frame to last frame. Character size must remain constant.';
+	
 	// Loop-specific instructions for seamless animations
 	const LOOP_INSTRUCTIONS = loop 
 		? 'SEAMLESS LOOP: The animation must end exactly where it begins. First frame and last frame must be identical. Smooth transition from last frame back to first frame. No visible jump or discontinuity. Perfect loop continuity.'
@@ -225,13 +228,13 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	// Enhanced prompt structure
 	let enhancedPrompt;
 	if (prompt) {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
 	} else {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, smooth and natural motion`;
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, mouth closed and static, no mouth movement, no talking, no jaw movement, smooth and natural motion`;
 	}
 	
 	// Default negative prompt to avoid common issues
-	const defaultNegativePrompt = 'blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality';
+	const defaultNegativePrompt = 'blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality, mouth movement, talking, jaw movement, lip sync, character scaling, size changes, zoom in, zoom out, character growing, character shrinking, inconsistent character size';
 	const finalNegativePrompt = negativePrompt 
 		? `${defaultNegativePrompt}, ${negativePrompt}`
 		: defaultNegativePrompt;

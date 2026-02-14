@@ -4,6 +4,7 @@
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
+	import AnimationQueueBar from './AnimationQueueBar.svelte';
 	
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
 	let isLooped = $state(false);
@@ -20,6 +21,7 @@
 	let saveFolderId = $state(null);
 	let saveFolderPath = $state(null);
 	let isSavingFrame = $state(false);
+	let saveFrameName = $state('');
 	
 	let previewSize = $state('md'); // 'sm' | 'md' | 'lg'
 
@@ -197,15 +199,18 @@
 	}
 
 	let isRemovingBackground = $state(false);
+	let bgRemovalProgress = $state(null); // { status: string, message: string, progress?: number, current?: number, total?: number }
 
 	async function removeBackgroundFromCurrent() {
 		const cf = getCurrentFrame();
 		if (project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
 		
 		isRemovingBackground = true;
+		bgRemovalProgress = { status: 'processing', message: 'Removing background from current frame...', progress: 0 };
 		stop();
 		
 		try {
+			bgRemovalProgress = { status: 'processing', message: 'Calling background removal API...', progress: 20 };
 			const res = await fetch('/api/remove-background', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -217,17 +222,26 @@
 				throw new Error(data.error || 'Background removal failed');
 			}
 
+			bgRemovalProgress = { status: 'processing', message: 'Processing result...', progress: 50 };
 			const { images } = await res.json();
 			if (images && images[0]) {
-				// Clean up any remaining background pixels (more aggressive for gray artifacts)
-				const cleaned = await cleanupBackground(images[0], 80, true, true, true);
+				bgRemovalProgress = { status: 'processing', message: 'Cleaning up artifacts...', progress: 70 };
+				// Clean up any remaining background pixels (less aggressive to preserve character details)
+				const cleaned = await cleanupBackground(images[0], 60, true, true, false); // Less aggressive
 				const newFrames = [...project.frames];
 				newFrames[cf] = cleaned;
 				projectStore.update(p => ({ ...p, frames: newFrames }));
+				bgRemovalProgress = { status: 'completed', message: 'Background removed successfully!', progress: 100 };
+				setTimeout(() => {
+					bgRemovalProgress = null;
+				}, 2000);
 			}
 		} catch (err) {
 			console.error('Background removal error:', err);
-			alert('Failed to remove background: ' + err.message);
+			bgRemovalProgress = { status: 'error', message: 'Failed: ' + err.message, progress: 0 };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 3000);
 		} finally {
 			isRemovingBackground = false;
 		}
@@ -241,15 +255,26 @@
 		}
 
 		isRemovingBackground = true;
+		bgRemovalProgress = { status: 'processing', message: `Removing background from ${project.frames.length} frames...`, progress: 0, current: 0, total: project.frames.length };
 		stop();
 		
 		try {
 			// Process in batches to avoid overwhelming the API
 			const batchSize = 5;
 			const newFrames = [...project.frames];
+			const totalFrames = newFrames.length;
 			
 			for (let i = 0; i < newFrames.length; i += batchSize) {
 				const batch = newFrames.slice(i, i + batchSize);
+				const batchStart = i;
+				
+				bgRemovalProgress = { 
+					status: 'processing', 
+					message: `Processing batch ${Math.floor(i / batchSize) + 1}... (${i}/${totalFrames} frames)`, 
+					progress: Math.round((i / totalFrames) * 80),
+					current: i,
+					total: totalFrames
+				};
 				
 				const res = await fetch('/api/remove-background', {
 					method: 'POST',
@@ -262,24 +287,40 @@
 					throw new Error(data.error || 'Background removal failed');
 				}
 
+				bgRemovalProgress = { 
+					status: 'processing', 
+					message: `Cleaning artifacts in batch ${Math.floor(i / batchSize) + 1}...`, 
+					progress: Math.round((i / totalFrames) * 80) + 5,
+					current: i,
+					total: totalFrames
+				};
+
 				const { images } = await res.json();
 				if (images) {
 					// Update frames in this batch and clean up remaining background
 					for (let j = 0; j < images.length && (i + j) < newFrames.length; j++) {
 						if (images[j]) {
-							// Clean up any remaining background pixels (more aggressive for gray artifacts)
-							const cleaned = await cleanupBackground(images[j], 80, true, true, true);
+							// Clean up any remaining background pixels (less aggressive to preserve character details)
+							const cleaned = await cleanupBackground(images[j], 60, true, true, false); // Less aggressive
 							newFrames[i + j] = cleaned;
 						}
 					}
 				}
 			}
 
+			bgRemovalProgress = { status: 'processing', message: 'Finalizing...', progress: 95, current: totalFrames, total: totalFrames };
 			projectStore.update(p => ({ ...p, frames: newFrames }));
-			alert(`Background removed and cleaned from ${newFrames.length} frames!`);
+			
+			bgRemovalProgress = { status: 'completed', message: `Background removed from ${newFrames.length} frames!`, progress: 100, current: totalFrames, total: totalFrames };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 2000);
 		} catch (err) {
 			console.error('Background removal error:', err);
-			alert('Failed to remove backgrounds: ' + err.message);
+			bgRemovalProgress = { status: 'error', message: 'Failed: ' + err.message, progress: 0 };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 3000);
 		} finally {
 			isRemovingBackground = false;
 		}
@@ -289,22 +330,22 @@
 		const cf = getCurrentFrame();
 		if (project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
 		
-		if (!saveFolderId) {
-			showFolderPicker = true;
-			return;
+		// Initialize default filename if not set
+		if (!saveFrameName) {
+			saveFrameName = `frame_${String(cf + 1).padStart(3, '0')}`;
 		}
 		
-		await performSaveFrame();
+		// Always show the save dialog with filename input
+		showFolderPicker = true;
 	}
+	
+	let showNestedFolderPicker = $state(false);
 	
 	async function onFolderSelect(folderId, folderPath) {
 		saveFolderId = folderId;
 		saveFolderPath = folderPath;
-		showFolderPicker = false;
-		const cf = getCurrentFrame();
-		if (project.frames.length > 0 && cf >= 0 && cf < project.frames.length) {
-			await performSaveFrame();
-		}
+		showNestedFolderPicker = false;
+		// Don't close main dialog - let user confirm with filename
 	}
 	
 	async function performSaveFrame() {
@@ -322,7 +363,9 @@
 			}
 			
 			const frameData = project.frames[cf];
-			const filename = `frame_${String(cf + 1).padStart(3, '0')}_${Date.now()}.png`;
+			// Use custom filename or generate default
+			const baseName = saveFrameName.trim() || `frame_${String(cf + 1).padStart(3, '0')}`;
+			const filename = baseName.endsWith('.png') ? baseName : `${baseName}.png`;
 			
 			const res = await fetch('/api/upload-file', {
 				method: 'POST',
@@ -347,6 +390,12 @@
 				animationName: project.prompt || 'animation',
 				fps: project.fps
 			});
+			
+			// Reset and close
+			saveFrameName = '';
+			showFolderPicker = false;
+			saveFolderId = null;
+			saveFolderPath = null;
 			
 			alert(`Frame ${cf + 1} saved successfully!`);
 		} catch (err) {
@@ -520,11 +569,119 @@
 			</div>
 		{/if}
 	</div>
+	
+	<!-- ═══ ANIMATION QUEUE BAR ═══ -->
+	<AnimationQueueBar />
+	
+	<!-- ═══ BACKGROUND REMOVAL PROGRESS BAR ═══ -->
+	{#if bgRemovalProgress}
+		<div class="flex-shrink-0 border-t bg-teal-50 px-3 py-2">
+			<div class="flex items-center gap-2 mb-1">
+				{#if bgRemovalProgress.status === 'processing'}
+					<svg class="animate-spin h-4 w-4 text-teal-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+				{:else if bgRemovalProgress.status === 'completed'}
+					<span class="text-sm">✅</span>
+				{:else if bgRemovalProgress.status === 'error'}
+					<span class="text-sm">❌</span>
+				{/if}
+				<span class="text-xs font-medium text-teal-800">
+					{#if bgRemovalProgress.total && bgRemovalProgress.total > 1}
+						Removing Background ({bgRemovalProgress.current || 0}/{bgRemovalProgress.total} frames)
+					{:else}
+						Removing Background
+					{/if}
+				</span>
+				{#if bgRemovalProgress.progress !== undefined}
+					<span class="ml-auto text-xs font-bold text-teal-700 tabular-nums">{bgRemovalProgress.progress}%</span>
+				{/if}
+			</div>
+			<p class="text-[10px] text-teal-600 mb-1.5">{bgRemovalProgress.message}</p>
+			{#if bgRemovalProgress.progress !== undefined}
+				<div class="w-full bg-teal-200 rounded-full h-1.5">
+					<div 
+						class="bg-teal-600 h-1.5 rounded-full transition-all duration-300"
+						style="width: {bgRemovalProgress.progress}%"
+					></div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 </div>
 
 {#if showFolderPicker}
+	<!-- Custom Save Dialog with Filename Input -->
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+		onclick={() => { showFolderPicker = false; saveFrameName = ''; }}
+		onkeydown={(e) => { if (e.key === 'Escape') { showFolderPicker = false; saveFrameName = ''; } }}
+	>
+		<div class="bg-white rounded-xl shadow-2xl w-full max-w-md" onclick={(e) => e.stopPropagation()}>
+			<!-- Header -->
+			<div class="flex items-center justify-between px-4 py-3 border-b">
+				<h3 class="text-sm font-bold text-gray-800">💾 Save Frame</h3>
+				<button class="text-gray-400 hover:text-gray-600 text-lg" onclick={() => { showFolderPicker = false; saveFrameName = ''; }}>✕</button>
+			</div>
+			
+			<!-- Filename Input -->
+			<div class="px-4 py-3 border-b">
+				<label class="block text-xs font-medium text-gray-700 mb-1.5">Filename</label>
+				<input
+					type="text"
+					bind:value={saveFrameName}
+					placeholder={`frame_${String(getCurrentFrame() + 1).padStart(3, '0')}`}
+					class="w-full px-2 py-1.5 text-xs border rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
+					onkeydown={(e) => { if (e.key === 'Enter' && saveFolderId) performSaveFrame(); }}
+					autofocus
+				/>
+				<p class="text-[10px] text-gray-400 mt-1">Leave empty for default name. Extension (.png) will be added automatically.</p>
+			</div>
+			
+			<!-- Folder Selection -->
+			<div class="px-4 py-2 border-b bg-gray-50">
+				<label class="block text-xs font-medium text-gray-700 mb-1.5">Save to folder</label>
+				{#if saveFolderPath}
+					<div class="flex items-center justify-between px-2 py-1.5 bg-blue-50 rounded border border-blue-200">
+						<span class="text-xs font-medium text-blue-700">{saveFolderPath}</span>
+						<button class="text-xs text-blue-600 hover:text-blue-800" onclick={() => { saveFolderId = null; saveFolderPath = null; }}>Change</button>
+					</div>
+				{:else}
+					<button
+						class="w-full px-2 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded border text-left text-gray-600"
+						onclick={() => showNestedFolderPicker = true}
+					>
+						📁 Choose folder...
+					</button>
+				{/if}
+			</div>
+			
+			<!-- Actions -->
+			<div class="flex justify-end gap-2 px-4 py-3 border-t bg-gray-50 rounded-b-xl">
+				<button class="px-4 py-1.5 text-xs text-gray-600 hover:bg-gray-200 rounded-lg" onclick={() => { showFolderPicker = false; saveFrameName = ''; saveFolderId = null; saveFolderPath = null; }}>
+					Cancel
+				</button>
+				<button
+					class="px-4 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+					onclick={async () => {
+						if (saveFolderId) {
+							await performSaveFrame();
+						}
+					}}
+					disabled={!saveFolderId}
+				>
+					💾 Save
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<!-- Nested Folder Picker (shown when folder needs to be selected) -->
+{#if showNestedFolderPicker}
 	<FolderPicker
 		onSelect={onFolderSelect}
-		onClose={() => showFolderPicker = false}
+		onClose={() => showNestedFolderPicker = false}
 	/>
 {/if}

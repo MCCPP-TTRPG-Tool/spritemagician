@@ -10,6 +10,7 @@
 		moveItem
 	} from '$lib/firebase/firestore.js';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
+	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
 
 	// ── reactive state ──────────────────────────────────────
@@ -33,6 +34,9 @@
 	let isSelectionMode = $derived(selectedItemIds.size > 0);
 	let showMoveFolderPicker = $state(false);
 	let movingItemIds = $state(null);
+	
+	// Background removal progress
+	let bgRemovalProgress = $state(null); // { status: string, message: string, progress?: number }
 
 	const folders = $derived(fs.items.filter(i => i.isFolder));
 	const files   = $derived(fs.items.filter(i => !i.isFolder));
@@ -288,6 +292,8 @@
 			}
 			const data = await res.json();
 			if (data.type === 'animation' && data.frames?.length) {
+				// Reset initial state when loading a new animation (so it becomes the new initial)
+				resetInitialState();
 				projectStore.update(p => ({
 					...p,
 					frames: data.frames,
@@ -306,6 +312,35 @@
 			alert('Failed to load animation: ' + err.message);
 		}
 	}
+	
+	async function addAnimationToQueue(item) {
+		if (!item.url) return;
+		menuItemId = null;
+		try {
+			// Use server-side proxy to avoid CORS issues with Firebase Storage
+			const res = await fetch(`/api/load-animation?url=${encodeURIComponent(item.url)}`);
+			if (!res.ok) {
+				const errData = await res.json().catch(() => ({}));
+				throw new Error(errData.error || 'Failed to fetch animation file');
+			}
+			const data = await res.json();
+			if (data.type === 'animation' && data.frames?.length) {
+				addToQueue({
+					id: item.id,
+					name: item.name,
+					frames: data.frames,
+					fps: data.fps || 12,
+					url: item.url
+				});
+				console.log(`[FileTree] Added to queue: ${item.name} (${data.frames.length} frames)`);
+			} else {
+				alert('Invalid animation file');
+			}
+		} catch (err) {
+			console.error('[FileTree] Add to queue error:', err);
+			alert('Failed to add animation to queue: ' + err.message);
+		}
+	}
 
 	function isAnimFile(item) {
 		return !item.isFolder && (item.fileType === 'animation' || item.name?.endsWith('.anim.json'));
@@ -322,9 +357,11 @@
 		if (!confirm(`Remove background from "${item.name}"?`)) return;
 		
 		menuItemId = null;
+		bgRemovalProgress = { status: 'processing', message: 'Removing background...', progress: 0 };
 		
 		try {
 			// Call remove-background API
+			bgRemovalProgress = { status: 'processing', message: 'Calling background removal API...', progress: 10 };
 			const res = await fetch('/api/remove-background', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -336,44 +373,81 @@
 				throw new Error(data.error || 'Background removal failed');
 			}
 			
+			bgRemovalProgress = { status: 'processing', message: 'Processing result...', progress: 40 };
 			const { images } = await res.json();
+			
 			if (!images || !images[0]) {
 				throw new Error('No image returned from background removal');
 			}
 			
-			// Clean up any remaining background artifacts
-			const cleanedImage = await cleanupBackground(images[0], 80, true, true, true);
+			// Convert the rembg output URL to a data URL using proxy (to avoid CORS)
+			let rembgImageDataUrl = images[0];
 			
-			// Upload the cleaned image to Firebase Storage via API
-			const uploadRes = await fetch('/api/upload-file', {
+			if (!rembgImageDataUrl.startsWith('data:')) {
+				bgRemovalProgress = { status: 'processing', message: 'Loading processed image...', progress: 50 };
+				try {
+					const proxyRes = await fetch('/api/proxy-image', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({ url: rembgImageDataUrl })
+					});
+					if (!proxyRes.ok) {
+						const proxyData = await proxyRes.json();
+						throw new Error('Failed to proxy rembg output image: ' + (proxyData.error || 'Unknown error'));
+					}
+					const { dataUrl } = await proxyRes.json();
+					rembgImageDataUrl = dataUrl;
+				} catch (proxyErr) {
+					throw new Error('Failed to load background-removed image: ' + proxyErr.message);
+				}
+			}
+			
+			// Clean up any remaining background artifacts (less aggressive to preserve character details)
+			bgRemovalProgress = { status: 'processing', message: 'Cleaning up artifacts...', progress: 60 };
+			const cleanedImage = await cleanupBackground(rembgImageDataUrl, 60, true, true, false); // Less aggressive
+			
+			if (!cleanedImage || cleanedImage.length < 100) {
+				throw new Error('Background cleanup failed - invalid image data');
+			}
+			
+			// Replace the existing file in Firebase Storage (overwrite instead of creating new)
+			bgRemovalProgress = { status: 'processing', message: 'Uploading updated file...', progress: 80 };
+			const replaceRes = await fetch('/api/replace-file', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					imageData: cleanedImage,
-					filename: item.name
+					existingUrl: item.url
 				})
 			});
 			
-			if (!uploadRes.ok) {
-				const uploadData = await uploadRes.json();
-				throw new Error(uploadData.error || 'Upload failed');
+			if (!replaceRes.ok) {
+				const replaceData = await replaceRes.json();
+				throw new Error(replaceData.error || 'File replacement failed');
 			}
 			
-			const { url: newUrl } = await uploadRes.json();
+			const { url: newUrl } = await replaceRes.json();
 			
-			// Update the file in Firestore with the new URL
+			// Update the file in Firestore with the new URL (should be same URL, but update timestamp)
+			bgRemovalProgress = { status: 'processing', message: 'Updating file record...', progress: 90 };
 			const { updateDoc, doc, serverTimestamp } = await import('firebase/firestore');
 			const { db } = await import('$lib/firebase/client.js');
 			const fileRef = doc(db, 'users', fs.uid, 'files', item.id);
 			await updateDoc(fileRef, { url: newUrl, updatedAt: serverTimestamp() });
 			
 			// Refresh the file tree
+			bgRemovalProgress = { status: 'processing', message: 'Refreshing...', progress: 95 };
 			userFiles.refreshCurrentFolder();
 			
-			alert('Background removed successfully!');
+			bgRemovalProgress = { status: 'completed', message: 'Background removed successfully!', progress: 100 };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 2000);
 		} catch (err) {
-			console.error('[FileTree] Remove background error:', err);
-			alert('Failed to remove background: ' + err.message);
+			bgRemovalProgress = { status: 'error', message: 'Failed: ' + err.message, progress: 0 };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 3000);
 		}
 	}
 
@@ -395,6 +469,13 @@
 			case 'video':     return '🎥';
 			default:          return '🖼️';
 		}
+	}
+	
+	function getFileTypeLabel(item) {
+		if (item.isFolder) return null;
+		if (item.fileType === 'animation' || item.name?.endsWith('.anim.json')) return 'ANIMATION';
+		if (item.fileType === 'video') return 'VIDEO';
+		return 'IMG';
 	}
 
 	function fmtDate(ts) {
@@ -558,7 +639,7 @@
 							{/if}
 						</button>
 						
-						<div class="aspect-square flex items-center justify-center bg-gray-50 rounded-t-md overflow-hidden">
+						<div class="aspect-square flex items-center justify-center bg-gray-50 rounded-t-md overflow-hidden relative">
 							{#if item.isFolder}
 								<span class="text-5xl select-none">📁</span>
 							{:else if item.thumbnailUrl}
@@ -567,6 +648,13 @@
 								<img src={item.url} alt={item.name} class="w-full h-full object-contain" loading="lazy" />
 							{:else}
 								<span class="text-4xl select-none">{icon(item)}</span>
+							{/if}
+							
+							<!-- File type label -->
+							{#if !item.isFolder && getFileTypeLabel(item)}
+								<div class="absolute bottom-0 left-0 right-0 bg-black/70 text-white text-[8px] font-bold px-1 py-0.5 text-center">
+									{getFileTypeLabel(item)}
+								</div>
 							{/if}
 						</div>
 
@@ -589,6 +677,10 @@
 									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
 										onclick={() => loadAnimation(item)}>
 										🎬 <span>Open Animation</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+										onclick={() => { addAnimationToQueue(item); menuItemId = null; }}>
+										➕ <span>Add to Queue</span>
 									</button>
 									<div class="border-t my-0.5"></div>
 								{:else if !item.isFolder && item.url}
@@ -669,6 +761,11 @@
 								</button>
 								<span class="text-sm">{icon(item)}</span>
 								<span class="truncate font-medium">{item.name}</span>
+								{#if !item.isFolder && getFileTypeLabel(item)}
+									<span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-200 text-gray-700">
+										{getFileTypeLabel(item)}
+									</span>
+								{/if}
 							</td>
 							<td class="py-1.5 px-2 text-gray-500">{item.isFolder ? 'Folder' : (item.fileType || 'File')}</td>
 							<td class="py-1.5 px-2 text-gray-500">{fmtDate(item.createdAt)}</td>
@@ -691,6 +788,10 @@
 											<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
 												onclick={() => loadAnimation(item)}>
 												🎬 <span>Open Animation</span>
+											</button>
+											<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+												onclick={() => { addAnimationToQueue(item); menuItemId = null; }}>
+												➕ <span>Add to Queue</span>
 											</button>
 											<div class="border-t my-0.5"></div>
 								{:else if !item.isFolder && item.url}
@@ -734,6 +835,37 @@
 			</table>
 		{/if}
 	</div>
+
+	<!-- ═══ BACKGROUND REMOVAL PROGRESS BAR ═══ -->
+	{#if bgRemovalProgress}
+		<div class="flex-shrink-0 border-t bg-teal-50 px-3 py-2">
+			<div class="flex items-center gap-2 mb-1">
+				{#if bgRemovalProgress.status === 'processing'}
+					<svg class="animate-spin h-4 w-4 text-teal-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+						<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+						<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+					</svg>
+				{:else if bgRemovalProgress.status === 'completed'}
+					<span class="text-sm">✅</span>
+				{:else if bgRemovalProgress.status === 'error'}
+					<span class="text-sm">❌</span>
+				{/if}
+				<span class="text-xs font-medium text-teal-800">Removing Background</span>
+				{#if bgRemovalProgress.progress !== undefined}
+					<span class="ml-auto text-xs font-bold text-teal-700 tabular-nums">{bgRemovalProgress.progress}%</span>
+				{/if}
+			</div>
+			<p class="text-[10px] text-teal-600 mb-1.5">{bgRemovalProgress.message}</p>
+			{#if bgRemovalProgress.progress !== undefined}
+				<div class="w-full bg-teal-200 rounded-full h-1.5">
+					<div 
+						class="bg-teal-600 h-1.5 rounded-full transition-all duration-300"
+						style="width: {bgRemovalProgress.progress}%"
+					></div>
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- ═══ STATUS BAR ═══ -->
 	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
@@ -796,9 +928,10 @@
 						class="px-3 py-1.5 bg-gray-600 text-white rounded hover:bg-gray-700 text-sm">
 						📥
 					</a>
-				</div>
-			{/if}
 		</div>
+	{/if}
+
+</div>
 	</div>
 {/if}
 

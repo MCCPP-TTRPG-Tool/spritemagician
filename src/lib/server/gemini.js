@@ -38,7 +38,7 @@ export const MODELS = [
 export const STYLE_KEYWORDS =
 	'16-bit isometric pixel art, Heroes of Might and Magic 3 style, ' +
 	'clean pixel-perfect lines, limited indexed color palette, ' +
-	'matte textures, no gradients, transparent background';
+	'matte textures, no gradients, absolutely no black borders, no black outlines, no dark edges, no black lines, no black strokes, no black rims, seamless blending with background, transparent background';
 
 /** Safety settings — BLOCK_NONE for dev builds. */
 export const SAFETY_OFF = [

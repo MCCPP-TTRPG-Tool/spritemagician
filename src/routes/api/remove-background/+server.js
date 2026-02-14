@@ -96,7 +96,7 @@ export async function POST({ request }) {
 				const transparentUrl = await removeBackground(imageUrl);
 				return transparentUrl;
 			} catch (error) {
-				console.error(`Failed to remove background from image ${index}:`, error);
+				console.error(`[remove-background] Failed to remove background from image ${index}:`, error);
 				return null; // Mark as failed
 			}
 		};

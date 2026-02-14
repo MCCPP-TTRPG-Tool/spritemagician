@@ -349,13 +349,15 @@
 	{:else}
 		<!-- Source Image Preview -->
 		<div class="relative">
-			<button class="w-full bg-gray-100 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
-				<img
-					src={sourceImage}
-					alt="Source"
-					class="w-full max-h-48 object-contain rounded"
-					style="image-rendering: pixelated;"
-				/>
+			<button class="w-full bg-gray-300 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
+				<div class="w-full bg-gray-300 rounded flex items-center justify-center">
+					<img
+						src={sourceImage}
+						alt="Source"
+						class="w-full max-h-48 object-contain rounded"
+						style="image-rendering: pixelated; background-color: #808080;"
+					/>
+				</div>
 			</button>
 			<button
 				onclick={clearImage}
@@ -421,6 +423,16 @@
 				</button>
 				<button
 					onclick={() => { 
+						editPrompt = 'Cinematic game sprite, character in a staggered hit-reaction pose, body recoiling backwards from impact, torso arched slightly, head snapped back, eyes wide and gritted teeth, one arm raised defensively, feet planted but skidding slightly, subtle motion blur on limbs to indicate force, particles of impact sparks, maintain identical character features and clothing.';
+						generate();
+					}}
+					disabled={generating}
+					class="w-full px-2 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					💥 Taking Damage (hit reaction pose)
+				</button>
+				<button
+					onclick={() => { 
 						mode = 'expand';
 						expandDirection = 'all';
 						expandAmount = 128;
@@ -474,13 +486,15 @@
 	{#if resultImage}
 		<div class="space-y-2">
 			<p class="text-xs font-medium text-green-700">✅ Result</p>
-			<button class="w-full bg-gray-100 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = resultImage}>
-				<img
-					src={resultImage}
-					alt="Edited result"
-					class="w-full max-h-64 object-contain rounded"
-					style="image-rendering: pixelated;"
-				/>
+			<button class="w-full bg-gray-300 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = resultImage}>
+				<div class="w-full bg-gray-300 rounded flex items-center justify-center">
+					<img
+						src={resultImage}
+						alt="Edited result"
+						class="w-full max-h-64 object-contain rounded"
+						style="image-rendering: pixelated; background-color: #808080;"
+					/>
+				</div>
 			</button>
 
 			<div class="space-y-2">
@@ -555,12 +569,14 @@
 		onclick={() => lightboxSrc = null}
 		onkeydown={(e) => { if (e.key === 'Escape') lightboxSrc = null; }}
 	>
-		<img
-			src={lightboxSrc}
-			alt="Full size preview"
-			class="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
-			style="image-rendering: pixelated;"
-		/>
+		<div class="bg-gray-500 rounded p-2">
+			<img
+				src={lightboxSrc}
+				alt="Full size preview"
+				class="max-w-[90vw] max-h-[90vh] object-contain rounded shadow-2xl"
+				style="image-rendering: pixelated; background-color: #808080;"
+			/>
+		</div>
 		<button
 			class="absolute top-4 right-4 w-10 h-10 bg-white/20 hover:bg-white/40 text-white rounded-full text-xl flex items-center justify-center transition-colors"
 			onclick={() => lightboxSrc = null}
