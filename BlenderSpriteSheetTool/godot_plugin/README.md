@@ -16,6 +16,13 @@
 3. Pick your `manifest.json` (inside `res://`)
 4. Pick output folder for generated `.spriteframes.tres`
 
+### Batch Use
+
+1. In Godot top menu: `Project > Tools`
+2. Click `Sprite Magician: Import Manifest Folder`
+3. Select a folder; plugin recursively finds all `manifest.json` files
+4. Pick output folder for generated `.spriteframes.tres`
+
 The plugin creates `unit_action.spriteframes.tres` resources with 16 direction animations:
 - `action_n`, `action_nne`, `action_ne`, ... `action_nnw`
 

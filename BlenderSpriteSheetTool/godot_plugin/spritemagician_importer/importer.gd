@@ -106,6 +106,14 @@ static func import_manifest_to_spriteframes(manifest_path: String, save_dir: Str
 	return result
 
 
+static func import_manifest_directory_to_spriteframes(manifest_dir: String, save_dir: String = "res://spriteframes") -> Dictionary:
+	var manifests := _find_manifest_files(manifest_dir)
+	var imported := {}
+	for manifest_path in manifests:
+		imported[manifest_path] = import_manifest_to_spriteframes(manifest_path, save_dir)
+	return {"manifest_count": manifests.size(), "results": imported}
+
+
 static func _ensure_dir(path: String) -> void:
 	var abs_path := ProjectSettings.globalize_path(path)
 	DirAccess.make_dir_recursive_absolute(abs_path)
@@ -119,6 +127,33 @@ static func _load_texture(path: String) -> Texture2D:
 	if tex is Texture2D:
 		return tex
 	return null
+
+
+static func _find_manifest_files(root_dir: String) -> Array:
+	var found := []
+	_scan_manifest_dir_recursive(root_dir, found)
+	return found
+
+
+static func _scan_manifest_dir_recursive(dir_path: String, found: Array) -> void:
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+
+	dir.list_dir_begin()
+	while true:
+		var name := dir.get_next()
+		if name == "":
+			break
+		if name.begins_with("."):
+			continue
+
+		var full_path := dir_path.path_join(name)
+		if dir.current_is_dir():
+			_scan_manifest_dir_recursive(full_path, found)
+		elif name.to_lower().ends_with("manifest.json"):
+			found.append(full_path)
+	dir.list_dir_end()
 
 
 static func _resolve_direction_names(dirs: Array, dir_cardinals: Array) -> Array:

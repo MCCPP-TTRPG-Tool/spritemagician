@@ -198,6 +198,16 @@ def find_target_armature(context):
     return None
 
 
+def find_selected_armature_only(context):
+    obj = context.active_object
+    if obj and obj.type == "ARMATURE":
+        return obj
+    for selected in context.selected_objects:
+        if selected.type == "ARMATURE":
+            return selected
+    return None
+
+
 def iter_character_objects(armature_obj):
     objects = [armature_obj]
     for obj in bpy.data.objects:
@@ -415,26 +425,57 @@ def action_matches_armature(action, armature_obj):
     return not matched_any_curve
 
 
-def actions_for_armature(armature_obj):
-    matches = []
-    for action in bpy.data.actions:
-        try:
-            if action_matches_armature(action, armature_obj):
-                matches.append(action)
-        except Exception:
-            # Never let one problematic action break the whole tool.
-            matches.append(action)
-    return matches
+def clean_action_display_name(name):
+    name = (name or "").strip()
+    if "|" in name:
+        name = name.split("|")[-1].strip()
+    if name.endswith(".001") or name.endswith(".002") or name.endswith(".003"):
+        # Keep the display clean while identifier remains unique action datablock name.
+        name = name.rsplit(".", 1)[0]
+    return name or "unnamed"
+
+
+def action_options_for_armature(armature_obj):
+    # Show only actions currently in use by this armature (active or NLA strips).
+    if not armature_obj:
+        return []
+
+    options = {}
+    anim_data = armature_obj.animation_data
+    if not anim_data:
+        return []
+
+    if anim_data.action:
+        action = anim_data.action
+        options[action.name] = clean_action_display_name(action.name)
+
+    for track in anim_data.nla_tracks:
+        if track.mute:
+            continue
+        for strip in track.strips:
+            action = strip.action
+            if not action:
+                continue
+            display = clean_action_display_name(strip.name if strip.name else action.name)
+            if action.name not in options:
+                options[action.name] = display
+
+    return sorted([(action_name, display, "") for action_name, display in options.items()], key=lambda i: i[1].lower())
+
+
+def display_name_for_action_identifier(action_options, action_identifier):
+    for item in action_options:
+        if item[0] == action_identifier:
+            return item[1]
+    return action_identifier
 
 
 def action_items(_self, context):
-    arm = find_target_armature(context)
+    # For action picker, use selected/active armature only to avoid cross-character action bleed.
+    arm = find_selected_armature_only(context) or find_target_armature(context)
     if not arm:
         return []
-    actions = actions_for_armature(arm)
-    if not actions:
-        actions = list(bpy.data.actions)
-    return sorted([(a.name, a.name, "") for a in actions], key=lambda item: item[0].lower())
+    return action_options_for_armature(arm)
 
 
 def ensure_sprite_camera(scene, pitch_deg=65.0, yaw_deg=45.0):
@@ -699,6 +740,14 @@ class SpriteGenProps(PropertyGroup):
         ],
         default="SHEET",
     )
+    output_layout: EnumProperty(
+        name="Output Layout",
+        items=[
+            ("ACTION_FOLDER", "Action Folder", "Create an action folder in output directory"),
+            ("FLAT", "Flat (One Folder)", "Write all actions directly into output directory"),
+        ],
+        default="ACTION_FOLDER",
+    )
     sheet_padding: IntProperty(name="Sheet Padding", default=2, min=0, max=64)
     sheet_page_mode: EnumProperty(
         name="Sheet Pages",
@@ -772,6 +821,9 @@ class SPRITEGEN_OT_setup_scene(Operator):
         actions = action_items(None, context)
         if actions and (not props.selected_action or props.selected_action not in {a[0] for a in actions}):
             props.selected_action = actions[0][0]
+        if actions:
+            display = display_name_for_action_identifier(actions, props.selected_action)
+            props.output_action_name = sanitize_token(display)
 
         self.report({"INFO"}, "Sprite scene setup complete.")
         return {"FINISHED"}
@@ -793,8 +845,8 @@ class SPRITEGEN_OT_refresh_actions(Operator):
         action_names = {entry[0] for entry in actions}
         if props.selected_action not in action_names:
             props.selected_action = actions[0][0]
-        if not props.output_action_name.strip():
-            props.output_action_name = sanitize_token(props.selected_action)
+        selected_display = display_name_for_action_identifier(actions, props.selected_action)
+        props.output_action_name = sanitize_token(selected_display)
         self.report({"INFO"}, f"Found {len(actions)} action(s).")
         return {"FINISHED"}
 
@@ -807,6 +859,7 @@ class SPRITEGEN_OT_apply_safe_preset(Operator):
     def execute(self, context):
         props = context.scene.spritegen_props
         props.output_mode = "SHEET"
+        props.output_layout = "ACTION_FOLDER"
         props.sampling_mode = "COUNT"
         props.frames_per_angle = 6
         props.frame_resolution = 192
@@ -853,13 +906,13 @@ class SPRITEGEN_OT_generate_selected(Operator):
         action_name = sanitize_token(output_action_raw or action.name)
 
         out_root = bpy.path.abspath(props.output_dir)
-        unit_root = os.path.join(out_root, unit)
+        action_root = out_root if props.output_layout == "FLAT" else os.path.join(out_root, action_name)
         write_frames = props.output_mode in {"FRAMES", "BOTH"}
         write_sheet = props.output_mode in {"SHEET", "BOTH"}
-        frames_dir = os.path.join(unit_root, "frames")
-        render_frames_dir = frames_dir if write_frames else os.path.join(unit_root, "_tmp_frames")
+        frames_dir = os.path.join(action_root, "frames")
+        render_frames_dir = frames_dir if write_frames else os.path.join(action_root, "_tmp_frames")
         try:
-            os.makedirs(unit_root, exist_ok=True)
+            os.makedirs(action_root, exist_ok=True)
             # Ensure temp output reflects only the current run.
             if os.path.isdir(render_frames_dir):
                 shutil.rmtree(render_frames_dir, ignore_errors=True)
@@ -910,7 +963,8 @@ class SPRITEGEN_OT_generate_selected(Operator):
         if relabeled:
             self.report({"WARNING"}, "Auto direction labels were unstable; using deterministic 16-direction ordering.")
 
-        direction_debug_path = os.path.join(unit_root, "_direction_debug.json")
+        direction_debug_name = f"{action_name}_direction_debug.json" if props.output_layout == "FLAT" else "_direction_debug.json"
+        direction_debug_path = os.path.join(action_root, direction_debug_name)
         with open(direction_debug_path, "w", encoding="utf-8") as handle:
             json.dump({"base_north_back_angle_degrees": base_north_back_angle, "dir_specs": dir_specs}, handle, indent=2)
         measured_height_m = character_height_meters(arm)
@@ -961,7 +1015,7 @@ class SPRITEGEN_OT_generate_selected(Operator):
             if write_sheet:
                 props.progress_text = "Packing sprite sheet..."
                 sheet_pages = pack_sheet_pages(
-                    unit_root=unit_root,
+                    unit_root=action_root,
                     action_name=action_name,
                     frame_paths_by_direction=frame_paths_by_direction,
                     frame_w=int(scene.render.resolution_x),
@@ -1033,7 +1087,8 @@ class SPRITEGEN_OT_generate_selected(Operator):
                 "dir_cardinals": dir_cardinals,
             }
 
-            manifest_path = os.path.join(unit_root, "manifest.json")
+            manifest_name = f"{action_name}_manifest.json" if props.output_layout == "FLAT" else "manifest.json"
+            manifest_path = os.path.join(action_root, manifest_name)
             with open(manifest_path, "w", encoding="utf-8") as handle:
                 json.dump(manifest, handle, indent=2)
             if not write_frames and os.path.isdir(render_frames_dir):
@@ -1055,6 +1110,51 @@ class SPRITEGEN_OT_generate_selected(Operator):
             props.progress_text = "Done" if success else "Failed"
             if success:
                 self.report({"INFO"}, f"Export complete: {frames_dir}")
+
+
+class SPRITEGEN_OT_generate_all(Operator):
+    bl_idname = "spritegen.generate_all"
+    bl_label = "Generate All Animations"
+    bl_description = "Batch generate sprite sheets for all detected actions"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        actions = action_items(None, context)
+        if not actions:
+            self.report({"ERROR"}, "No actions found for current armature.")
+            return {"CANCELLED"}
+
+        previous_selected = props.selected_action
+        previous_output_name = props.output_action_name
+        succeeded = []
+        failed = []
+
+        for item in actions:
+            action_name = item[0]
+            action_display = item[1]
+            props.selected_action = action_name
+            props.output_action_name = sanitize_token(action_display)
+            result = bpy.ops.spritegen.generate_selected()
+            if "FINISHED" in result:
+                succeeded.append(action_name)
+            else:
+                failed.append(action_name)
+            bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+
+        props.selected_action = previous_selected
+        props.output_action_name = previous_output_name
+
+        if failed and not succeeded:
+            self.report({"ERROR"}, f"Batch failed for all actions: {', '.join(failed)}")
+            return {"CANCELLED"}
+        if failed:
+            self.report(
+                {"WARNING"},
+                f"Batch done. Success: {len(succeeded)}, Failed: {len(failed)} ({', '.join(failed)})",
+            )
+        else:
+            self.report({"INFO"}, f"Batch complete: {len(succeeded)} actions exported.")
+        return {"FINISHED"}
 
 
 class SPRITEGEN_PT_main(Panel):
@@ -1081,6 +1181,7 @@ class SPRITEGEN_PT_main(Panel):
         step2.label(text="Step 2: Output", icon="OUTPUT")
         step2.prop(props, "output_dir", text="Output Folder")
         step2.prop(props, "output_mode", text="Export Type")
+        step2.prop(props, "output_layout", text="Output Layout")
         step2.prop(props, "frame_resolution", text="Frame Size")
         step2.prop(props, "projection_mode", text="Projection")
         step2.operator("spritegen.apply_projection_preset", icon="FILE_REFRESH", text="Apply Projection Preset")
@@ -1104,6 +1205,7 @@ class SPRITEGEN_PT_main(Panel):
         step4 = layout.box()
         step4.label(text="Step 4: Generate", icon="RENDER_STILL")
         step4.operator("spritegen.generate_selected", icon="RENDER_STILL", text="Generate Sprite Sheet")
+        step4.operator("spritegen.generate_all", icon="RENDER_ANIMATION", text="Generate All Animations (Batch)")
         step4.label(text=f"Progress: {props.progress_text}")
 
         box = layout.box()
@@ -1131,6 +1233,7 @@ CLASSES = (
     SPRITEGEN_OT_refresh_actions,
     SPRITEGEN_OT_apply_safe_preset,
     SPRITEGEN_OT_generate_selected,
+    SPRITEGEN_OT_generate_all,
     SPRITEGEN_PT_main,
 )
 
