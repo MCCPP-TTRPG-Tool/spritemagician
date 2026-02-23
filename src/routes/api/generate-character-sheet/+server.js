@@ -1,4 +1,4 @@
-/**
+I dont/**
  * Character Sheet Generation — turnaround reference using @google/genai SDK
  *
  * Generates a basic turnaround (front, right side, back, left side)

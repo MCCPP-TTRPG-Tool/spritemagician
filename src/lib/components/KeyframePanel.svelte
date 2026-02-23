@@ -10,6 +10,7 @@
 	let depthImage = $state(null);
 	let prompt = $state('');
 	let negativePrompt = $state('');
+	let workflowFile = $state('');
 	let seed = $state(0);
 	let width = $state(1024);
 	let height = $state(1024);
@@ -18,6 +19,8 @@
 	let error = $state('');
 	let resultImage = $state(null);
 	let runpodId = $state(null);
+	let lastSeedUsed = $state(null);
+	let lastWorkflowHash = $state('');
 
 	let showFolderPicker = $state(false);
 	let saveFolderId = $state(null);
@@ -109,10 +112,14 @@
 			}
 
 			if (data.status === 'completed') {
-				if (!data.imageUrl) {
-					throw new Error('RunPod completed but no image URL was returned');
+				const dataUrl = data.imageDataUrl
+					? data.imageDataUrl
+					: data.imageUrl
+						? await proxyImageToDataUrl(data.imageUrl)
+						: null;
+				if (!dataUrl) {
+					throw new Error('RunPod completed but no image data was returned');
 				}
-				const dataUrl = await proxyImageToDataUrl(data.imageUrl);
 				resultImage = dataUrl;
 				await saveResultToFiles(dataUrl, runpodId);
 
@@ -157,6 +164,7 @@
 					poseImage,
 					referenceImage,
 					depthImage,
+					workflowFile: workflowFile.trim(),
 					prompt: prompt.trim(),
 					negativePrompt: negativePrompt.trim(),
 					seed,
@@ -168,6 +176,11 @@
 			if (!res.ok) throw new Error(data.error || 'Failed to submit RunPod job');
 
 			runpodId = data.runpodId;
+			if (typeof data.seedUsed === 'number' && Number.isFinite(data.seedUsed)) {
+				seed = data.seedUsed;
+				lastSeedUsed = data.seedUsed;
+			}
+			lastWorkflowHash = data.workflowHash || '';
 			statusText = `RunPod job submitted: ${data.runpodId}`;
 			jobQueue.updateJob(localJobId, {
 				status: 'processing',
@@ -213,6 +226,16 @@
 		<textarea bind:value={negativePrompt} rows="2" class="w-full px-2 py-1.5 text-xs border rounded resize-none" />
 	</div>
 
+	<div>
+		<label class="block text-xs font-medium text-gray-700 mb-1">Workflow File (optional)</label>
+		<input
+			type="text"
+			bind:value={workflowFile}
+			placeholder="static/qwen_image_edit_2509_pose_api.json"
+			class="w-full px-2 py-1.5 text-xs border rounded"
+		/>
+	</div>
+
 	<div class="grid grid-cols-3 gap-2">
 		<label class="text-[11px]">
 			<span class="block mb-1 font-medium text-gray-700">Seed</span>
@@ -248,6 +271,11 @@
 
 	{#if statusText}
 		<p class="text-[11px] text-blue-700">{statusText}</p>
+	{/if}
+	{#if lastSeedUsed !== null || lastWorkflowHash}
+		<p class="text-[11px] text-gray-600">
+			Seed: {lastSeedUsed ?? 'n/a'} | Workflow: {lastWorkflowHash || 'n/a'}
+		</p>
 	{/if}
 	{#if error}
 		<p class="text-[11px] text-red-600">{error}</p>

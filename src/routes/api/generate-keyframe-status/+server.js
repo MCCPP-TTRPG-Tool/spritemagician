@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import {
+	extractFirstImageDataUrl,
 	extractFirstImageUrl,
 	getRunpodJobStatus,
 	normalizeRunpodStatus
@@ -19,6 +20,7 @@ export async function GET({ url, locals }) {
 		const data = await getRunpodJobStatus(runpodId);
 		const normalized = normalizeRunpodStatus(data.status);
 		const imageUrl = normalized === 'completed' ? extractFirstImageUrl(data.output) : null;
+		const imageDataUrl = normalized === 'completed' ? extractFirstImageDataUrl(data.output) : null;
 
 		return json({
 			status: normalized,
@@ -26,6 +28,7 @@ export async function GET({ url, locals }) {
 			delayTime: data.delayTime || null,
 			executionTime: data.executionTime || null,
 			imageUrl,
+			imageDataUrl,
 			error: data.error || null,
 			raw: normalized === 'failed' ? data : undefined
 		});

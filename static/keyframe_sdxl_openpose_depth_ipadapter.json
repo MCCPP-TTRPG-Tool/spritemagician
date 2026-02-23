@@ -1,86 +1,142 @@
 {
-	"3": {
-		"class_type": "KSampler",
-		"inputs": {
-			"seed": "__SEED__",
-			"steps": 30,
-			"cfg": 6,
-			"sampler_name": "euler",
-			"scheduler": "normal",
-			"denoise": 1,
-			"model": [
-				"4",
-				0
-			],
-			"positive": [
-				"6",
-				0
-			],
-			"negative": [
-				"7",
-				0
-			],
-			"latent_image": [
-				"5",
-				0
-			]
-		}
-	},
-	"4": {
-		"class_type": "CheckpointLoaderSimple",
-		"inputs": {
-			"ckpt_name": "sd_xl_base_1.0.safetensors"
-		}
-	},
-	"5": {
-		"class_type": "EmptyLatentImage",
-		"inputs": {
-			"width": "__WIDTH__",
-			"height": "__HEIGHT__",
-			"batch_size": 1
-		}
-	},
-	"6": {
-		"class_type": "CLIPTextEncode",
-		"inputs": {
-			"text": "__PROMPT__",
-			"clip": [
-				"4",
-				1
-			]
-		}
-	},
-	"7": {
-		"class_type": "CLIPTextEncode",
-		"inputs": {
-			"text": "__NEGATIVE_PROMPT__",
-			"clip": [
-				"4",
-				1
-			]
-		}
-	},
-	"8": {
-		"class_type": "VAEDecode",
-		"inputs": {
-			"samples": [
-				"3",
-				0
-			],
-			"vae": [
-				"4",
-				2
-			]
-		}
-	},
-	"9": {
-		"class_type": "SaveImage",
-		"inputs": {
-			"filename_prefix": "keyframe",
-			"images": [
-				"8",
-				0
-			]
-		}
-	}
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": "__SEED__",
+      "steps": 28,
+      "cfg": 2.8,
+      "sampler_name": "euler",
+      "scheduler": "normal",
+      "denoise": 0.52,
+      "model": ["29", 0],
+      "positive": ["25", 0],
+      "negative": ["25", 1],
+      "latent_image": ["5", 0]
+    }
+  },
+  "4": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sd_xl_base_1.0.safetensors"
+    }
+  },
+  "5": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["26", 0],
+      "vae": ["4", 2]
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__PROMPT__",
+      "clip": ["4", 1]
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "__NEGATIVE_PROMPT__",
+      "clip": ["4", 1]
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["3", 0],
+      "vae": ["4", 2]
+    }
+  },
+  "9": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "keyframe",
+      "images": ["8", 0]
+    }
+  },
+  "20": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__POSE_FILENAME__"
+    }
+  },
+  "21": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "control-lora-openposeXL2-rank256.safetensors"
+    }
+  },
+  "22": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["6", 0],
+      "negative": ["7", 0],
+      "control_net": ["21", 0],
+      "image": ["20", 0],
+      "strength": 0.92,
+      "start_percent": 0,
+      "end_percent": 1,
+      "vae": ["4", 2]
+    }
+  },
+  "23": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__DEPTH_FILENAME__"
+    }
+  },
+  "24": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "diffusers_xl_depth_full.safetensors"
+    }
+  },
+  "25": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["22", 0],
+      "negative": ["22", 1],
+      "control_net": ["24", 0],
+      "image": ["23", 0],
+      "strength": "__DEPTH_STRENGTH__",
+      "start_percent": 0,
+      "end_percent": 0.65,
+      "vae": ["4", 2]
+    }
+  },
+  "26": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__REFERENCE_FILENAME__"
+    }
+  },
+  "27": {
+    "class_type": "IPAdapterModelLoader",
+    "inputs": {
+      "ipadapter_file": "ip-adapter-plus_sdxl_vit-h.safetensors"
+    }
+  },
+  "28": {
+    "class_type": "CLIPVisionLoader",
+    "inputs": {
+      "clip_name": "CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors"
+    }
+  },
+  "29": {
+    "class_type": "IPAdapterAdvanced",
+    "inputs": {
+      "weight": 1.05,
+      "noise": 0,
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0,
+      "end_at": 0.72,
+      "embeds_scaling": "K+mean(V) w/ C penalty",
+      "model": ["4", 0],
+      "ipadapter": ["27", 0],
+      "image": ["26", 0],
+      "clip_vision": ["28", 0]
+    }
+  }
 }
