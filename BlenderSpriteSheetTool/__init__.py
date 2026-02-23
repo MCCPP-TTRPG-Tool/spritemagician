@@ -155,6 +155,34 @@ def sanitize_token(value: str) -> str:
     return value.strip("_") or "unnamed"
 
 
+def apply_projection_preset(props):
+    mode = getattr(props, "projection_mode", "DIMETRIC")
+    if mode == "ISOMETRIC":
+        # Blender camera X rotation for true isometric elevation (~35.264 deg above horizon).
+        props.camera_pitch_degrees = 54.73561032
+        props.camera_yaw_degrees = 45.0
+    else:
+        # Dimetric: lower apparent view (less top-down) than isometric.
+        props.camera_pitch_degrees = 65.0
+        props.camera_yaw_degrees = 45.0
+
+
+def on_projection_mode_update(self, _context):
+    apply_projection_preset(self)
+
+
+class SPRITEGEN_OT_apply_projection_preset(Operator):
+    bl_idname = "spritegen.apply_projection_preset"
+    bl_label = "Apply Projection Preset"
+    bl_description = "Apply pitch/yaw values from current projection mode"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        apply_projection_preset(props)
+        self.report({"INFO"}, f"Applied {props.projection_mode.title()} projection preset.")
+        return {"FINISHED"}
+
+
 def find_target_armature(context):
     obj = context.active_object
     if obj and obj.type == "ARMATURE":
@@ -185,6 +213,27 @@ def iter_character_objects(armature_obj):
     return objects
 
 
+def isolate_render_to_character(scene, armature_obj):
+    keep = set(iter_character_objects(armature_obj))
+    if scene.camera:
+        keep.add(scene.camera)
+    for obj in scene.objects:
+        if obj.type == "LIGHT":
+            keep.add(obj)
+
+    previous_hide_render = {}
+    for obj in scene.objects:
+        previous_hide_render[obj.name] = obj.hide_render
+        obj.hide_render = obj not in keep
+    return previous_hide_render
+
+
+def restore_render_visibility(scene, previous_hide_render):
+    for obj in scene.objects:
+        if obj.name in previous_hide_render:
+            obj.hide_render = previous_hide_render[obj.name]
+
+
 def set_visible_for_render(obj):
     obj.hide_set(False)
     obj.hide_viewport = False
@@ -210,7 +259,7 @@ def world_bounds(objects):
     return (min_v, max_v) if found else (None, None)
 
 
-def auto_setup_character(scene, armature_obj, cam_obj):
+def auto_setup_character(scene, armature_obj, cam_obj, projection_mode="DIMETRIC"):
     character_objects = iter_character_objects(armature_obj)
     for obj in character_objects:
         set_visible_for_render(obj)
@@ -234,9 +283,14 @@ def auto_setup_character(scene, armature_obj, cam_obj):
     center = (min_v + max_v) * 0.5
     size = max_v - min_v
 
-    # Keep dimetric angle; move camera to frame model bounds automatically.
+    # Move camera to frame model bounds automatically.
     fit = max(size.x, size.y, size.z, 1.0)
-    cam_obj.location = center + Vector((fit * 1.8, -fit * 1.8, fit * 1.4))
+    if projection_mode == "ISOMETRIC":
+        z_factor = 1.25
+    else:
+        # Lower dimetric look: reduce camera height noticeably.
+        z_factor = 0.75
+    cam_obj.location = center + Vector((fit * 1.8, -fit * 1.8, fit * z_factor))
     cam_obj.data.ortho_scale = max(size.x, size.y) * 2.0 + 0.5
 
 
@@ -383,7 +437,7 @@ def action_items(_self, context):
     return sorted([(a.name, a.name, "") for a in actions], key=lambda item: item[0].lower())
 
 
-def ensure_sprite_camera(scene):
+def ensure_sprite_camera(scene, pitch_deg=65.0, yaw_deg=45.0):
     cam_obj = scene.objects.get("SPRITE_CAM")
     if cam_obj and cam_obj.type != "CAMERA":
         cam_obj = None
@@ -400,9 +454,9 @@ def ensure_sprite_camera(scene):
     # Dimetric look: lower pitch than classic isometric.
     cam_obj.location = (8.0, -8.0, 7.0)
     cam_obj.rotation_euler = (
-        math.radians(60.0),
+        math.radians(float(pitch_deg)),
         0.0,
-        math.radians(45.0),
+        math.radians(float(yaw_deg)),
     )
 
     scene.camera = cam_obj
@@ -594,6 +648,29 @@ class SpriteGenProps(PropertyGroup):
         description="Optional override for output sheet/action name",
         default="",
     )
+    projection_mode: EnumProperty(
+        name="Projection",
+        items=[
+            ("DIMETRIC", "Dimetric", "Lower-angle dimetric projection"),
+            ("ISOMETRIC", "Isometric", "Classic isometric projection"),
+        ],
+        default="DIMETRIC",
+        update=on_projection_mode_update,
+    )
+    camera_pitch_degrees: FloatProperty(
+        name="Camera Pitch",
+        description="Dimetric camera pitch in degrees (lower than isometric)",
+        default=65.0,
+        min=10.0,
+        max=80.0,
+    )
+    camera_yaw_degrees: FloatProperty(
+        name="Camera Yaw",
+        description="Camera yaw in degrees",
+        default=45.0,
+        min=-180.0,
+        max=180.0,
+    )
     frame_resolution: IntProperty(name="Frame Size", default=256, min=64, max=2048)
     fps: IntProperty(name="FPS", default=12, min=1, max=240)
     frame_step: IntProperty(name="Frame Step", default=1, min=1, max=24)
@@ -676,13 +753,19 @@ class SPRITEGEN_OT_setup_scene(Operator):
         if not props.unit_name or props.unit_name == "unit":
             props.unit_name = sanitize_token(arm.name)
 
-        ensure_sprite_camera(scene)
+        # Always enforce projection preset on setup for predictable behavior.
+        apply_projection_preset(props)
+        ensure_sprite_camera(
+            scene,
+            pitch_deg=float(props.camera_pitch_degrees),
+            yaw_deg=float(props.camera_yaw_degrees),
+        )
         cam_obj = scene.camera
         ensure_lights(scene)
         configure_render(scene)
         scene.render.resolution_x = int(props.frame_resolution)
         scene.render.resolution_y = int(props.frame_resolution)
-        auto_setup_character(scene, arm, cam_obj)
+        auto_setup_character(scene, arm, cam_obj, projection_mode=str(props.projection_mode))
         measured_m = character_height_meters(arm)
         props.measured_height_feet = (measured_m / FEET_TO_METERS) if measured_m else 0.0
 
@@ -727,6 +810,8 @@ class SPRITEGEN_OT_apply_safe_preset(Operator):
         props.sampling_mode = "COUNT"
         props.frames_per_angle = 6
         props.frame_resolution = 192
+        props.projection_mode = "DIMETRIC"
+        apply_projection_preset(props)
         props.sheet_padding = 2
         props.sheet_page_mode = "AUTO"
         props.max_sheet_dimension = 2048
@@ -790,6 +875,7 @@ class SPRITEGEN_OT_generate_selected(Operator):
         previous_rot_mode = arm.rotation_mode
         previous_rot = arm.rotation_euler.copy()
         previous_scale = arm.scale.copy()
+        previous_hide_render = isolate_render_to_character(scene, arm)
 
         sampled_frames = sample_action_frames(action, props)
 
@@ -891,7 +977,8 @@ class SPRITEGEN_OT_generate_selected(Operator):
 
             manifest = {
                 "unit": unit,
-                "camera_mode": "dimetric",
+                "camera_mode": "isometric" if props.projection_mode == "ISOMETRIC" else "dimetric",
+                "projection_mode": str(props.projection_mode).lower(),
                 "directions": 16,
                 "dir_step_degrees": 22.5,
                 "start_direction": str(dir_labels[0] if dir_labels else props.start_direction),
@@ -963,6 +1050,7 @@ class SPRITEGEN_OT_generate_selected(Operator):
             arm.rotation_euler = previous_rot
             arm.scale = previous_scale
             anim_data.action = previous_action
+            restore_render_visibility(scene, previous_hide_render)
             wm.progress_end()
             props.progress_text = "Done" if success else "Failed"
             if success:
@@ -994,6 +1082,10 @@ class SPRITEGEN_PT_main(Panel):
         step2.prop(props, "output_dir", text="Output Folder")
         step2.prop(props, "output_mode", text="Export Type")
         step2.prop(props, "frame_resolution", text="Frame Size")
+        step2.prop(props, "projection_mode", text="Projection")
+        step2.operator("spritegen.apply_projection_preset", icon="FILE_REFRESH", text="Apply Projection Preset")
+        step2.prop(props, "camera_pitch_degrees", text="Camera Pitch")
+        step2.prop(props, "camera_yaw_degrees", text="Camera Yaw")
         step2.prop(props, "sheet_page_mode", text="Sheet Pages")
         step2.prop(props, "camera_margin_percent", text="Character Margin %")
         step2.operator("spritegen.apply_safe_preset", icon="CHECKMARK", text="Apply Safe Preset (Recommended)")
@@ -1025,6 +1117,8 @@ class SPRITEGEN_PT_main(Panel):
                 col.prop(props, "frame_step")
             col.prop(props, "fps")
             col.prop(props, "sheet_padding")
+            col.prop(props, "camera_pitch_degrees")
+            col.prop(props, "camera_yaw_degrees")
             col.prop(props, "sheet_page_mode")
             col.prop(props, "max_sheet_dimension")
             col.prop(props, "max_total_renders")
@@ -1032,6 +1126,7 @@ class SPRITEGEN_PT_main(Panel):
 
 CLASSES = (
     SpriteGenProps,
+    SPRITEGEN_OT_apply_projection_preset,
     SPRITEGEN_OT_setup_scene,
     SPRITEGEN_OT_refresh_actions,
     SPRITEGEN_OT_apply_safe_preset,
