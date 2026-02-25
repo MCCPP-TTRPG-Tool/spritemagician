@@ -8,18 +8,100 @@ Last Updated: 2026-02-24
 - Left workflow tabs:
   - Design
   - Edit
-  - Style
   - Animate
 
 ## Recent Significant Change
-- Design workflow state persistence and conversation management added.
-- `src/lib/stores/design.js` now persists Design state to localStorage.
-- `src/lib/components/DesignPanel.svelte` now supports:
-  - Persistent chat + prompt across tab switches/reloads
-  - Conversation save/load/delete
-  - Generation type presets (character/building/item/asset/scenery/effects)
-  - Theme style add-on preset including Diablo II style
-- Genesis prompt generation now composes user draft + selected preset add-ons.
+- Primary left workflow now removes dedicated Style tab; Edit is the single still-image work area.
+- Right panel is now mode-routed while preserving existing logic:
+  - `Design` / `Edit` -> still-image preview + still-image export actions.
+  - `Animate` -> existing animation preview and sprite sheet/export tooling unchanged.
+- Right preview panel now owns still-result actions:
+  - `Load in Edit`, `Set Start`, `Set End`, and `Save` are available directly in preview context.
+- Manual still-image save now supports subfolder selection within active asset:
+  - Right preview `Save To...` opens folder picker scoped to the active asset root.
+  - Selected subfolder is used as save destination.
+- Center result modal preview has been removed to avoid duplicated action surfaces.
+- Edit panel is now compact by default:
+  - Core context + guardrail controls are always visible in a compact layout (not collapse-gated).
+  - Preset access is condensed through a compact dropdown + apply action to reduce vertical sprawl.
+- Active asset now carries configurable chroma key background color:
+  - Active asset bar includes `BG` color picker and persists selected value to folder metadata.
+  - Background removal tools use active asset chroma value automatically (file tree + animation preview).
+  - Edit includes `Flat BG` quick preset and dynamic guardrail messaging tied to active chroma value.
+- Animate model selection is now fixed to WAN 2.2:
+  - Client model picker removed from Animate UI.
+  - Server enforces WAN 2.2 model routing.
+- Animate now includes explicit frame-target controls:
+  - Auto budget mode (walking-friendly bounded frame window).
+  - Manual frame count mode with direct frame amount control.
+- Left-side work/settings now persist across refresh:
+  - Design state already persisted via design store.
+  - Edit panel state (source image, prompt, mode, context/settings, result) persists in localStorage.
+  - Animate panel settings/input state persists in localStorage.
+  - Project store and left/right tab selections persist and restore on reload.
+- Left panel no longer relies on vertical scrolling:
+  - Added dynamic auto-fit scaling wrapper for `Design`, `Edit`, and `Animate`.
+  - Content scales down to fit viewport height/width while preserving existing controls.
+  - Left column content container now uses overflow hidden.
+  - Updated after UX feedback: auto-fit is now scoped to `Animate` only.
+  - `Design` and `Edit` render at normal readable scale.
+  - Animate fit floor increased to reduce over-shrinking.
+  - Animate readability tuned further: auto-fit minimum raised to `0.90`.
+  - Non-interpolation upload block reduced from square-heavy sizing to fixed-height (`h-56`) to avoid forcing tiny text.
+- Animate now includes a strict `Perfect Loop` setting:
+  - New toggle in animation options.
+  - Enables loop semantics and applies seam enforcement after extraction.
+  - Tail frames are blended toward opening frames and last frame is hard-closed to first.
+  - Passed through API so prompt instructions explicitly demand zero-seam loop closure.
+- Design chat now supports multimodal reference images:
+  - Users can upload/replace/remove a chat reference image directly in GPT Chat mode.
+  - Reference image is persisted in Design panel state and included in chat + write-prompt API calls.
+  - Design chat API forwards valid image data URLs to Gemini as inline image parts.
+  - AI instruction now grounds ideation in visible traits when a reference image is attached.
+  - Chat timeline now visually shows attached reference images in user message bubbles.
+  - Image-only sends are supported (no text required when an image is attached).
+- Design theme dropdown simplified:
+  - Theme Style selector now keeps only `Oil Painting Fantasy`.
+  - Guard enforces `stylePreset = oil_painting_fantasy` to avoid stale persisted style values.
+- Design generated result actions now include direct `GPT Chat` handoff:
+  - Sends current prompt context into chat mode for iterative prompt discussion.
+  - Keeps prompt ideation loop inside the Design panel.
+  - Uses current generated preview image for handoff reference.
+  - Action button label is now `Refine`.
+  - Refine handoff now also replaces chat reference slot with the generated preview image to prevent stale uploaded references from re-attaching on next send.
+  - Chat layout was compacted after attachment-row growth to keep bottom CTA visible without panel clipping.
+ - Genesis now uses attached Design chat reference image directly when generating:
+   - `generateGenesis()` forwards `chatReferenceImage` to `/api/generate-sprite`.
+   - Prompt appends a strict reference-lock clause when a reference is present.
+   - Server-side reference instruction was strengthened to reduce style drift into generic output.
+ - Genesis cache freshness hardening:
+   - Client requests now include cache-busting timestamp query and no-store headers.
+   - Per-request generation nonce is included to avoid stale replay behavior.
+   - `/api/generate-sprite` responses now return strict no-cache headers.
+- Edit context settings now stack prompt instructions:
+  - Applying pose/context presets appends instructions instead of overwriting.
+  - Applying Flat BG appends instruction instead of replacing existing prompt text.
+  - Duplicate instruction appends are suppressed.
+- FolderPicker runtime safety fix:
+  - Prevented undefined breadcrumb access during initial render.
+  - Save action now uses safe current-crumb fallback (`Root`) until breadcrumbs initialize.
+  - Addresses right-panel `Save To...` non-responsive behavior caused by picker render failure.
+- Hotfix: `generate-sprite` API parse error resolved:
+  - Corrected malformed cache header key (`'Surrogate-Control'`).
+  - Eliminates Vite import-analysis overlay crash on app load.
+- Incoming style handoffs are routed into Edit to avoid dead navigation paths.
+- File tree folder navigation now opens on single-click (double-click no longer required for folders).
+- Design panel now includes a direct `📁 New Asset` action:
+  - Opens a modal to capture folder name + metadata (`assetType`, `notes`, `tags`).
+  - Creates folder at root and sets it as active asset context from the Design workflow.
+- Design generated-image actions now include direct `💾 Save` into active asset folder:
+  - Uses active asset context and writes file entry into that folder.
+  - Prevents save when no active asset is selected.
+- `create-folder` API now accepts optional metadata and sanitizes/stores it on folder docs.
+- Existing file-tree `🎯 New Asset` and `🧹 Fresh Start` controls remain available.
+- GPT chat split flow remains in place (`Send` ideation + `Write Prompt` drafting).
 
 ## Risk / Follow-up
-- Optional next step: sync saved conversations to backend for cross-device persistence.
+- Optional: route animation/exports/jobs saves through the same active asset context for full end-to-end consistency.
+- Optional: add one-click subfolder auto-creation per stage (`design/edit/style/animation/exports`) under active asset folder.
+- Optional: add a small hint below chat input after 3+ messages reminding users to click `Write Prompt`.

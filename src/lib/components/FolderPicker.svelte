@@ -2,17 +2,26 @@
 	import { getChildren } from '$lib/firebase/firestore.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 
-	let { onSelect = null, onClose = null } = $props();
+	let {
+		onSelect = null,
+		onClose = null,
+		startFolderId = null,
+		startFolderName = 'Root'
+	} = $props();
 
 	let folders = $state([]);
-	let breadcrumbs = $state([{ id: null, name: 'Root' }]);
+	let breadcrumbs = $state([]);
 	let loading = $state(true);
 	let newFolderName = $state('');
 	let showNewFolder = $state(false);
 	let creating = $state(false);
+	let currentCrumb = $derived(breadcrumbs.length ? breadcrumbs[breadcrumbs.length - 1] : { id: null, name: 'Root' });
 
 	$effect(() => {
-		loadFolders(null);
+		const initialId = startFolderId || null;
+		const initialName = initialId ? (startFolderName || 'Asset') : 'Root';
+		breadcrumbs = [{ id: initialId, name: initialName }];
+		loadFolders(initialId);
 	});
 
 	async function loadFolders(parentId) {
@@ -43,7 +52,7 @@
 	}
 
 	function selectCurrent() {
-		const current = breadcrumbs[breadcrumbs.length - 1];
+		const current = currentCrumb;
 		const pathStr = breadcrumbs.map(p => p.name).join(' / ');
 		onSelect?.(current.id, pathStr);
 	}
@@ -172,7 +181,7 @@
 				class="px-4 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-medium"
 				onclick={selectCurrent}
 			>
-				💾 Save to: {breadcrumbs[breadcrumbs.length - 1].name}
+				💾 Save to: {currentCrumb?.name || 'Root'}
 			</button>
 		</div>
 	</div>

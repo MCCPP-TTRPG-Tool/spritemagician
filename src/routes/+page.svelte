@@ -1,23 +1,49 @@
 ﻿<script>
 	import DesignPanel from '$lib/components/DesignPanel.svelte';
 	import EditPanel from '$lib/components/EditPanel.svelte';
-	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
 	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
+	import AutoFitPanel from '$lib/components/AutoFitPanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
+	import FolderPicker from '$lib/components/FolderPicker.svelte';
+	import { designStore } from '$lib/stores/design.js';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { authStore } from '$lib/stores/auth.js';
 	import { auth } from '$lib/firebase/client.js';
 	import { projectStore } from '$lib/stores/project.js';
+	import { userFiles } from '$lib/stores/userFiles.js';
+	import { createFile } from '$lib/firebase/firestore.js';
 	import { goto } from '$app/navigation';
 	
-	let activeTab = $state('design'); // 'design' | 'edit' | 'style' | 'animate'
+	let activeTab = $state('design'); // 'design' | 'edit' | 'animate'
 	let rightTab = $state('preview'); // 'preview' | 'export'
 	let showUserMenu = $state(false);
+	let isSavingStill = $state(false);
+	let rightPanelNote = $state('');
+	let showStillFolderPicker = $state(false);
+	const PANEL_STATE_KEY = 'spritemagician.page.panel.v1';
+
+	if (typeof window !== 'undefined') {
+		try {
+			const raw = localStorage.getItem(PANEL_STATE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (parsed?.activeTab === 'design' || parsed?.activeTab === 'edit' || parsed?.activeTab === 'animate') {
+					activeTab = parsed.activeTab;
+				}
+				if (parsed?.rightTab === 'preview' || parsed?.rightTab === 'export') {
+					rightTab = parsed.rightTab;
+				}
+			}
+		} catch {
+			// ignore storage parse errors
+		}
+	}
 
 	// Images passed from FileTree -> store -> here -> component props
 	let editImage = $state(null);
-	let styleImage = $state(null);
+	let editOutputImage = $state(null);
 
 	// React to FileTree setting editImage in the store
 	$effect(() => {
@@ -34,9 +60,10 @@
 	$effect(() => {
 		const img = $projectStore.styleImage;
 		if (img) {
-			styleImage = img;
-			activeTab = 'style';
-			// Clear the store value immediately to allow re-triggering with same image
+			// Style tab is merged into Edit flow.
+			editImage = img;
+			editOutputImage = img;
+			activeTab = 'edit';
 			projectStore.update(s => ({ ...s, styleImage: null }));
 		}
 	});
@@ -49,8 +76,8 @@
 	// This prevents switching when frames already exist or when set internally by components
 	$effect(() => {
 		const frame = $projectStore.firstFrame;
-		// Only switch if frame changed from null/undefined to a value AND we're not on edit/style tabs
-		if (frame && !prevFirstFrame && activeTab !== 'style' && activeTab !== 'edit') {
+		// Only switch if frame changed from null/undefined to a value AND we're not on edit tab
+		if (frame && !prevFirstFrame && activeTab !== 'edit') {
 			activeTab = 'animate';
 		}
 		prevFirstFrame = frame;
@@ -59,8 +86,8 @@
 	// React to FileTree setting lastFrame - switch to animate tab only when newly set from file tree
 	$effect(() => {
 		const frame = $projectStore.lastFrame;
-		// Only switch if frame changed from null/undefined to a value AND we're not on edit/style tabs
-		if (frame && !prevLastFrame && activeTab !== 'style' && activeTab !== 'edit') {
+		// Only switch if frame changed from null/undefined to a value AND we're not on edit tab
+		if (frame && !prevLastFrame && activeTab !== 'edit') {
 			activeTab = 'animate';
 		}
 		prevLastFrame = frame;
@@ -80,14 +107,131 @@
 
 		const onDesignNavigate = (event) => {
 			const tab = event?.detail?.tab;
-			if (tab === 'edit' || tab === 'style' || tab === 'animate') {
+			if (tab === 'edit' || tab === 'animate') {
 				activeTab = tab;
+			}
+			if (tab === 'style') {
+				activeTab = 'edit';
 			}
 		};
 
 		window.addEventListener('designNavigate', onDesignNavigate);
 		return () => window.removeEventListener('designNavigate', onDesignNavigate);
 	});
+
+	let rightPreviewImage = $derived.by(() => {
+		if (activeTab === 'design') return $designStore.generatedImage || null;
+		if (activeTab === 'edit') return editOutputImage || editImage || null;
+		return null;
+	});
+
+	let rightPreviewLabel = $derived.by(() => {
+		if (activeTab === 'design') return 'Design Result';
+		if (activeTab === 'edit') return 'Edit Result';
+		return 'Animation Preview';
+	});
+
+	function handleEditOutput(image) {
+		editOutputImage = image;
+	}
+
+	function loadStillIntoEdit() {
+		if (!rightPreviewImage) return;
+		editImage = rightPreviewImage;
+		editOutputImage = rightPreviewImage;
+		activeTab = 'edit';
+		rightPanelNote = 'Loaded into Edit.';
+	}
+
+	function setStillAsStartFrame() {
+		if (!rightPreviewImage) return;
+		projectStore.update((p) => ({ ...p, firstFrame: rightPreviewImage }));
+		rightPanelNote = 'Set as animation start frame.';
+	}
+
+	function setStillAsEndFrame() {
+		if (!rightPreviewImage) return;
+		projectStore.update((p) => ({ ...p, lastFrame: rightPreviewImage }));
+		rightPanelNote = 'Set as animation end frame.';
+	}
+
+	function downloadCurrentStill() {
+		if (!rightPreviewImage) return;
+		const a = document.createElement('a');
+		a.href = rightPreviewImage;
+		a.download = `${activeTab}_result_${Date.now()}.png`;
+		a.click();
+	}
+
+	function sendStillToAnimate() {
+		if (!rightPreviewImage) return;
+		projectStore.update((p) => ({ ...p, firstFrame: rightPreviewImage }));
+		activeTab = 'animate';
+		rightTab = 'preview';
+	}
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		try {
+			localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({ activeTab, rightTab }));
+		} catch {
+			// ignore storage issues
+		}
+	});
+
+	function openStillSavePicker() {
+		if (!rightPreviewImage || isSavingStill) return;
+		if (!$activeAssetStore?.folderId) {
+			rightPanelNote = 'Select an active asset folder first.';
+			return;
+		}
+		showStillFolderPicker = true;
+	}
+
+	async function onStillFolderSelect(folderId, folderPath) {
+		showStillFolderPicker = false;
+		await saveStillToFolder(folderId, folderPath);
+	}
+
+	async function saveStillToFolder(targetFolderId, targetFolderPath) {
+		if (!rightPreviewImage || isSavingStill) return;
+		if (!targetFolderId) {
+			rightPanelNote = 'Select an active asset folder first.';
+			return;
+		}
+		const uid = userFiles.getUid();
+		if (!uid) {
+			rightPanelNote = 'You must be logged in to save files.';
+			return;
+		}
+
+		isSavingStill = true;
+		rightPanelNote = '';
+		try {
+			const filename = `${activeTab}_result_${Date.now()}.png`;
+			const response = await fetch('/api/upload-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					imageData: rightPreviewImage,
+					filename,
+					folder: targetFolderId
+				})
+			});
+			const data = await response.json();
+			if (!response.ok) throw new Error(data.error || 'Upload failed');
+
+			await createFile(uid, targetFolderId, filename, data.url, 'image', {
+				sourceType: 'right-preview',
+				fromTab: activeTab
+			});
+			rightPanelNote = `Saved to ${targetFolderPath || 'selected folder'}.`;
+		} catch (err) {
+			rightPanelNote = err.message || 'Save failed.';
+		} finally {
+			isSavingStill = false;
+		}
+	}
 
 
 	async function logout() {
@@ -168,12 +312,6 @@
 				Edit
 			</button>
 			<button
-				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'style' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
-				onclick={() => activeTab = 'style'}
-			>
-				Style
-			</button>
-			<button
 				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animate' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
 				onclick={() => activeTab = 'animate'}
 			>
@@ -181,17 +319,17 @@
 			</button>
 			</div>
 			
-			<div class="p-3 flex-1 overflow-y-auto">
-		{#if activeTab === 'design'}
-			<DesignPanel />
-		{:else if activeTab === 'edit'}
-			<EditPanel initialImage={editImage} />
-		{:else if activeTab === 'style'}
-			<CharacterWizard initialReferenceImage={styleImage} />
-		{:else if activeTab === 'animate'}
-			<GenerationPanel />
-		{/if}
-		</div>
+			<div class="p-2 flex-1 overflow-hidden">
+				{#if activeTab === 'design'}
+					<DesignPanel />
+				{:else if activeTab === 'edit'}
+					<EditPanel initialImage={editImage} onChange={handleEditOutput} />
+				{:else if activeTab === 'animate'}
+					<AutoFitPanel minScale={0.9}>
+						<GenerationPanel />
+					</AutoFitPanel>
+				{/if}
+			</div>
 		</div>
 
 		<!-- Middle Column: File Tree / Jobs / Frames -->
@@ -213,17 +351,85 @@
 			</div>
 			<div class="flex-1 min-h-0 overflow-hidden">
 				{#if rightTab === 'preview'}
-					<AnimationPreview />
+					{#if activeTab === 'animate'}
+						<AnimationPreview />
+					{:else}
+						<div class="h-full p-3 flex flex-col gap-2">
+							<p class="text-xs text-gray-500">{rightPreviewLabel}</p>
+							<div class="flex-1 border rounded bg-gray-100 flex items-center justify-center overflow-hidden">
+								{#if rightPreviewImage}
+									<img src={rightPreviewImage} alt={rightPreviewLabel} class="max-w-full max-h-full object-contain" />
+								{:else}
+									<p class="text-xs text-gray-400">No result yet</p>
+								{/if}
+							</div>
+							<div class="grid grid-cols-2 gap-2">
+								<button class="px-2 py-1.5 text-xs rounded bg-teal-500 text-white disabled:bg-gray-400" onclick={loadStillIntoEdit} disabled={!rightPreviewImage}>
+									✏️ Load in Edit
+								</button>
+								<button class="px-2 py-1.5 text-xs rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsStartFrame} disabled={!rightPreviewImage}>
+									▶ Set Start
+								</button>
+								<button class="px-2 py-1.5 text-xs rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsEndFrame} disabled={!rightPreviewImage}>
+									⏹ Set End
+								</button>
+								<button
+									class="px-2 py-1.5 text-xs rounded bg-emerald-500 text-white disabled:bg-gray-400"
+									onclick={openStillSavePicker}
+									disabled={!rightPreviewImage || isSavingStill}
+								>
+									{isSavingStill ? '⏳ Saving...' : '💾 Save To...'}
+								</button>
+							</div>
+							{#if rightPanelNote}
+								<p class="text-[10px] text-gray-500">{rightPanelNote}</p>
+							{/if}
+						</div>
+					{/if}
 				{:else}
-					<div class="p-3 overflow-y-auto h-full">
-						<ExportPanel />
-					</div>
+					{#if activeTab === 'animate'}
+						<div class="p-3 overflow-y-auto h-full">
+							<ExportPanel />
+						</div>
+					{:else}
+						<div class="h-full p-3 space-y-2">
+							<p class="text-xs text-gray-500">Still Image Export</p>
+							<div class="grid grid-cols-2 gap-2">
+								<button
+									class="px-2 py-2 text-xs rounded bg-green-500 text-white disabled:bg-gray-400"
+									onclick={downloadCurrentStill}
+									disabled={!rightPreviewImage}
+								>
+									⬇️ Download
+								</button>
+								<button
+									class="px-2 py-2 text-xs rounded bg-blue-500 text-white disabled:bg-gray-400"
+									onclick={sendStillToAnimate}
+									disabled={!rightPreviewImage}
+								>
+									🎬 Send to Animate
+								</button>
+							</div>
+							<p class="text-[10px] text-gray-400">
+								Export actions for sprite sheets/video are available in Animate mode.
+							</p>
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</div>
 
 	</div>
 </div>
+
+{#if showStillFolderPicker}
+	<FolderPicker
+		onSelect={onStillFolderSelect}
+		onClose={() => showStillFolderPicker = false}
+		startFolderId={$activeAssetStore.folderId}
+		startFolderName={$activeAssetStore.folderName || 'Asset'}
+	/>
+{/if}
 
 <style>
 	.mobile-panels {

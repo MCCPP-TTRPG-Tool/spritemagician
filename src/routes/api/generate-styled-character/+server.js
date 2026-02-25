@@ -14,6 +14,7 @@ import {
 	STYLE_KEYWORDS,
 } from '$lib/server/gemini.js';
 import { getMasterStyle } from '$lib/server/styleAnchor.js';
+import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
 
 export async function POST({ request, locals }) {
 	try {
@@ -98,7 +99,7 @@ export async function POST({ request, locals }) {
 				'Nothing added, nothing removed. Only the art style changes.',
 				'',
 				`Output: single sprite, 3/4 isometric view facing right, idle stance,`,
-				`grey background (#808080), centered in a ${canvasPx}×${canvasPx}px canvas.`,
+				`solid chroma key background (${CHROMA_KEY_HEX}), centered in a ${canvasPx}×${canvasPx}px canvas.`,
 				'',
 				'CRITICAL REQUIREMENTS - MUST FOLLOW:',
 				'- Absolutely NO black borders, NO black outlines, NO black edges, NO black lines, NO black strokes, NO black rims',
@@ -107,6 +108,7 @@ export async function POST({ request, locals }) {
 				'- All edges should be soft and blend naturally - no hard black lines',
 				'- If you see any black pixels around the character, remove them completely',
 				'- The character should appear to emerge naturally from the background without any border',
+				`- Reserve ${CHROMA_KEY_HEX} for background only; do not use that exact color on the character`,
 			].join('\n'),
 		});
 

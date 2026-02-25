@@ -1,4 +1,5 @@
 <script>
+	import { browser } from '$app/environment';
 	import { projectStore, updateFPS } from '$lib/stores/project.js';
 	import { poseStore } from '$lib/stores/poses.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
@@ -7,6 +8,7 @@
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	import { pixelateFrames } from '$lib/utils/pixelate.js';
 	import { cleanupBackgrounds } from '$lib/utils/backgroundCleanup.js';
+	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
 	let savedPoses = $state({ poses: [] });
@@ -26,11 +28,18 @@
 	let progressPollInterval = $state(null);
 	let jobId = $state(null);
 	let queueJobId = $state(null); // For job queue tracking
+	const ANIMATE_STATE_KEY = 'spritemagician.animate.panel.v1';
 	
-	// Animation settings - lower motion for 2D sprites
-	let duration = $state(5); // seconds (2-10, Wan 2.2 max ~121 frames)
+	const MIN_TARGET_FRAMES = 12;
+	const MAX_TARGET_FRAMES = 24;
+	const MIN_MANUAL_FRAMES = 8;
+	const MAX_MANUAL_FRAMES = 48;
+
+	// Animation settings tuned for faster sprite iteration
+	let duration = $state(2); // seconds (shorter by default for faster turnaround)
 	let motionAmount = $state(50); // 1-255, lower = subtle motion for sprites
 	let shouldLoop = $state(false); // Loop animation back to first frame
+	let perfectLoop = $state(false); // Force end/start seam smoothing + exact closure
 	let selectedPose = $state('idle'); // Pose preset
 	
 	// Advanced settings for better accuracy and loops
@@ -53,6 +62,8 @@
 	// Interpolation mode (start → end frame)
 	let useInterpolation = $state(false);
 	let endFrame = $state(null);
+	let frameTargetMode = $state('auto'); // 'auto' | 'manual'
+	let manualFrameCount = $state(16);
 	
 	function handleEndFrameUpload(dataUrl) {
 		endFrame = dataUrl;
@@ -75,7 +86,7 @@
 	
 	// HoMM3 pixel art style animation prompts
 	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
-	const HOMM3_STYLE = 'Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, transparent background, isolated character';
+	const HOMM3_STYLE = `Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, solid chroma key lime background (${CHROMA_KEY_HEX}), isolated character, reserve ${CHROMA_KEY_HEX} for background only and never on the subject`;
 	
 	const posePresets = [
 		{ 
@@ -115,21 +126,158 @@
 		}
 	];
 	
-	// Available video models - sorted by cost (cheapest first)
-	let selectedModel = $state('wan22');
-	const videoModels = [
-		{ id: 'wan22', name: 'Wan 2.2 Fast', speed: '15-30s', quality: '💰 Cheapest' },
-		{ id: 'ltxv', name: 'LTX Video', speed: '10-20s', quality: 'Fast' },
-		{ id: 'hailuo', name: 'Hailuo 2.3', speed: '20-40s', quality: 'Best quality' },
-		{ id: 'live2d', name: 'Live2D', speed: '20-40s', quality: '2D focused' },
-		{ id: 'svd', name: 'SVD', speed: '120s+', quality: '💸 Expensive' }
-	];
+	const ACTIVE_MODEL_ID = 'wan22';
 	
 	// Processing options
 	let removeBackground = $state(false); // Disabled by default for faster testing
 	let pixelateOutput = $state(false); // Disabled by default - only enable if you want pixelation effect
 	let pixelSize = $state(2); // Size of each "pixel" (2-8)
 	let colorLevels = $state(64); // Color levels (8, 16, 32)
+
+	if (browser) {
+		try {
+			const raw = localStorage.getItem(ANIMATE_STATE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (typeof parsed?.prompt === 'string') prompt = parsed.prompt;
+				if (typeof parsed?.duration === 'number') duration = parsed.duration;
+				if (typeof parsed?.motionAmount === 'number') motionAmount = parsed.motionAmount;
+				if (typeof parsed?.shouldLoop === 'boolean') shouldLoop = parsed.shouldLoop;
+				if (typeof parsed?.perfectLoop === 'boolean') perfectLoop = parsed.perfectLoop;
+				if (typeof parsed?.selectedPose === 'string') selectedPose = parsed.selectedPose;
+				if (typeof parsed?.showAdvanced === 'boolean') showAdvanced = parsed.showAdvanced;
+				if (parsed?.guidanceScale === null || typeof parsed?.guidanceScale === 'number') guidanceScale = parsed.guidanceScale;
+				if (parsed?.seed === null || typeof parsed?.seed === 'number') seed = parsed.seed;
+				if (typeof parsed?.negativePrompt === 'string') negativePrompt = parsed.negativePrompt;
+				if (typeof parsed?.flfDurationSeconds === 'number') flfDurationSeconds = parsed.flfDurationSeconds;
+				if (typeof parsed?.flfInferenceSteps === 'number') flfInferenceSteps = parsed.flfInferenceSteps;
+				if (typeof parsed?.flfGuidanceScale === 'number') flfGuidanceScale = parsed.flfGuidanceScale;
+				if (typeof parsed?.flfGuidanceScale2 === 'number') flfGuidanceScale2 = parsed.flfGuidanceScale2;
+				if (typeof parsed?.flfShift === 'number') flfShift = parsed.flfShift;
+				if (parsed?.flfSeed === null || typeof parsed?.flfSeed === 'number') flfSeed = parsed.flfSeed;
+				if (typeof parsed?.flfNegativePrompt === 'string') flfNegativePrompt = parsed.flfNegativePrompt;
+				if (typeof parsed?.useInterpolation === 'boolean') useInterpolation = parsed.useInterpolation;
+				if (parsed?.endFrame === null || typeof parsed?.endFrame === 'string') endFrame = parsed.endFrame;
+				if (typeof parsed?.frameTargetMode === 'string') frameTargetMode = parsed.frameTargetMode;
+				if (typeof parsed?.manualFrameCount === 'number') manualFrameCount = parsed.manualFrameCount;
+				if (typeof parsed?.removeBackground === 'boolean') removeBackground = parsed.removeBackground;
+				if (typeof parsed?.pixelateOutput === 'boolean') pixelateOutput = parsed.pixelateOutput;
+				if (typeof parsed?.pixelSize === 'number') pixelSize = parsed.pixelSize;
+				if (typeof parsed?.colorLevels === 'number') colorLevels = parsed.colorLevels;
+			}
+		} catch {
+			// ignore storage parse errors
+		}
+	}
+
+	function clampFrameBudget(rawCount) {
+		const safe = Number.isFinite(rawCount) ? Math.round(rawCount) : MIN_TARGET_FRAMES;
+		return Math.max(MIN_TARGET_FRAMES, Math.min(MAX_TARGET_FRAMES, safe));
+	}
+
+	function clampManualFrameCount(rawCount) {
+		const safe = Number.isFinite(rawCount) ? Math.round(rawCount) : 16;
+		return Math.max(MIN_MANUAL_FRAMES, Math.min(MAX_MANUAL_FRAMES, safe));
+	}
+
+	function loadImageDataUrl(dataUrl) {
+		return new Promise((resolve, reject) => {
+			const img = new Image();
+			img.onload = () => resolve(img);
+			img.onerror = () => reject(new Error('Failed to load frame for perfect loop'));
+			img.src = dataUrl;
+		});
+	}
+
+	async function blendFrameDataUrls(baseDataUrl, targetDataUrl, alpha) {
+		const [a, b] = await Promise.all([loadImageDataUrl(baseDataUrl), loadImageDataUrl(targetDataUrl)]);
+		const width = a.naturalWidth || a.width;
+		const height = a.naturalHeight || a.height;
+		if (!width || !height) return baseDataUrl;
+
+		const canvas = document.createElement('canvas');
+		canvas.width = width;
+		canvas.height = height;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return baseDataUrl;
+
+		ctx.clearRect(0, 0, width, height);
+		ctx.globalAlpha = 1;
+		ctx.drawImage(a, 0, 0, width, height);
+		ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+		ctx.drawImage(b, 0, 0, width, height);
+		ctx.globalAlpha = 1;
+		return canvas.toDataURL('image/png');
+	}
+
+	async function enforcePerfectLoop(frames) {
+		if (!frames || frames.length < 4) return frames || [];
+		const out = [...frames];
+		const seamWindow = Math.min(4, Math.max(2, Math.floor(out.length / 6)));
+		const startSlice = out.slice(0, seamWindow);
+		for (let i = 0; i < seamWindow; i++) {
+			const tailIndex = out.length - seamWindow + i;
+			const alpha = (i + 1) / (seamWindow + 1);
+			out[tailIndex] = await blendFrameDataUrls(out[tailIndex], startSlice[i], alpha);
+		}
+		// Hard-close the loop for guaranteed end->start continuity.
+		out[out.length - 1] = out[0];
+		return out;
+	}
+
+	$effect(() => {
+		if (perfectLoop && !shouldLoop) {
+			shouldLoop = true;
+		}
+	});
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.setItem(
+				ANIMATE_STATE_KEY,
+				JSON.stringify({
+					prompt,
+					duration,
+					motionAmount,
+					shouldLoop,
+					perfectLoop,
+					selectedPose,
+					showAdvanced,
+					guidanceScale,
+					seed,
+					negativePrompt,
+					flfDurationSeconds,
+					flfInferenceSteps,
+					flfGuidanceScale,
+					flfGuidanceScale2,
+					flfShift,
+					flfSeed,
+					flfNegativePrompt,
+					useInterpolation,
+					endFrame,
+					frameTargetMode,
+					manualFrameCount,
+					removeBackground,
+					pixelateOutput,
+					pixelSize,
+					colorLevels
+				})
+			);
+		} catch {
+			// ignore storage quota/private mode errors
+		}
+	});
+
+	let targetFrameCount = $derived.by(() => {
+		if (frameTargetMode === 'manual') {
+			return clampManualFrameCount(manualFrameCount);
+		}
+		const base = useInterpolation
+			? Math.round(flfDurationSeconds * project.fps)
+			: Math.round(duration * project.fps);
+		return clampFrameBudget(base);
+	});
 
 	function handleFirstFrameUpload(dataUrl) {
 		projectStore.update(p => ({ ...p, firstFrame: dataUrl }));
@@ -175,16 +323,22 @@
 						}
 						
 						console.log('Starting frame extraction from:', data.videoUrl);
-						const extractDuration = useInterpolation ? flfDurationSeconds : duration;
-						let rawFrames = await extractFrames(data.videoUrl, Math.round(extractDuration * project.fps));
+						let rawFrames = await extractFrames(data.videoUrl, targetFrameCount);
 						console.log(`Extracted ${rawFrames.length} frames`);
 						
 						if (!rawFrames || rawFrames.length === 0) {
 							throw new Error('No frames extracted from video');
 						}
 						
-					// Step 2: If loop enabled, create ping-pong loop
-					if (shouldLoop && rawFrames.length > 2) {
+					// Step 2: Loop shaping (standard ping-pong or strict perfect loop seam pass)
+					if (perfectLoop && rawFrames.length > 3) {
+						progress = { ...progress, message: 'Forcing perfect loop seam...' };
+						if (queueJobId) {
+							jobQueue.updateJob(queueJobId, { message: 'Forcing perfect loop seam...' });
+						}
+						rawFrames = await enforcePerfectLoop(rawFrames);
+						console.log(`Perfect loop enforced: ${rawFrames.length} frames`);
+					} else if (shouldLoop && rawFrames.length > 2) {
 						progress = { ...progress, message: 'Creating seamless loop...' };
 						if (queueJobId) {
 							jobQueue.updateJob(queueJobId, { message: 'Creating seamless loop...' });
@@ -197,62 +351,29 @@
 						console.log(`Loop created: ${rawFrames.length} frames`);
 					}
 					
-					// Step 3: Remove backgrounds (if enabled) - PARALLEL PROCESSING
+					// Step 3: Remove backgrounds (if enabled)
 					let finalFrames = rawFrames;
 					
 					if (removeBackground) {
 						const totalFrames = rawFrames.length;
-						progress = { ...progress, message: `Removing backgrounds (0/${totalFrames})...` };
-						
-						// Process in parallel batches for speed
-						const batchSize = 5; // Process 5 frames at a time
-						const transparentFrames = new Array(totalFrames);
-						
-						for (let batchStart = 0; batchStart < totalFrames; batchStart += batchSize) {
-							const batchEnd = Math.min(batchStart + batchSize, totalFrames);
-							const batch = rawFrames.slice(batchStart, batchEnd);
-							
-							progress = { ...progress, message: `Removing BG (${batchEnd}/${totalFrames})...` };
-							
-							// Process batch in parallel
-							const batchPromises = batch.map((frame, batchIndex) => {
-								const frameIndex = batchStart + batchIndex;
-								return fetch('/api/remove-background', {
-									method: 'POST',
-									headers: { 'Content-Type': 'application/json' },
-									body: JSON.stringify({ images: [frame] })
-								})
-								.then(response => {
-									if (response.ok) {
-										return response.json().then(result => ({
-											index: frameIndex,
-											image: result.images && result.images[0] ? result.images[0] : frame
-										}));
-									}
-									return { index: frameIndex, image: frame };
-								})
-								.catch(error => {
-									console.error(`BG removal failed for frame ${frameIndex}:`, error);
-									return { index: frameIndex, image: frame };
-								});
-							});
-							
-							const batchResults = await Promise.all(batchPromises);
-							batchResults.forEach(result => {
-								transparentFrames[result.index] = result.image;
-							});
-						}
-						
-						// Post-process: Clean up any remaining background pixels (aggressive mode)
-						progress = { ...progress, message: 'Cleaning up remaining background...' };
+						progress = { ...progress, message: `Removing chroma background (${totalFrames} frames)...` };
 						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: 'Cleaning up background...' });
+							jobQueue.updateJob(queueJobId, { message: `Chroma keying ${CHROMA_KEY_HEX} background...` });
 						}
 						
-						// Use aggressive cleanup with lower threshold for better results
-						const cleanedFrames = await cleanupBackgrounds(transparentFrames, 80, (done, total) => {
-							progress = { ...progress, message: `Cleaning BG (${done}/${total})...` };
-						});
+						const cleanedFrames = await cleanupBackgrounds(
+							rawFrames,
+							70,
+							(done, total) => {
+								progress = { ...progress, message: `Chroma key cleanup (${done}/${total})...` };
+							},
+							false,
+							{
+								chromaKeyHex: CHROMA_KEY_HEX,
+								chromaTolerance: CHROMA_KEY_TOLERANCE,
+								chromaOnly: true
+							}
+						);
 						
 						finalFrames = cleanedFrames;
 					}
@@ -366,7 +487,7 @@
 		generationError = null;
 		// When interpolating, use FLF duration (not the general slider) so frame extraction matches
 		const effectiveDuration = useInterpolation ? flfDurationSeconds : duration;
-		const totalFrameCount = Math.round(effectiveDuration * project.fps);
+		const totalFrameCount = targetFrameCount;
 		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: `Starting ${effectiveDuration}s animation...` };
 		jobId = null;
 
@@ -384,7 +505,7 @@
 
 		try {
 			// Calculate frame count from effective duration and FPS
-			const requestedFrameCount = Math.round(effectiveDuration * project.fps);
+			const requestedFrameCount = targetFrameCount;
 			
 			// Build prompt from pose preset
 			let posePrompt;
@@ -415,8 +536,9 @@
 					duration: duration,
 					motionAmount: motionAmount,
 					fps: project.fps,
-					loop: shouldLoop,
-					model: selectedModel,
+					loop: shouldLoop || perfectLoop,
+					perfectLoop,
+					model: ACTIVE_MODEL_ID,
 					interpolate: useInterpolation,
 					// Standard advanced settings (non-FLF models)
 					guidanceScale: guidanceScale,
@@ -479,20 +601,20 @@
 	<!-- Sprite Preview(s) -->
 	<div class="flex gap-2 {useInterpolation ? '' : 'justify-center'}">
 		<!-- Start Frame -->
-		<div class="{useInterpolation ? 'flex-1' : 'w-3/4'}">
+		<div class="{useInterpolation ? 'flex-1' : 'w-full'}">
 			{#if useInterpolation}
 				<p class="text-[10px] text-gray-500 text-center mb-1">Start Frame</p>
 			{/if}
 			{#if project.firstFrame}
 				<div class="relative">
-					<img src={project.firstFrame} alt="Start" class="w-full aspect-square object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
+					<img src={project.firstFrame} alt="Start" class="w-full {useInterpolation ? 'aspect-square' : 'h-56'} object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
 					<button 
 						class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
 						onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
 					>×</button>
 				</div>
 			{:else}
-				<div class="aspect-square">
+				<div class={useInterpolation ? 'aspect-square' : 'h-56'}>
 					<FrameUpload label={useInterpolation ? "Start" : "Upload Sprite"} onUpload={handleFirstFrameUpload} />
 				</div>
 			{/if}
@@ -563,7 +685,7 @@
 		{:else}
 			<div class="flex-1">
 				<span class="text-gray-600">{duration}s</span>
-				<input type="range" min="2" max="10" step="1" bind:value={duration} class="w-full h-1" />
+				<input type="range" min="1" max="4" step="0.5" bind:value={duration} class="w-full h-1" />
 			</div>
 		{/if}
 		<div class="w-16">
@@ -575,6 +697,7 @@
 			>
 				<option value={6}>6 fps (long)</option>
 				<option value={8}>8 fps</option>
+				<option value={10}>10 fps</option>
 				<option value={12}>12 fps</option>
 			</select>
 		</div>
@@ -597,6 +720,10 @@
 			<input type="checkbox" bind:checked={shouldLoop} class="w-3 h-3" />
 			Loop
 		</label>
+		<label class="flex items-center gap-1 text-purple-700">
+			<input type="checkbox" bind:checked={perfectLoop} class="w-3 h-3" />
+			Perfect Loop
+		</label>
 		<label class="flex items-center gap-1 text-gray-600">
 			<input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />
 			Remove BG
@@ -605,7 +732,54 @@
 			<input type="checkbox" bind:checked={pixelateOutput} class="w-3 h-3" />
 			Pixelate
 		</label>
-		<span class="ml-auto text-gray-400">~{Math.round((useInterpolation ? flfDurationSeconds : duration) * project.fps)}f</span>
+		<span class="ml-auto text-gray-400">~{targetFrameCount}f</span>
+	</div>
+
+	<!-- Frame Target Controls -->
+	<div class="space-y-1.5 p-2 bg-gray-50 border border-gray-200 rounded">
+		<div class="flex items-center justify-between text-xs">
+			<span class="font-medium text-gray-700">Frame Target</span>
+			<div class="flex items-center gap-3">
+				<label class="flex items-center gap-1">
+					<input type="radio" name="frameTargetMode" value="auto" bind:group={frameTargetMode} class="w-3 h-3" />
+					Auto
+				</label>
+				<label class="flex items-center gap-1">
+					<input type="radio" name="frameTargetMode" value="manual" bind:group={frameTargetMode} class="w-3 h-3" />
+					Manual
+				</label>
+			</div>
+		</div>
+		{#if frameTargetMode === 'manual'}
+			<div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+				<input
+					type="range"
+					min={MIN_MANUAL_FRAMES}
+					max={MAX_MANUAL_FRAMES}
+					step="1"
+					bind:value={manualFrameCount}
+					class="w-full h-1"
+				/>
+				<input
+					type="number"
+					min={MIN_MANUAL_FRAMES}
+					max={MAX_MANUAL_FRAMES}
+					step="1"
+					bind:value={manualFrameCount}
+					onchange={() => manualFrameCount = clampManualFrameCount(manualFrameCount)}
+					class="w-16 px-1 py-0.5 border rounded text-xs"
+				/>
+			</div>
+		{/if}
+		<p class="text-[10px] text-gray-500">
+			Targeting <strong>{targetFrameCount}</strong> extracted frames.
+		</p>
+	</div>
+
+	<div class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+		⏱️ {frameTargetMode === 'auto'
+			? `Fast frame budget active: auto-target ${MIN_TARGET_FRAMES}-${MAX_TARGET_FRAMES} frames (walking-friendly).`
+			: `Manual frame target active: ${targetFrameCount} frames.`}
 	</div>
 	
 	<!-- Pixelation Settings (when enabled) -->
@@ -633,20 +807,8 @@
 		</div>
 	{/if}
 
-	<!-- Model Selection - Compact (disabled during interpolation) -->
-	<div class="flex flex-wrap gap-1">
-		{#each videoModels as model}
-			<button
-				type="button"
-				class="px-2 py-0.5 text-[10px] border rounded transition-colors 
-					{useInterpolation ? 'opacity-40 cursor-not-allowed border-gray-200' : selectedModel === model.id ? 'border-blue-500 bg-blue-50 font-medium' : 'border-gray-300 hover:border-gray-400'}"
-				onclick={() => { if (!useInterpolation) selectedModel = model.id; }}
-				title={useInterpolation ? 'Interpolation uses Replicate WAN 2.2 FLF' : model.quality}
-				disabled={useInterpolation}
-			>
-				{model.id === 'wan22' ? '💰Wan' : model.id === 'ltxv' ? 'LTX' : model.id === 'hailuo' ? 'Hailuo' : model.id === 'live2d' ? 'Live2D' : model.id === 'svd' ? 'SVD💸' : model.name}
-			</button>
-		{/each}
+	<div class="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-2 py-1">
+		🤖 Model locked: WAN 2.2
 	</div>
 
 	<!-- Advanced Settings Toggle -->

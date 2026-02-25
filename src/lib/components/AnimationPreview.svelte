@@ -5,6 +5,8 @@
 	import FolderPicker from './FolderPicker.svelte';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	import AnimationQueueBar from './AnimationQueueBar.svelte';
+	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
+import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
 	let isLooped = $state(false);
@@ -210,32 +212,20 @@
 		stop();
 		
 		try {
-			bgRemovalProgress = { status: 'processing', message: 'Calling background removal API...', progress: 20 };
-			const res = await fetch('/api/remove-background', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ images: [project.frames[cf]] })
+			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+			bgRemovalProgress = { status: 'processing', message: `Removing ${activeChroma} background...`, progress: 35 };
+			const cleaned = await cleanupBackground(project.frames[cf], 70, true, true, false, {
+				chromaKeyHex: activeChroma,
+				chromaTolerance: CHROMA_KEY_TOLERANCE,
+				chromaOnly: true
 			});
-
-			if (!res.ok) {
-				const data = await res.json();
-				throw new Error(data.error || 'Background removal failed');
-			}
-
-			bgRemovalProgress = { status: 'processing', message: 'Processing result...', progress: 50 };
-			const { images } = await res.json();
-			if (images && images[0]) {
-				bgRemovalProgress = { status: 'processing', message: 'Cleaning up artifacts...', progress: 70 };
-				// Clean up any remaining background pixels (less aggressive to preserve character details)
-				const cleaned = await cleanupBackground(images[0], 60, true, true, false); // Less aggressive
-				const newFrames = [...project.frames];
-				newFrames[cf] = cleaned;
-				projectStore.update(p => ({ ...p, frames: newFrames }));
-				bgRemovalProgress = { status: 'completed', message: 'Background removed successfully!', progress: 100 };
-				setTimeout(() => {
-					bgRemovalProgress = null;
-				}, 2000);
-			}
+			const newFrames = [...project.frames];
+			newFrames[cf] = cleaned;
+			projectStore.update(p => ({ ...p, frames: newFrames }));
+			bgRemovalProgress = { status: 'completed', message: 'Background removed successfully!', progress: 100 };
+			setTimeout(() => {
+				bgRemovalProgress = null;
+			}, 2000);
 		} catch (err) {
 			console.error('Background removal error:', err);
 			bgRemovalProgress = { status: 'error', message: 'Failed: ' + err.message, progress: 0 };
@@ -259,53 +249,24 @@
 		stop();
 		
 		try {
-			// Process in batches to avoid overwhelming the API
-			const batchSize = 5;
 			const newFrames = [...project.frames];
 			const totalFrames = newFrames.length;
 			
-			for (let i = 0; i < newFrames.length; i += batchSize) {
-				const batch = newFrames.slice(i, i + batchSize);
-				const batchStart = i;
-				
+			for (let i = 0; i < newFrames.length; i++) {
+				const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
 				bgRemovalProgress = { 
 					status: 'processing', 
-					message: `Processing batch ${Math.floor(i / batchSize) + 1}... (${i}/${totalFrames} frames)`, 
-					progress: Math.round((i / totalFrames) * 80),
+					message: `Removing ${activeChroma} (${i + 1}/${totalFrames})...`, 
+					progress: Math.round((i / totalFrames) * 90),
 					current: i,
 					total: totalFrames
 				};
-				
-				const res = await fetch('/api/remove-background', {
-					method: 'POST',
-					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ images: batch })
+				const cleaned = await cleanupBackground(newFrames[i], 70, true, true, false, {
+					chromaKeyHex: activeChroma,
+					chromaTolerance: CHROMA_KEY_TOLERANCE,
+					chromaOnly: true
 				});
-
-				if (!res.ok) {
-					const data = await res.json();
-					throw new Error(data.error || 'Background removal failed');
-				}
-
-				bgRemovalProgress = { 
-					status: 'processing', 
-					message: `Cleaning artifacts in batch ${Math.floor(i / batchSize) + 1}...`, 
-					progress: Math.round((i / totalFrames) * 80) + 5,
-					current: i,
-					total: totalFrames
-				};
-
-				const { images } = await res.json();
-				if (images) {
-					// Update frames in this batch and clean up remaining background
-					for (let j = 0; j < images.length && (i + j) < newFrames.length; j++) {
-						if (images[j]) {
-							// Clean up any remaining background pixels (less aggressive to preserve character details)
-							const cleaned = await cleanupBackground(images[j], 60, true, true, false); // Less aggressive
-							newFrames[i + j] = cleaned;
-						}
-					}
-				}
+				newFrames[i] = cleaned;
 			}
 
 			bgRemovalProgress = { status: 'processing', message: 'Finalizing...', progress: 95, current: totalFrames, total: totalFrames };

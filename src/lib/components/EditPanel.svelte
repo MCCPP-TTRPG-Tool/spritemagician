@@ -1,8 +1,10 @@
 <script>
+	import { browser } from '$app/environment';
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 
 	let { initialImage = null, onChange = null } = $props();
 
@@ -23,6 +25,110 @@
 	let showFolderPicker = $state(false);
 	let saveFolderId = $state(null);
 	let saveFolderPath = $state(null);
+	const EDIT_STATE_KEY = 'spritemagician.edit.panel.v1';
+
+	$effect(() => {
+		if (!$activeAssetStore?.folderId) return;
+		saveFolderId = $activeAssetStore.folderId;
+		saveFolderPath = $activeAssetStore.folderPath || $activeAssetStore.folderName;
+	});
+
+	if (browser) {
+		try {
+			const raw = localStorage.getItem(EDIT_STATE_KEY);
+			if (raw) {
+				const parsed = JSON.parse(raw);
+				if (parsed?.mode === 'edit' || parsed?.mode === 'expand') mode = parsed.mode;
+				if (typeof parsed?.sourceImage === 'string') sourceImage = parsed.sourceImage;
+				if (typeof parsed?.editPrompt === 'string') editPrompt = parsed.editPrompt;
+				if (typeof parsed?.expandDirection === 'string') expandDirection = parsed.expandDirection;
+				if (Number.isFinite(parsed?.expandAmount)) expandAmount = parsed.expandAmount;
+				if (typeof parsed?.resultImage === 'string') resultImage = parsed.resultImage;
+				if (typeof parsed?.editContext === 'string') editContext = parsed.editContext;
+				if (typeof parsed?.selectedPresetId === 'string') selectedPresetId = parsed.selectedPresetId;
+				if (typeof parsed?.enforceUncropped === 'boolean') enforceUncropped = parsed.enforceUncropped;
+				if (typeof parsed?.removeBackgroundSetting === 'boolean') removeBackgroundSetting = parsed.removeBackgroundSetting;
+				if (Number.isFinite(parsed?.imgWidth)) imgWidth = parsed.imgWidth;
+				if (Number.isFinite(parsed?.imgHeight)) imgHeight = parsed.imgHeight;
+			}
+		} catch {
+			// ignore state parse errors
+		}
+	}
+
+
+	const EDIT_CONTEXTS = [
+		{ id: 'character', label: '\u{1F9D9} Character' },
+		{ id: 'building', label: '\u{1F3F0} Building' },
+		{ id: 'item', label: '\u{1F5E1}\uFE0F Item' },
+		{ id: 'asset', label: '\u{1F9F1} Asset' },
+		{ id: 'scenery', label: '\u{1F332} Scenery' },
+		{ id: 'effects', label: '\u2728 Special Effect' }
+	];
+
+	const CHARACTER_POSE_PRESETS = [
+		{ id: 'reframe', label: '\u{1F4D0} Reframe Uncropped', prompt: 'show the full character from head to toe, centered, with clear margin around the silhouette' },
+		{ id: 'tposefront', label: '\u{1F9CD} Front T-Pose', prompt: 'front profile facing camera, full-body T-pose, arms extended horizontally, legs shoulder-width, neutral expression, fully visible and uncropped' },
+		{ id: 'idle', label: '\u{1F9CD} Idle', prompt: 'neutral idle stance, full body visible, balanced posture, clear silhouette' },
+		{ id: 'ready', label: '\u2694\uFE0F Ready Stance', prompt: 'combat-ready stance, weight centered, full body visible, readable silhouette' },
+		{ id: 'walk', label: '\u{1F6B6} Walking', prompt: 'walking pose, one leg forward and one back, full body visible' },
+		{ id: 'midstride', label: '\u{1F463} Mid Stride', prompt: 'mid-stride pose with clear leg separation, full body visible' },
+		{ id: 'run', label: '\u{1F3C3} Running', prompt: 'running pose with dynamic arm and leg swing, full body visible' },
+		{ id: 'midsprint', label: '\u{1F4A8} Mid Sprint', prompt: 'mid-sprint pose, aggressive forward lean, full body visible, no crop' },
+		{ id: 'jump', label: '\u{1F998} Jumping', prompt: 'jumping pose, airborne, full body visible including feet and hands' },
+		{ id: 'land', label: '\u{1F6EC} Landing', prompt: 'landing pose with bent knees and impact posture, full body visible' },
+		{ id: 'attack', label: '\u{1F5E1}\uFE0F Attack Windup', prompt: 'attack windup pose, strong anticipation, full body visible' },
+		{ id: 'cast', label: '\u2728 Casting', prompt: 'spell casting pose, one arm extended, full body visible' },
+		{ id: 'damage', label: '\u{1F4A5} Taking Damage', prompt: 'hit reaction pose, torso recoiling, full body visible, maintain identity' },
+		{ id: 'pain', label: '\u{1F616} In Pain', prompt: 'pain reaction pose, tense body language, full body visible' },
+		{ id: 'stagger', label: '\u{1F300} Staggered', prompt: 'staggered off-balance pose after impact, full body visible' },
+		{ id: 'knockdown', label: '\u{1FAA6} Knocked Down', prompt: 'knocked-down pose on ground plane, full body visible, uncropped' },
+		{ id: 'dead', label: '\u2620\uFE0F Dead', prompt: 'defeated dead pose, body fully visible in frame, uncropped' }
+	];
+
+	const CONTEXT_PRESETS = {
+		character: CHARACTER_POSE_PRESETS,
+		building: [
+			{ id: 'facade', label: '\u{1F3D7}\uFE0F Repair Facade', prompt: 'repair damaged structure details while preserving building silhouette and style' },
+			{ id: 'ruin', label: '\u{1F9F1} Ruined Variant', prompt: 'create a ruined variant with broken sections and debris while preserving composition' },
+			{ id: 'lighting', label: '\u{1F56F}\uFE0F Lighting Pass', prompt: 'enhance architectural lighting readability while preserving forms and scale' }
+		],
+		item: [
+			{ id: 'clean', label: '\u{1F9FC} Clean Readability', prompt: 'clean up shape readability and material clarity while preserving item identity' },
+			{ id: 'rare', label: '\u{1F48E} Rare Variant', prompt: 'create a rare-tier variant with richer accents and clearer focal highlights' },
+			{ id: 'battleworn', label: '\u{1F6E0}\uFE0F Battle Worn', prompt: 'add battle-worn wear, scratches, and grime while preserving silhouette' }
+		],
+		asset: [
+			{ id: 'modular', label: '\u{1F9E9} Modular Cleanup', prompt: 'improve modular readability and edge continuity while preserving asset shape' },
+			{ id: 'material', label: '\u{1FAB5} Material Pass', prompt: 'improve material definition and texture readability, keep proportions identical' },
+			{ id: 'variant', label: '\u{1F3A8} Color Variant', prompt: 'create a color variant while preserving form and details' }
+		],
+		scenery: [
+			{ id: 'depth', label: '\u{1F32B}\uFE0F Add Depth', prompt: 'improve scene depth layering and atmospheric separation while preserving composition' },
+			{ id: 'clean', label: '\u{1F9F9} Cleanup', prompt: 'remove distracting clutter and improve scene readability while keeping key forms' },
+			{ id: 'mood', label: '\u{1F319} Mood Pass', prompt: 'adjust mood lighting and color grading while preserving structural composition' }
+		],
+		effects: [
+			{ id: 'boost', label: '\u26A1 Boost Intensity', prompt: 'increase effect intensity and contrast while preserving the effect shape language' },
+			{ id: 'clean', label: '\u{1F300} Clean Effect', prompt: 'remove noise and improve edge readability of the effect' },
+			{ id: 'variant', label: '\u{1F308} Color Shift', prompt: 'create a color-shifted effect variant while preserving motion language' }
+		]
+	};
+
+	let editContext = $state('character');
+	let selectedPresetId = $state(null);
+	let enforceUncropped = $state(true);
+	let removeBackgroundSetting = $state(true);
+
+	let activePresets = $derived(CONTEXT_PRESETS[editContext] || []);
+	let isCharacterContext = $derived(editContext === 'character');
+
+	$effect(() => {
+		selectedPresetId = null;
+		if (editContext !== 'character' && mode === 'edit' && editPrompt.trim() === '') {
+			// Keep prompt empty unless user applies a preset
+		}
+	});
 
 	function handleFileChange(e) {
 		const file = e.target.files?.[0];
@@ -76,6 +182,118 @@
 		imgWidth = 0;
 		imgHeight = 0;
 		onChange?.(null);
+	}
+
+	function appendPromptInstruction(instruction) {
+		const next = (instruction || '').trim();
+		if (!next) return;
+		const current = (editPrompt || '').trim();
+		if (!current) {
+			editPrompt = next;
+			return;
+		}
+		const currentLower = current.toLowerCase();
+		const nextLower = next.toLowerCase();
+		if (currentLower.includes(nextLower)) return;
+		editPrompt = `${current}\n${next}`;
+	}
+
+
+	function applyPreset(preset) {
+		if (!preset?.prompt) return;
+		selectedPresetId = preset.id;
+		appendPromptInstruction(preset.prompt);
+	}
+
+	function applySelectedPreset() {
+		const preset = activePresets.find((p) => p.id === selectedPresetId);
+		if (preset) applyPreset(preset);
+	}
+
+	$effect(() => {
+		if (!browser) return;
+		try {
+			localStorage.setItem(
+				EDIT_STATE_KEY,
+				JSON.stringify({
+					mode,
+					sourceImage,
+					editPrompt,
+					expandDirection,
+					expandAmount,
+					resultImage,
+					editContext,
+					selectedPresetId,
+					enforceUncropped,
+					removeBackgroundSetting,
+					imgWidth,
+					imgHeight
+				})
+			);
+		} catch {
+			// ignore storage quota/private mode errors
+		}
+	});
+
+	function getActiveChromaKeyHex() {
+		return $activeAssetStore?.chromaKeyHex || '#00FF00';
+	}
+
+	function applyFlatBackgroundPreset() {
+		const hex = getActiveChromaKeyHex();
+		appendPromptInstruction(`set the background to a perfectly flat solid color (${hex}), keep subject edges clean and fully separated`);
+	}
+
+	function buildGlobalGuardrails() {
+		const rules = [];
+
+		if (enforceUncropped) {
+			rules.push(`CRITICAL FRAMING RULES (MANDATORY):
+- Entire subject must be fully visible and uncropped.
+- Keep margin around the subject silhouette.
+- Do not cut off any key parts of the subject.
+- If any instruction implies close-up or crop, ignore that and keep full-subject framing.`);
+		}
+
+		if (isCharacterContext && enforceUncropped) {
+			rules.push(`CHARACTER-SPECIFIC FRAMING RULES:
+- Show full body from head to toe, including hands and feet.
+- Do not cut off limbs, weapons, hair, tails, wings, or accessories.
+- Maintain character identity, outfit, anatomy, and proportions.`);
+		}
+
+		if (removeBackgroundSetting) {
+			const chromaHex = getActiveChromaKeyHex();
+			rules.push(`BACKGROUND RULE (MANDATORY):
+- Remove background and environmental clutter.
+- Keep only the isolated subject.
+- Output should have a solid chroma key background (${chromaHex}).
+- Reserve ${chromaHex} for background only; do not use that exact color on the subject.`);
+		}
+
+		return rules.join('\n\n');
+	}
+
+	function buildAutoEditInstruction() {
+		if (editContext === 'character') {
+			return 'isolate the character as the main subject and keep pose readability high';
+		}
+		if (editContext === 'building') {
+			return 'isolate the building structure as the main subject and preserve architectural readability';
+		}
+		if (editContext === 'item') {
+			return 'isolate the item as the main subject and improve shape/material readability';
+		}
+		if (editContext === 'asset') {
+			return 'isolate the asset as the main subject and preserve form clarity';
+		}
+		if (editContext === 'scenery') {
+			return 'isolate the primary scenery subject and preserve composition readability';
+		}
+		if (editContext === 'effects') {
+			return 'isolate the effect subject and keep effect shape and intensity readable';
+		}
+		return 'isolate the subject and keep it fully readable';
 	}
 
 	async function buildExpandedImage() {
@@ -177,7 +395,7 @@
 			error = 'Upload an image first';
 			return;
 		}
-		if (!editPrompt.trim()) {
+		if (mode === 'expand' && !editPrompt.trim()) {
 			error = 'Describe what you want';
 			return;
 		}
@@ -200,8 +418,13 @@
 				}
 				promptToSend = `OUTPAINTING: The provided image has gray (#C0C0C0) border areas where the canvas was expanded. The original artwork is intact in its position. Generate new content ONLY in the gray areas to seamlessly extend the scene. Keep the original pixels untouched. Expansion direction: ${expandDirection}. What to generate in the new space: ${editPrompt}`;
 			} else {
-				// Use user's prompt directly - don't override with background instructions
-				promptToSend = `Edit this image according to these instructions: ${editPrompt}. Keep everything not explicitly mentioned unchanged. Maintain the same art style, lighting, and quality.`;
+				const effectiveInstruction = editPrompt.trim() || buildAutoEditInstruction();
+				const contextInstruction = `Context: ${editContext}.`;
+				const guardrail = buildGlobalGuardrails();
+				const guardrailBlock = guardrail ? `\n\n${guardrail}` : '';
+				promptToSend = `Edit this image according to these instructions: ${effectiveInstruction}. ${contextInstruction}${guardrailBlock}
+
+Keep everything not explicitly mentioned unchanged. Maintain the same art style, lighting, and quality.`;
 			}
 
 			const res = await fetch('/api/edit-image', {
@@ -219,6 +442,23 @@
 
 			resultImage = data.image;
 			onChange?.(data.image);
+			if ($activeAssetStore?.autoSave && $activeAssetStore?.folderId) {
+				try {
+					await performSave(true);
+				} catch (saveErr) {
+					console.warn('[EditPanel] Auto-save failed:', saveErr);
+				}
+			}
+			if (typeof window !== 'undefined') {
+				window.dispatchEvent(new CustomEvent('openCenterResultModal', {
+					detail: {
+						image: data.image,
+						label: mode === 'edit' ? 'Edited Result' : 'Expanded Result',
+						source: mode === 'edit' ? 'edit' : 'expand',
+						suggestedActions: ['loadStyle']
+					}
+				}));
+			}
 		} catch (e) {
 			error = e.message;
 		} finally {
@@ -262,7 +502,7 @@
 		}
 	}
 
-	async function performSave() {
+	async function performSave(silent = false) {
 		if (!resultImage || !saveFolderId) return;
 
 		try {
@@ -295,10 +535,15 @@
 				mode
 			});
 
-			alert('Image saved successfully!');
+			if (!silent) {
+				alert('Image saved successfully!');
+			}
 		} catch (err) {
 			console.error('Save error:', err);
-			alert('Failed to save image: ' + err.message);
+			if (!silent) {
+				alert('Failed to save image: ' + err.message);
+			}
+			throw err;
 		}
 	}
 
@@ -314,8 +559,7 @@
 	}
 </script>
 
-<div class="space-y-3">
-	<h2 class="text-sm font-bold">Image Editor</h2>
+<div class="space-y-1.5">
 
 	<!-- Mode Toggle -->
 	<div class="flex gap-1 bg-gray-100 rounded-lg p-0.5">
@@ -323,13 +567,13 @@
 			class="flex-1 px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'edit' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-800'}"
 			onclick={() => mode = 'edit'}
 		>
-			✏️ Edit
+			&#x270F;&#xFE0F; Edit
 		</button>
 		<button
 			class="flex-1 px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'expand' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-600 hover:text-gray-800'}"
 			onclick={() => mode = 'expand'}
 		>
-			🔲 Expand
+			&#x1F532; Expand
 		</button>
 	</div>
 
@@ -342,7 +586,7 @@
 			ondrop={handleDrop}
 		>
 			<input type="file" accept="image/*" class="hidden" onchange={handleFileChange} />
-			<div class="text-3xl mb-2">{isDragging ? '📥' : '🖼️'}</div>
+			<div class="text-2xl mb-1">{isDragging ? '&#x1F4E5;' : '&#x1F5BC;&#xFE0F;'}</div>
 			<p class="text-sm text-gray-600 font-medium">Drop an image or click to upload</p>
 			<p class="text-xs text-gray-400 mt-1">PNG, JPG, WebP supported</p>
 		</label>
@@ -354,7 +598,7 @@
 					<img
 						src={sourceImage}
 						alt="Source"
-						class="w-full max-h-48 object-contain rounded"
+						class="w-full max-h-24 object-contain rounded"
 						style="image-rendering: pixelated; background-color: #808080;"
 					/>
 				</div>
@@ -370,8 +614,9 @@
 
 	<!-- Expand Controls -->
 	{#if mode === 'expand' && sourceImage}
-		<div class="space-y-2 bg-orange-50 rounded-lg p-2.5">
-			<div>
+		<div class="space-y-1.5 bg-orange-50 rounded-lg p-2">
+			<div class="grid grid-cols-2 gap-2">
+				<div>
 				<label for="expand-dir" class="block text-xs font-medium text-gray-700 mb-1">Direction</label>
 				<select
 					id="expand-dir"
@@ -384,9 +629,8 @@
 					<option value="right">➡️ Right</option>
 					<option value="all">↔️ All sides</option>
 				</select>
-			</div>
-
-			<div>
+				</div>
+				<div>
 				<label for="expand-amount" class="block text-xs font-medium text-gray-700 mb-1">
 					Amount: {expandAmount}px
 				</label>
@@ -399,6 +643,7 @@
 					bind:value={expandAmount}
 					class="w-full"
 				/>
+				</div>
 			</div>
 
 			{#if imgWidth && imgHeight}
@@ -411,41 +656,102 @@
 
 	<!-- Prompt & Generate -->
 	{#if sourceImage}
-		<!-- Quick Actions -->
-		<div class="space-y-2">
-			{#if mode === 'edit'}
-				<button
-					onclick={() => { editPrompt = 'remove the background and objects, show the full character at 3/4 view facing to the right'; generate(); }}
-					disabled={generating}
-					class="w-full px-2 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					🎭 Isolate Character (3/4 view, no background)
-				</button>
-				<button
-					onclick={() => { 
-						editPrompt = 'Cinematic game sprite, character in a staggered hit-reaction pose, body recoiling backwards from impact, torso arched slightly, head snapped back, eyes wide and gritted teeth, one arm raised defensively, feet planted but skidding slightly, subtle motion blur on limbs to indicate force, particles of impact sparks, maintain identical character features and clothing.';
-						generate();
-					}}
-					disabled={generating}
-					class="w-full px-2 py-1.5 text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					💥 Taking Damage (hit reaction pose)
-				</button>
-				<button
-					onclick={() => { 
-						mode = 'expand';
-						expandDirection = 'all';
-						expandAmount = 128;
-						editPrompt = 'increase padding around character';
-						generate();
-					}}
-					disabled={generating}
-					class="w-full px-2 py-1.5 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-				>
-					🔲 Expand Canvas (add padding around character)
-				</button>
-			{/if}
-		</div>
+		<!-- Context + Presets -->
+		{#if mode === 'edit'}
+			<div class="space-y-1.5">
+				<div class="space-y-1.5 rounded border border-gray-200 bg-white p-2">
+					<div class="grid grid-cols-2 gap-2">
+						<div>
+							<label for="edit-context" class="block text-xs font-medium text-gray-700 mb-1">Edit Context</label>
+							<select
+								id="edit-context"
+								bind:value={editContext}
+								class="w-full px-2 py-1 text-xs border rounded bg-white"
+							>
+								{#each EDIT_CONTEXTS as ctx}
+									<option value={ctx.id}>{ctx.label}</option>
+								{/each}
+							</select>
+						</div>
+						<div class="flex items-end">
+							<div class="w-full px-2 py-1 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded">
+								&#x1F9CD; Keep Subject Uncropped {enforceUncropped ? 'ON' : 'OFF'}
+							</div>
+						</div>
+					</div>
+
+					<div class="grid grid-cols-2 gap-2">
+						<label class="flex items-center gap-1.5 text-[11px] border rounded px-2 py-1 bg-white">
+							<input type="checkbox" bind:checked={enforceUncropped} class="w-3.5 h-3.5" />
+							<span>&#x1F9CD; Keep Uncropped</span>
+						</label>
+						<label class="flex items-center gap-1.5 text-[11px] border rounded px-2 py-1 bg-white">
+							<input type="checkbox" bind:checked={removeBackgroundSetting} class="w-3.5 h-3.5" />
+							<span>&#x1F5D1;&#xFE0F; Remove Background</span>
+						</label>
+					</div>
+
+					<div class="grid grid-cols-[1fr_auto] gap-2 items-end">
+						<div>
+							<label for="edit-preset" class="block text-xs font-medium text-gray-700 mb-1">Pose / Context Preset</label>
+							<select
+								id="edit-preset"
+								bind:value={selectedPresetId}
+								class="w-full px-2 py-1 text-xs border rounded bg-white"
+							>
+								<option value="">Choose preset...</option>
+								{#each activePresets as preset}
+									<option value={preset.id}>{preset.label}</option>
+								{/each}
+							</select>
+						</div>
+						<button
+							class="px-2 py-1 text-xs rounded border bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 disabled:opacity-50"
+							onclick={applySelectedPreset}
+							disabled={!selectedPresetId}
+						>
+							Apply
+						</button>
+					</div>
+
+					{#if isCharacterContext}
+						<div class="grid grid-cols-2 gap-2">
+							<button
+								class="w-full px-2 py-1 text-[11px] rounded border border-blue-300 bg-blue-50 text-blue-700 text-left hover:bg-blue-100"
+								onclick={() => {
+									const tPosePreset = activePresets.find((p) => p.id === 'tposefront');
+									if (tPosePreset) applyPreset(tPosePreset);
+								}}
+							>
+								&#x1F9CD; Quick: Front T-Pose
+							</button>
+							<button
+								class="w-full px-2 py-1 text-[11px] rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
+								onclick={applyFlatBackgroundPreset}
+							>
+								&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
+							</button>
+						</div>
+					{:else}
+						<button
+							class="w-full px-2 py-1 text-[11px] rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
+							onclick={applyFlatBackgroundPreset}
+						>
+							&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
+						</button>
+					{/if}
+
+					{#if enforceUncropped || removeBackgroundSetting}
+						<div class="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+							&#x1F4CF; Global guardrails active:
+							{enforceUncropped ? ' uncropped subject' : ''}
+							{enforceUncropped && removeBackgroundSetting ? ' + ' : ''}
+							{removeBackgroundSetting ? 'background removed' : ''}.
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
 
 		<div>
 			<label for="edit-prompt" class="block text-xs font-medium text-gray-700 mb-1">
@@ -455,26 +761,31 @@
 				id="edit-prompt"
 				bind:value={editPrompt}
 				placeholder={mode === 'edit'
-					? 'e.g. "Add a cape flowing behind the character"'
+					? 'Optional: add extra instructions, or leave blank to use context + guardrails'
 					: 'e.g. "Show the full body with legs and feet on a stone floor"'}
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
-				rows="3"
+				rows="2"
 			></textarea>
 		</div>
 
 		<button
 			onclick={generate}
-			disabled={generating || !editPrompt.trim()}
-			class="w-full px-3 py-2 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed {mode === 'edit' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-orange-500 hover:bg-orange-600'}"
+			disabled={generating || (mode === 'expand' && !editPrompt.trim())}
+			class="w-full px-3 py-1.5 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed {mode === 'edit' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-orange-500 hover:bg-orange-600'}"
 		>
 			{#if generating}
 				<span class="inline-flex items-center gap-1.5">
-					<span class="animate-spin">⏳</span> Generating...
+					<span class="animate-spin">&#x23F3;</span> Generating...
 				</span>
 			{:else}
-				{mode === 'edit' ? '✏️ Apply Edit' : '🔲 Expand Image'}
+				{mode === 'edit' ? '\u270F\uFE0F Apply Edit' : '\u{1F532} Expand Image'}
 			{/if}
 		</button>
+		{#if resultImage}
+			<p class="text-[11px] text-center text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-1">
+				&#x1F5BC;&#xFE0F; Result available in right preview panel.
+			</p>
+		{/if}
 	{/if}
 
 	<!-- Error -->
@@ -483,7 +794,7 @@
 	{/if}
 
 	<!-- Result -->
-	{#if resultImage}
+	{#if false && resultImage}
 		<div class="space-y-2">
 			<p class="text-xs font-medium text-green-700">✅ Result</p>
 			<button class="w-full bg-gray-300 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = resultImage}>

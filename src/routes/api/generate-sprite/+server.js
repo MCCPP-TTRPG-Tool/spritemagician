@@ -1,9 +1,11 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
+import { getMasterStyle } from '$lib/server/styleAnchor.js';
+import { CHROMA_KEY_PROMPT_RULES } from '$lib/constants/chromaKey.js';
 
 export async function POST({ request }) {
 	try {
-		const { prompt, referenceImage } = await request.json();
+		const { prompt, referenceImage, useMasterStyleAnchor = false, generationNonce = null } = await request.json();
 
 		if (!prompt && !referenceImage) {
 			return json({ error: 'Prompt or reference image is required' }, { status: 400 });
@@ -14,18 +16,53 @@ export async function POST({ request }) {
 		}
 
 		// Send prompt EXACTLY as provided - don't add extra instructions that confuse the model
-		const finalPrompt = prompt;
+		const finalPrompt = generationNonce
+			? `${prompt}\n\nVariation nonce: ${generationNonce}`
+			: prompt;
+
+		let masterStyle = null;
+		if (useMasterStyleAnchor) {
+			masterStyle = await getMasterStyle();
+			if (!masterStyle?.base64) {
+				return json(
+					{
+						error: 'Style lock requested, but no master style anchor found. Upload one via /api/style-anchor.'
+					},
+					{ status: 500 }
+				);
+			}
+		}
 
 		console.log('[Sprite Generator] Creating sprite with Nano Banana (Gemini)...');
 		console.log('[Sprite Generator] Prompt:', finalPrompt.substring(0, 100) + '...');
 		console.log('[Sprite Generator] Reference image:', referenceImage ? 'provided' : 'none');
+		console.log('[Sprite Generator] Style anchor lock:', useMasterStyleAnchor ? (masterStyle?.name || masterStyle?.source || 'enabled') : 'disabled');
 
-		// Build the parts array - include reference image if provided
+		// Build the parts array:
+		// 1) Style anchor (optional when style-lock is requested)
+		// 2) Optional reference image if user provided one
+		// 3) Prompt text
 		const parts = [];
+
+		if (useMasterStyleAnchor && masterStyle) {
+			parts.push({
+				text:
+					'MASTER STYLE ANCHOR (MANDATORY): Match this exact rendering style, color language, texture treatment, and overall aesthetic.'
+			});
+			parts.push({
+				inline_data: {
+					mime_type: masterStyle.mimeType || 'image/png',
+					data: masterStyle.base64
+				}
+			});
+		}
 		
 		if (referenceImage) {
 			// Add reference image instruction
-			parts.push({ text: 'REFERENCE IMAGE - Use this as the basis for generation:' });
+			parts.push({
+				text:
+					'REFERENCE IMAGE (MANDATORY): Match this image as the primary visual target. Preserve composition intent, subject silhouette, material treatment, and painting texture. Do not drift into generic AI rendering.'
+			});
 			
 			let mimeType = 'image/png';
 			let base64Data;
@@ -58,8 +95,18 @@ export async function POST({ request }) {
 			});
 		}
 		
-		// Add the prompt EXACTLY as provided
-		parts.push({ text: finalPrompt });
+		// Add the prompt with explicit style-lock directive.
+		parts.push({
+			text:
+				`${finalPrompt}\n\n` +
+				(useMasterStyleAnchor
+					? `STYLE LOCK REQUIREMENTS (MANDATORY):\n` +
+					  `- Keep output in the same visual style as MASTER STYLE ANCHOR.\n` +
+					  `- Preserve style consistency over subject changes.\n` +
+					  `- Do not drift to photoreal or unrelated art styles.\n\n`
+					: '') +
+				`${CHROMA_KEY_PROMPT_RULES}`
+		});
 
 		// Use the same model as pose generator (gemini-2.5-flash-image)
 		const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
@@ -98,6 +145,15 @@ export async function POST({ request }) {
 	}
 }
 
+function noCacheHeaders() {
+	return {
+		'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+		Pragma: 'no-cache',
+		Expires: '0',
+		'Surrogate-Control': 'no-store'
+	};
+}
+
 function processGeminiResult(result) {
 	let generatedImage = null;
 	
@@ -120,5 +176,5 @@ function processGeminiResult(result) {
 	}
 
 	console.log('[Sprite Generator] Successfully generated sprite with Nano Banana');
-	return json({ image: generatedImage });
+	return json({ image: generatedImage }, { headers: noCacheHeaders() });
 }

@@ -1,4 +1,4 @@
-I dont/**
+/**
  * Character Sheet Generation — turnaround reference using @google/genai SDK
  *
  * Generates a basic turnaround (front, right side, back, left side)
@@ -11,6 +11,7 @@ import {
 	extractImage,
 	stripDataUrl,
 } from '$lib/server/gemini.js';
+import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
 
 export async function POST({ request, locals }) {
 	try {
@@ -52,10 +53,11 @@ CRITICAL RULES:
 - Count every limb, horn, tail, wing, claw, and feature — ALL must be present in EVERY view
 - All 4 views must be the SAME SCALE and vertically aligned at the feet/base
 - Neutral standing/resting pose — all limbs visible and unoccluded
-- Clean solid LIGHT GREY background (#E8E8E8)
+- Clean solid CHROMA KEY background (${CHROMA_KEY_HEX})
 - Professional model-sheet quality: clean lines, even lighting, no dramatic shadows
 - Label each view underneath: "FRONT", "RIGHT SIDE", "BACK", "LEFT SIDE"
 - NO 3/4 angles in this sheet — strict cardinal directions only
+- Do not use ${CHROMA_KEY_HEX} on the subject itself; reserve it for background only
 
 PROPORTIONS — THIS IS THE MOST IMPORTANT RULE:
 - All 4 views must have IDENTICAL proportions — same height, same width, same limb lengths, same head size

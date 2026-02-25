@@ -7,11 +7,18 @@
 		renameItem,
 		deleteItem,
 		deleteFolderRecursive,
-		moveItem
+		moveItem,
+		getChildren
 	} from '$lib/firebase/firestore.js';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
+	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
+	import {
+		activeAssetStore,
+		setActiveAssetContext,
+		clearActiveAssetContext
+	} from '$lib/stores/activeAsset.js';
 
 	// ── reactive state ──────────────────────────────────────
 	let fs = $state({
@@ -51,22 +58,7 @@
 		}
 		
 		try {
-			// Use server-side API (works with session cookie auth, doesn't need client-side Firebase auth)
-			const res = await fetch('/api/create-folder', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					name,
-					parentId: fs.currentFolderId || null
-				})
-			});
-
-			if (!res.ok) {
-				const data = await res.json();
-				throw new Error(data.error || 'Failed to create folder');
-			}
-
-			const result = await res.json();
+			const result = await createFolderViaApi(name, fs.currentFolderId || null);
 			console.log('[FileTree] Folder created:', result);
 			newFolderName = '';
 			showNewFolder = false;
@@ -78,10 +70,80 @@
 		}
 	}
 
+	async function createFolderViaApi(name, parentId = null, metadata = null) {
+		const res = await fetch('/api/create-folder', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({
+				name,
+				parentId,
+				metadata
+			})
+		});
+		if (!res.ok) {
+			const data = await res.json();
+			throw new Error(data.error || 'Failed to create folder');
+		}
+		return res.json();
+	}
+
+	async function createAssetWorkspace() {
+		const raw = prompt('New asset workspace name:');
+		const name = raw?.trim();
+		if (!name) return;
+		try {
+			const result = await createFolderViaApi(name, fs.currentFolderId || null, {
+				source: 'file_tree',
+				chromaKeyHex: $activeAssetStore?.chromaKeyHex || '#00FF00'
+			});
+			const prefix = fs.breadcrumbs.map((b) => b.name).join(' / ');
+			const folderPath = prefix ? `${prefix} / ${result.name}` : result.name;
+			setActiveAssetContext({
+				folderId: result.id,
+				folderName: result.name,
+				folderPath,
+				chromaKeyHex: result?.metadata?.chromaKeyHex
+			});
+			userFiles.openFolder(result.id, result.name);
+		} catch (e) {
+			alert('Failed to create workspace: ' + (e.message || String(e)));
+		}
+	}
+
+	async function freshStartFileTree() {
+		if (!fs.uid) return;
+		const first = confirm(
+			'Fresh Start will permanently delete ALL folders and files in your file tree. Continue?'
+		);
+		if (!first) return;
+		const guard = prompt('Type DELETE to confirm full file tree wipe.');
+		if (guard !== 'DELETE') return;
+
+		try {
+			const rootItems = await getChildren(fs.uid, null);
+			for (const item of rootItems) {
+				if (item.isFolder) {
+					await deleteFolderRecursive(fs.uid, item.id);
+				} else {
+					await deleteItem(fs.uid, item.id);
+				}
+			}
+			clearActiveAssetContext();
+			userFiles.goToRoot();
+			alert('Fresh start complete. File tree is now empty.');
+		} catch (e) {
+			alert('Fresh start failed: ' + (e.message || String(e)));
+		}
+	}
+
 	function clickItem(item) {
 		// If selection mode is active, toggle selection instead of single selection
 		if (isSelectionMode) {
 			toggleSelect(item.id);
+		} else if (item.isFolder) {
+			// Single-click opens folders for faster navigation.
+			selectedId = null;
+			userFiles.openFolder(item.id, item.name);
 		} else {
 			selectedId = selectedId === item.id ? null : item.id;
 		}
@@ -189,10 +251,7 @@
 	}
 
 	function dblClickItem(item) {
-		if (item.isFolder) {
-			selectedId = null;
-			userFiles.openFolder(item.id, item.name);
-		} else {
+		if (!item.isFolder) {
 			previewItem = item;
 		}
 	}
@@ -360,51 +419,30 @@
 		bgRemovalProgress = { status: 'processing', message: 'Removing background...', progress: 0 };
 		
 		try {
-			// Call remove-background API
-			bgRemovalProgress = { status: 'processing', message: 'Calling background removal API...', progress: 10 };
-			const res = await fetch('/api/remove-background', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ images: [item.url] })
-			});
-			
-			if (!res.ok) {
-				const data = await res.json();
-				throw new Error(data.error || 'Background removal failed');
-			}
-			
-			bgRemovalProgress = { status: 'processing', message: 'Processing result...', progress: 40 };
-			const { images } = await res.json();
-			
-			if (!images || !images[0]) {
-				throw new Error('No image returned from background removal');
-			}
-			
-			// Convert the rembg output URL to a data URL using proxy (to avoid CORS)
-			let rembgImageDataUrl = images[0];
-			
-			if (!rembgImageDataUrl.startsWith('data:')) {
-				bgRemovalProgress = { status: 'processing', message: 'Loading processed image...', progress: 50 };
-				try {
-					const proxyRes = await fetch('/api/proxy-image', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({ url: rembgImageDataUrl })
-					});
-					if (!proxyRes.ok) {
-						const proxyData = await proxyRes.json();
-						throw new Error('Failed to proxy rembg output image: ' + (proxyData.error || 'Unknown error'));
-					}
-					const { dataUrl } = await proxyRes.json();
-					rembgImageDataUrl = dataUrl;
-				} catch (proxyErr) {
-					throw new Error('Failed to load background-removed image: ' + proxyErr.message);
+			// Load source image as data URL and chroma-key remove the configured lime background.
+			let imageDataUrl = item.url;
+			if (!imageDataUrl.startsWith('data:')) {
+				bgRemovalProgress = { status: 'processing', message: 'Loading source image...', progress: 25 };
+				const proxyRes = await fetch('/api/proxy-image', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ url: imageDataUrl })
+				});
+				if (!proxyRes.ok) {
+					const proxyData = await proxyRes.json().catch(() => ({}));
+					throw new Error(proxyData.error || 'Failed to load source image');
 				}
+				const { dataUrl } = await proxyRes.json();
+				imageDataUrl = dataUrl;
 			}
-			
-			// Clean up any remaining background artifacts (less aggressive to preserve character details)
-			bgRemovalProgress = { status: 'processing', message: 'Cleaning up artifacts...', progress: 60 };
-			const cleanedImage = await cleanupBackground(rembgImageDataUrl, 60, true, true, false); // Less aggressive
+
+			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+			bgRemovalProgress = { status: 'processing', message: `Removing chroma key ${activeChroma}...`, progress: 55 };
+			const cleanedImage = await cleanupBackground(imageDataUrl, 70, true, true, false, {
+				chromaKeyHex: activeChroma,
+				chromaTolerance: CHROMA_KEY_TOLERANCE,
+				chromaOnly: true
+			});
 			
 			if (!cleanedImage || cleanedImage.length < 100) {
 				throw new Error('Background cleanup failed - invalid image data');
@@ -490,6 +528,19 @@
 		if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
 		return `${(bytes / 1048576).toFixed(1)} MB`;
 	}
+
+	function setFolderAsActiveAsset(folderItem) {
+		if (!folderItem?.isFolder) return;
+		const prefix = fs.breadcrumbs.map((b) => b.name).join(' / ');
+		const folderPath = prefix ? `${prefix} / ${folderItem.name}` : folderItem.name;
+		setActiveAssetContext({
+			folderId: folderItem.id,
+			folderName: folderItem.name,
+			folderPath,
+			chromaKeyHex: folderItem?.metadata?.chromaKeyHex
+		});
+		menuItemId = null;
+	}
 </script>
 
 <!-- Close dropdown when clicking anywhere -->
@@ -561,9 +612,18 @@
 			onclick={() => { showNewFolder = true; newFolderName = ''; }}>
 			📁 New
 		</button>
+		<button class="px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-medium"
+			onclick={createAssetWorkspace}>
+			🎯 New Asset
+		</button>
 		<button class="px-2 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100 font-medium {uploading ? 'opacity-50 pointer-events-none' : ''}"
 			onclick={triggerUpload}>
 			{uploading ? '⏳…' : '⬆ Upload'}
+		</button>
+		<button class="px-2 py-1 rounded bg-red-50 text-red-700 hover:bg-red-100 font-medium"
+			onclick={freshStartFileTree}
+			title="Delete all file-tree folders and files for a clean start">
+			🧹 Fresh Start
 		</button>
 		{#if !isSelectionMode}
 			<button class="px-2 py-1 rounded bg-gray-50 text-gray-700 hover:bg-gray-100 font-medium text-xs ml-auto"
@@ -620,10 +680,11 @@
 			<div class="grid grid-cols-4 gap-2">
 				{#each fs.items as item (item.id)}
 					{@const isSelected = selectedItemIds.has(item.id)}
+					{@const isActiveAssetFolder = item.isFolder && $activeAssetStore.folderId === item.id}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all
-							{isSelected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : selectedId === item.id ? 'border-blue-500 bg-blue-50' : 'border-transparent hover:border-gray-300 bg-white'}"
+							{isSelected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : selectedId === item.id ? 'border-blue-500 bg-blue-50' : isActiveAssetFolder ? 'border-emerald-400 bg-emerald-50/30' : 'border-transparent hover:border-gray-300 bg-white'}"
 						onclick={() => clickItem(item)}
 						ondblclick={() => dblClickItem(item)}
 					>
@@ -707,6 +768,13 @@
 									</button>
 									<div class="border-t my-0.5"></div>
 								{/if}
+								{#if item.isFolder}
+									<button class="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
+										onclick={() => setFolderAsActiveAsset(item)}>
+										🎯 <span>Set Active Asset</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+								{/if}
 								<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
 									onclick={() => { doRename(item); menuItemId = null; }}>
 									📝 <span>Rename</span>
@@ -740,10 +808,11 @@
 				<tbody>
 					{#each fs.items as item (item.id)}
 						{@const isSelected = selectedItemIds.has(item.id)}
+						{@const isActiveAssetFolder = item.isFolder && $activeAssetStore.folderId === item.id}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
 							class="border-b border-gray-100 cursor-pointer transition-colors relative group
-								{isSelected ? 'bg-blue-50 ring-1 ring-blue-300' : selectedId === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'}"
+								{isSelected ? 'bg-blue-50 ring-1 ring-blue-300' : selectedId === item.id ? 'bg-blue-50' : isActiveAssetFolder ? 'bg-emerald-50/40' : 'hover:bg-gray-50'}"
 							onclick={() => clickItem(item)}
 							ondblclick={() => dblClickItem(item)}
 						>
@@ -817,6 +886,13 @@
 										⏹ <span>End Frame</span>
 									</button>
 									<div class="border-t my-0.5"></div>
+										{/if}
+										{#if item.isFolder}
+											<button class="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
+												onclick={() => setFolderAsActiveAsset(item)}>
+												🎯 <span>Set Active Asset</span>
+											</button>
+											<div class="border-t my-0.5"></div>
 										{/if}
 										<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
 											onclick={() => { doRename(item); menuItemId = null; }}>

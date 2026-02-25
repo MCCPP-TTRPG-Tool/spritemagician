@@ -3,6 +3,25 @@
  * Removes pixels with low alpha or pixels that are too similar to common background colors
  */
 
+function hexToRgb(hex) {
+	if (!hex || typeof hex !== 'string') return null;
+	const clean = hex.replace('#', '').trim();
+	if (!/^[0-9a-fA-F]{6}$/.test(clean)) return null;
+	return {
+		r: parseInt(clean.slice(0, 2), 16),
+		g: parseInt(clean.slice(2, 4), 16),
+		b: parseInt(clean.slice(4, 6), 16)
+	};
+}
+
+function colorDistance(r1, g1, b1, r2, g2, b2) {
+	return Math.sqrt(
+		Math.pow(r1 - r2, 2) +
+		Math.pow(g1 - g2, 2) +
+		Math.pow(b1 - b2, 2)
+	);
+}
+
 /**
  * Clean up remaining background pixels from an image
  * Uses aggressive multi-pass approach for better results
@@ -11,9 +30,10 @@
  * @param {boolean} removeWhite - Remove pixels that are very close to white (default true)
  * @param {boolean} removeGray - Remove pixels that are very close to gray backgrounds (default true)
  * @param {boolean} aggressive - Use more aggressive cleanup (default true)
+ * @param {{chromaKeyHex?: string, chromaTolerance?: number, chromaOnly?: boolean}} options
  * @returns {Promise<string>} Cleaned image as data URL
  */
-export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, removeWhite = true, removeGray = true, aggressive = true) {
+export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, removeWhite = true, removeGray = true, aggressive = true, options = {}) {
 	if (!imageDataUrl) {
 		console.error('[cleanupBackground] No image data provided');
 		return imageDataUrl;
@@ -32,6 +52,9 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 
 			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 			const data = imageData.data;
+			const chromaRgb = hexToRgb(options.chromaKeyHex || '');
+			const chromaTolerance = Number.isFinite(options.chromaTolerance) ? options.chromaTolerance : 60;
+			const chromaOnly = !!options.chromaOnly;
 
 			// Detect background color by sampling corners and edges
 			const sampleSize = 20; // Sample 20px from each corner/edge
@@ -112,10 +135,23 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 				const x = (i / 4) % canvas.width;
 				const y = Math.floor((i / 4) / canvas.width);
 				const isOnEdge = x < 8 || x > canvas.width - 8 || y < 8 || y > canvas.height - 8;
+
+				// Hard chroma-key pass (for synthetic lime backgrounds like #00FF00).
+				if (chromaRgb) {
+					const chromaDistance = colorDistance(r, g, b, chromaRgb.r, chromaRgb.g, chromaRgb.b);
+					if (chromaDistance <= chromaTolerance) {
+						toRemove.add(i);
+						continue;
+					}
+				}
 				
 				// Remove pixels with low alpha (more aggressive threshold)
 				if (a < alphaThreshold) {
 					toRemove.add(i);
+					continue;
+				}
+
+				if (chromaOnly) {
 					continue;
 				}
 
@@ -272,10 +308,10 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
  * @param {boolean} aggressive - Use aggressive cleanup (default true)
  * @returns {Promise<string[]>} Cleaned images
  */
-export async function cleanupBackgrounds(images, alphaThreshold = 80, onProgress = null, aggressive = true) {
+export async function cleanupBackgrounds(images, alphaThreshold = 80, onProgress = null, aggressive = true, options = {}) {
 	const results = [];
 	for (let i = 0; i < images.length; i++) {
-		const cleaned = await cleanupBackground(images[i], alphaThreshold, true, true, aggressive);
+		const cleaned = await cleanupBackground(images[i], alphaThreshold, true, true, aggressive, options);
 		results.push(cleaned);
 		if (onProgress) onProgress(i + 1, images.length);
 	}

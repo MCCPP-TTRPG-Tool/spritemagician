@@ -25,37 +25,92 @@ function parseJsonPayload(text) {
 	}
 }
 
+function fallbackPrompt(userMessage, finalPrompt, contentPreset, stylePreset) {
+	const base = (finalPrompt || userMessage || '').trim();
+	const style = stylePreset === 'diablo2'
+		? 'dark gothic fantasy Diablo II atmosphere, moody lighting, gritty textures'
+		: '';
+	const type = contentPreset ? `${contentPreset} concept, game-ready` : '';
+	return [base, type, style].filter(Boolean).join(', ');
+}
+
+function parseReferenceImageData(dataUrl) {
+	if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
+	const comma = dataUrl.indexOf(',');
+	if (comma === -1) return null;
+	const header = dataUrl.slice(0, comma);
+	const base64Data = dataUrl.slice(comma + 1);
+	if (!base64Data) return null;
+	const match = header.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64$/);
+	if (!match) return null;
+	return {
+		mimeType: match[1],
+		data: base64Data
+	};
+}
+
 export async function POST({ request, locals }) {
 	try {
 		if (!locals.user) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
-		const { messages = [], userMessage = '', finalPrompt = '' } = await request.json();
+		const {
+			mode = 'chat',
+			messages = [],
+			userMessage = '',
+			referenceImage = null,
+			finalPrompt = '',
+			contentPreset = 'character',
+			stylePreset = 'default'
+		} = await request.json();
 
-		const transcript = [...messages, { role: 'user', content: userMessage }]
-			.slice(-10)
-			.map(m => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`)
+		const transcriptMessages = userMessage?.trim()
+			? [...messages, { role: 'user', content: userMessage }]
+			: messages;
+		const transcript = transcriptMessages
+			.slice(-12)
+			.map((m) => `${m.role === 'assistant' ? 'Assistant' : 'User'}: ${m.content}`)
 			.join('\n');
+		const parsedReferenceImage = parseReferenceImageData(referenceImage);
+		const hasReferenceImage = !!parsedReferenceImage;
 
-		const instruction = `You are a concise character-prompt assistant.
-Return ONLY valid JSON with this exact shape:
+		const isPromptDraftMode = mode === 'draft_prompt';
+		const instruction = isPromptDraftMode
+			? `You are a concise game art prompt assistant.
+Return ONLY valid JSON with exact shape:
 {
   "assistantMessage": "string",
   "finalPrompt": "string"
 }
 Rules:
-- assistantMessage should be short and practical.
-- finalPrompt should be a single high-quality generation prompt.
-- Keep and improve user intent, remove fluff.
+- Keep assistantMessage short, useful, and friendly.
+- finalPrompt must be production-ready for image generation.
+- Include selected category and style context when relevant.
+- Do not wrap JSON in markdown.`
+			: `You are a concise game art ideation assistant.
+Return ONLY valid JSON with exact shape:
+{
+  "assistantMessage": "string"
+}
+Rules:
+- Focus on concept refinement and clarifying details.
+- Keep assistantMessage short, useful, and friendly.
+- Ask at most one targeted follow-up question when needed.
+- Do not write or revise a final production prompt in chat mode.
+- If a reference image is provided, use it as a visual target and ground your advice in visible traits.
 - Do not wrap JSON in markdown.`;
 
-		const input = `Conversation:\n${transcript}\n\nCurrent prompt draft:\n${finalPrompt}`;
+		const input = `Conversation:\n${transcript}\n\nCurrent prompt draft:\n${finalPrompt}\n\nSelected category preset: ${contentPreset}\nSelected style preset: ${stylePreset}\nReference image attached: ${hasReferenceImage ? 'yes' : 'no'}`;
+		const parts = [{ text: instruction }, { text: input }];
+		if (parsedReferenceImage) {
+			parts.push({ inlineData: parsedReferenceImage });
+		}
 
 		const ai = getClient();
 		const response = await ai.models.generateContent({
 			model: 'gemini-2.5-flash',
-			contents: [{ role: 'user', parts: [{ text: instruction }, { text: input }] }],
+			contents: [{ role: 'user', parts }],
 			config: {
 				temperature: 0.45,
 				candidateCount: 1,
@@ -66,16 +121,32 @@ Rules:
 		const text = extractText(response);
 		const parsed = parseJsonPayload(text);
 
-		if (!parsed) {
+		if (!parsed && isPromptDraftMode) {
 			return json({
-				assistantMessage: 'I could not structure that response. Try a more specific character direction.',
-				finalPrompt
+				assistantMessage: 'I refined your draft. You can tweak details and generate when ready.',
+				finalPrompt: fallbackPrompt(userMessage, finalPrompt, contentPreset, stylePreset)
+			});
+		}
+
+		if (!parsed && !isPromptDraftMode) {
+			return json({
+				assistantMessage:
+					'Strong direction so far. Share one key detail on mood, camera angle, or costume accents and I can refine it further.'
+			});
+		}
+
+		if (!isPromptDraftMode) {
+			return json({
+				assistantMessage: parsed.assistantMessage || 'Good direction. Share one more detail and I can sharpen the concept.'
 			});
 		}
 
 		return json({
 			assistantMessage: parsed.assistantMessage || 'Prompt refined.',
-			finalPrompt: parsed.finalPrompt || finalPrompt
+			finalPrompt:
+				typeof parsed.finalPrompt === 'string' && parsed.finalPrompt.trim()
+					? parsed.finalPrompt.trim()
+					: fallbackPrompt(userMessage, finalPrompt, contentPreset, stylePreset)
 		});
 	} catch (error) {
 		console.error('[Design Chat] Error:', error);

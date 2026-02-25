@@ -110,6 +110,14 @@ export async function moveItem(uid, fileId, newParentId) {
 	await updateDoc(fileDoc(uid, fileId), { parentId: newParentId || null, updatedAt: serverTimestamp() });
 }
 
+/** Update folder chroma key metadata */
+export async function updateFolderChromaKey(uid, fileId, chromaKeyHex) {
+	await updateDoc(fileDoc(uid, fileId), {
+		'metadata.chromaKeyHex': chromaKeyHex,
+		updatedAt: serverTimestamp()
+	});
+}
+
 /** Delete a single file */
 export async function deleteItem(uid, fileId) {
 	await deleteDoc(fileDoc(uid, fileId));

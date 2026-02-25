@@ -6,17 +6,18 @@
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import FolderPicker from './FolderPicker.svelte';
 
 	let { initialReferenceImage = null, onGenerated = null } = $props();
 
-	// ── Wizard step ──────────────────────────────────
+	// ── Flow state ──────────────────────────────────
 	let step = $state('create'); // 'create' | 'creating' | 'review' | 'pose-config' | 'pose-generating' | 'pose-review'
 
 	// ── Step 1: Create state ─────────────────────────
 	let referenceImage = $state(null);
 	let description = $state('');
-	let homm3Mode = $state(true); // default ON since it gives best results
+	let selectedStylePresetId = $state('homm3'); // keep legacy HoMM3 as preset #1/default
 	let generatedCharacter = $state(null);
 	let isGenerating = $state(false);
 	let error = $state(null);
@@ -41,12 +42,52 @@
 	let styleFileInput = $state(null);
 	let styleUploading = $state(false);
 
+	// ── Style Presets ────────────────────────────────
+	const STYLE_PRESETS = [
+		{ id: 'homm3', name: 'HoMM3 (Default)', prompt: 'Heroes of Might and Magic 3 (1999), pre-rendered 3D to 2D sprite, visible pixel texture, soft dithered shading, rich shadows, 256-color palette aesthetic, clean 1-pixel dark outline, 3/4 view, solid grey background' },
+		{ id: 'diablo2', name: 'Diablo II', prompt: 'dark gothic fantasy, grim medieval textures, moody dramatic lighting, gritty painterly detail, high-contrast atmosphere' },
+		{ id: 'warcraft3', name: 'Warcraft III', prompt: 'stylized hand-painted fantasy RTS aesthetic, bold forms, saturated team-color readability, clear unit silhouette' },
+		{ id: 'starcraft', name: 'StarCraft', prompt: 'sci-fi RTS unit aesthetic, strong material separation, readable silhouette, high-contrast game-ready rendering' },
+		{ id: 'wow', name: 'World of Warcraft', prompt: 'stylized fantasy MMO art direction, chunky readable shapes, colorful hand-painted materials' },
+		{ id: 'dota2', name: 'Dota 2', prompt: 'stylized MOBA character rendering, strong silhouette language, dramatic top lighting, gameplay readability first' },
+		{ id: 'league', name: 'League of Legends', prompt: 'stylized competitive MOBA character style, clean forms, readable costume design, vibrant accent lighting' },
+		{ id: 'hades', name: 'Hades', prompt: 'stylized mythic painterly look, bold graphic shadow shapes, vivid color accents, high character readability' },
+		{ id: 'hollowknight', name: 'Hollow Knight', prompt: 'minimal dark whimsical style, clean shape language, atmospheric gradients, strong silhouette clarity' },
+		{ id: 'deadcells', name: 'Dead Cells', prompt: 'high-energy pixel-art action style, crisp contrast, readable animation-focused silhouettes' },
+		{ id: 'blasphemous', name: 'Blasphemous', prompt: 'dark religious gothic pixel-art style, ornate details, grim tone, dramatic contrast' },
+		{ id: 'cuphead', name: 'Cuphead', prompt: '1930s rubber-hose cartoon style, inked outlines, vintage palette, hand-drawn animation feel' },
+		{ id: 'ori', name: 'Ori', prompt: 'soft luminous fantasy style, painterly environment glow, elegant curves, atmospheric depth' },
+		{ id: 'shovelknight', name: 'Shovel Knight', prompt: 'retro 8-bit inspired sprite style, limited palette, clean readable forms' },
+		{ id: 'stardew', name: 'Stardew Valley', prompt: 'cozy low-res pixel-art style, warm palette, friendly readable sprite shapes' },
+		{ id: 'terraria', name: 'Terraria', prompt: '2D sandbox pixel-art style, simple bold forms, clear iconographic readability' },
+		{ id: 'chrono', name: 'Chrono Trigger', prompt: 'classic SNES JRPG sprite style, expressive pixel clusters, vibrant retro palette' },
+		{ id: 'ff6', name: 'Final Fantasy VI', prompt: 'classic 16-bit JRPG sprite aesthetic, elegant silhouette, detailed but readable pixels' },
+		{ id: 'octopath', name: 'Octopath Traveler', prompt: 'HD-2D inspired sprite style, detailed pixel character with painterly depth and controlled glow' },
+		{ id: 'pokemon', name: 'Pokemon (Classic Sprite)', prompt: 'clean iconic creature sprite style, bold shape language, high readability and simple shading' },
+		{ id: 'fireemblem', name: 'Fire Emblem GBA', prompt: 'tactical RPG pixel portrait/sprite style, crisp lines, high contrast costume readability' },
+		{ id: 'darkest', name: 'Darkest Dungeon', prompt: 'inked gothic comic style, heavy outlines, dramatic shadow masses, grim color palette' },
+		{ id: 'disco', name: 'Disco Elysium', prompt: 'expressionistic painterly style, rough brush texture, moody color composition' },
+		{ id: 'borderlands', name: 'Borderlands', prompt: 'cel-shaded comic shooter style, thick ink contours, stylized material edges' },
+		{ id: 'hyperlight', name: 'Hyper Light Drifter', prompt: 'neon-inflected pixel-art style, clean silhouette, high color contrast, minimalist detail language' },
+		{ id: 'slaythespire', name: 'Slay the Spire', prompt: 'stylized 2D card-game fantasy style, painterly shapes, readable heroic silhouettes' }
+	];
+
+	let selectedStylePreset = $derived(
+		STYLE_PRESETS.find(s => s.id === selectedStylePresetId) || STYLE_PRESETS[0]
+	);
+
 	// ── Save to folder state ───────────────────────────
 	let showFolderPicker = $state(false);
 	let saveFolderId = $state(null);
 	let saveFolderPath = $state(null);
 
-	// ── Load reference from parent (wizard or store) whenever the prop changes ──
+	$effect(() => {
+		if (!$activeAssetStore?.folderId) return;
+		saveFolderId = $activeAssetStore.folderId;
+		saveFolderPath = $activeAssetStore.folderPath || $activeAssetStore.folderName;
+	});
+
+	// ── Load reference from parent (store/other panels) whenever the prop changes ──
 	let _lastRefImage = null;
 	$effect(() => {
 		if (initialReferenceImage && initialReferenceImage !== _lastRefImage) {
@@ -94,21 +135,22 @@
 	}
 
 	function buildPrompt() {
+		const style = selectedStylePreset;
 		if (referenceImage) {
 			const mod = description.trim();
-			if (homm3Mode) {
-				const base = `Recreate the character from the reference image in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. 3/4 view angle. Solid grey background. IMPORTANT: Maintain the same level of detail and quality as the reference.`;
+			if (style.id === 'homm3') {
+				const base = `Recreate the character from the reference image in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. 3/4 view angle. Solid chroma key lime background (#00FF00). IMPORTANT: Maintain the same level of detail and quality as the reference. Reserve #00FF00 for background only and do not use that exact color on the subject.`;
 				return mod ? `${base} Additional instruction: ${mod}` : base;
 			}
-			const base = `Generate a sprite variation based on the reference image. Keep the same character style and quality. Clean game sprite, transparent background.`;
+			const base = `Generate a sprite variation based on the reference image. Keep the same character identity, anatomy, and quality. Apply this game style: ${style.prompt}. Clean game sprite, transparent or plain background.`;
 			return mod ? `${base} Modification: ${mod}` : base;
 		}
 
-		if (homm3Mode) {
-			return `Create a sprite of ${description || 'a fantasy character'} in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. 3/4 view angle. Solid grey background.`;
+		if (style.id === 'homm3') {
+			return `Create a sprite of ${description || 'a fantasy character'} in the exact visual style of Heroes of Might and Magic 3 (1999). Pre-rendered 3D model converted to 2D sprite with visible pixel texture. Soft dithered shading, rich shadows, 256-color palette aesthetic. Clean 1-pixel dark outline. 3/4 view angle. Solid chroma key lime background (#00FF00). Reserve #00FF00 for background only and do not use that exact color on the subject.`;
 		}
 
-		return `Create a 2D game sprite: ${description || 'a fantasy character'}. Clean lines, game asset quality, transparent background.`;
+		return `Create a 2D game sprite of ${description || 'a fantasy character'}. Visual style target: ${style.prompt}. Keep clean lines, strong silhouette readability, and game asset quality.`;
 	}
 
 	async function generateCharacter() {
@@ -152,6 +194,23 @@
 			generatedCharacter = data.image;
 			console.log('[CharacterWizard] Generated new character:', { imageLength: data.image?.length, timestamp: Date.now() });
 			onGenerated?.(data.image);
+			if ($activeAssetStore?.autoSave && $activeAssetStore?.folderId) {
+				try {
+					await performSave(true);
+				} catch (saveErr) {
+					console.warn('[CharacterWizard] Auto-save failed:', saveErr);
+				}
+			}
+			if (typeof window !== 'undefined') {
+				window.dispatchEvent(new CustomEvent('openCenterResultModal', {
+					detail: {
+						image: data.image,
+						label: 'Styled Character',
+						source: selectedStylePreset?.name || 'style',
+						suggestedActions: ['loadEdit', 'startFrame']
+					}
+				}));
+			}
 
 			// Add to completed jobs for review
 			await completedJobs.addSprite({
@@ -200,7 +259,7 @@
 		}
 	}
 
-	async function performSave() {
+	async function performSave(silent = false) {
 		// Get the current generatedCharacter value at save time (not from closure)
 		const imageToSave = generatedCharacter;
 		if (!imageToSave || !saveFolderId) {
@@ -243,7 +302,7 @@
 				sourceType: 'generation',
 				prompt: description,
 				assetType: 'character',
-				style: homm3Mode ? 'homm3' : 'custom'
+				style: selectedStylePresetId
 			});
 			console.log('[CharacterWizard] File created with ID:', fileId);
 
@@ -260,10 +319,15 @@
 				console.log('[CharacterWizard] File saved to different folder, no refresh needed', { currentFolderId, parentId });
 			}
 
-			alert('Character saved successfully!');
+			if (!silent) {
+				alert('Character saved successfully!');
+			}
 		} catch (err) {
 			console.error('[CharacterWizard] Save error:', err);
-			alert('Failed to save character: ' + err.message);
+			if (!silent) {
+				alert('Failed to save character: ' + err.message);
+			}
+			throw err;
 		}
 	}
 
@@ -362,7 +426,7 @@
 					image: generatedPose,
 					description: `Pose — ${posePrompt || 'Custom'}`,
 					type: 'pose',
-					style: homm3Mode ? 'homm3' : 'custom'
+					style: selectedStylePresetId
 				}
 			}));
 		}
@@ -443,31 +507,23 @@
 	}
 
 	// ── Derived ──────────────────────────────────────
-	let currentStepNum = $derived(
-		step === 'create' || step === 'creating' ? 1
-		: step === 'review' ? 1
-		: 2
-	);
+	let flowPhaseLabel = $derived.by(() => {
+		if (step === 'create' || step === 'creating' || step === 'review') return 'Character Styling';
+		return 'Pose Variations';
+	});
 </script>
 
 <div class="space-y-3 text-sm">
 
-	<!-- Header + Progress -->
+	<!-- Header + Flow -->
 	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-bold text-gray-800">🧙 Character Wizard</h3>
+		<div>
+			<h3 class="text-sm font-bold text-gray-800">✨ Style Character</h3>
+			<p class="text-[10px] text-gray-500">{flowPhaseLabel} · one continuous flow</p>
+		</div>
 		{#if generatedCharacter}
 			<button class="text-[10px] text-gray-400 hover:text-red-500" onclick={startOver}>↩ Start Over</button>
 		{/if}
-	</div>
-
-	<div class="flex items-center gap-1 text-[10px]">
-		<span class="px-2 py-0.5 rounded-full {currentStepNum >= 1 ? 'bg-green-100 text-green-700 font-medium' : 'bg-gray-100 text-gray-400'}">
-			1. Create
-		</span>
-		<span class="text-gray-300">→</span>
-		<span class="px-2 py-0.5 rounded-full {currentStepNum >= 2 ? 'bg-purple-100 text-purple-700 font-medium' : 'bg-gray-100 text-gray-400'}">
-			2. Poses
-		</span>
 	</div>
 
 	<!-- Error -->
@@ -507,30 +563,31 @@
 			{/if}
 		</div>
 
-		<!-- HoMM3 Toggle -->
-		<button
-			class="w-full py-2 px-3 rounded-lg border-2 font-medium text-sm transition-all {homm3Mode
-				? 'bg-amber-100 border-amber-400 text-amber-800'
-				: 'bg-gray-50 border-gray-300 text-gray-600 hover:border-amber-300'}"
-			onclick={() => homm3Mode = !homm3Mode}
-		>
-			{homm3Mode ? '⚔️ HoMM3 Style ACTIVE' : '⚔️ Enable HoMM3 Style'}
-		</button>
+		<!-- Game Style Preset -->
+		<div>
+			<label for="style-preset" class="block text-xs font-medium text-gray-700 mb-1">Game Style Preset</label>
+			<select
+				id="style-preset"
+				bind:value={selectedStylePresetId}
+				class="w-full px-2 py-1.5 text-xs border rounded bg-white"
+			>
+				{#each STYLE_PRESETS as preset}
+					<option value={preset.id}>{preset.name}</option>
+				{/each}
+			</select>
+		</div>
 
-		{#if homm3Mode}
-			<div class="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-700">
-				Prompt: "A high-fidelity pre-rendered 2D game sprite of <span class="font-bold">[your description]</span> in the style of Heroes of Might and Magic 3, soft painterly textures, rich shadows."
-			</div>
-		{/if}
+		<div class="bg-amber-50 border border-amber-200 rounded p-2 text-[10px] text-amber-700">
+			<p class="font-medium text-[11px]">Style: {selectedStylePreset.name}</p>
+			<p class="mt-1">{selectedStylePreset.prompt}</p>
+		</div>
 
 		<!-- Description -->
 		<div>
 			<p class="text-xs text-gray-500 mb-1">{referenceImage ? 'Modification:' : 'Character Description:'}</p>
 			<textarea
 				bind:value={description}
-				placeholder={homm3Mode
-					? "e.g., 'a skeleton warrior', 'a fire elemental', 'a green dragon'..."
-					: "Describe your sprite in detail..."}
+				placeholder="e.g., 'a skeleton warrior', 'a fire elemental', 'a green dragon'..."
 				rows="3"
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
 			></textarea>
@@ -566,7 +623,7 @@
 					<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
 					<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
 				</svg>
-				<span class="text-sm text-purple-600">Generating with {homm3Mode ? 'HoMM3 style' : 'custom style'}...</span>
+				<span class="text-sm text-purple-600">Generating with {selectedStylePreset.name}...</span>
 			</div>
 		</div>
 
@@ -575,7 +632,7 @@
 	<!-- ═══════════════════════════════════════════════ -->
 	{:else if step === 'review'}
 		<div class="text-center mb-2">
-			<p class="text-xs font-medium text-gray-500">Step 1 Complete</p>
+			<p class="text-xs font-medium text-gray-500">Character ready</p>
 		</div>
 
 		<!-- Generated character -->
@@ -652,7 +709,7 @@
 				class="px-3 py-2 bg-purple-500 text-white rounded-lg hover:bg-purple-600 text-xs font-medium"
 				onclick={approveCharacter}
 			>
-				🦴 Generate Poses →
+				🦴 Continue to Pose Variations →
 			</button>
 		</div>
 
@@ -669,7 +726,7 @@
 				<p class="font-medium text-gray-800 truncate">{description || 'Character'}</p>
 				<p class="text-gray-400">IP-Adapter will lock this identity</p>
 			</div>
-			<button class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded hover:bg-gray-200" onclick={backToReview}>← Back</button>
+			<button class="text-xs text-gray-400 hover:text-gray-600 px-2 py-1 rounded hover:bg-gray-200" onclick={backToReview}>← Back to Character</button>
 		</div>
 
 		<!-- Saved poses so far -->
@@ -757,7 +814,7 @@
 	<!-- ═══════════════════════════════════════════════ -->
 	{:else if step === 'pose-review'}
 		<div class="text-center mb-2">
-			<p class="text-xs font-medium text-gray-500">Pose Generated</p>
+			<p class="text-xs font-medium text-gray-500">Pose result ready</p>
 		</div>
 
 		<div class="grid grid-cols-2 gap-2">
@@ -789,7 +846,7 @@
 			<button
 				class="flex-1 px-3 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 font-medium text-xs"
 				onclick={approvePose}
-			>✅ Save & Next</button>
+			>✅ Save Pose</button>
 		</div>
 	{/if}
 

@@ -211,7 +211,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 // Main async processor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}) {
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, perfectLoop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}) {
 	const isInterpolation = !!endImage;
 	
 	// Enhanced prompt engineering for better accuracy and loops
@@ -221,8 +221,8 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	const SIZE_CONSISTENCY = 'CRITICAL: Character must maintain exact same size and scale throughout entire animation. No scaling, no zoom in or out, no size changes, consistent character dimensions from first frame to last frame. Character size must remain constant.';
 	
 	// Loop-specific instructions for seamless animations
-	const LOOP_INSTRUCTIONS = loop 
-		? 'SEAMLESS LOOP: The animation must end exactly where it begins. First frame and last frame must be identical. Smooth transition from last frame back to first frame. No visible jump or discontinuity. Perfect loop continuity.'
+	const LOOP_INSTRUCTIONS = (loop || perfectLoop)
+		? `${perfectLoop ? 'PERFECT LOOP REQUIRED: Zero seam tolerance. End frame must match first frame exactly. No hitch or drift at wrap point.' : 'SEAMLESS LOOP:'} The animation must end exactly where it begins. First frame and last frame must be identical. Smooth transition from last frame back to first frame. No visible jump or discontinuity. Perfect loop continuity.`
 		: '';
 	
 	// Enhanced prompt structure
@@ -556,8 +556,8 @@ export async function POST({ request }) {
 
 	try {
 		const { 
-			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, model, interpolate, 
-			guidanceScale, seed, negativePrompt,
+			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, interpolate, 
+			perfectLoop, guidanceScale, seed, negativePrompt,
 			// FLF-specific parameters (for interpolation mode)
 			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
 		} = await request.json();
@@ -572,7 +572,7 @@ export async function POST({ request }) {
 
 		const numFrames = frameCount || 8;
 		const isInterpolation = interpolate && !!endImage;
-		const modelId = model || 'wan22';
+		const modelId = 'wan22';
 		const selectedModel = MODELS[modelId] || MODELS.wan22;
 
 		// All modes require Replicate
@@ -612,6 +612,7 @@ export async function POST({ request }) {
 			modelId, 
 			isInterpolation ? endImage : null,
 			loop || false,
+			perfectLoop || false,
 			guidanceScale || null,
 			seed || null,
 			negativePrompt || null,

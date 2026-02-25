@@ -1,6 +1,9 @@
+import { browser } from '$app/environment';
 import { writable } from 'svelte/store';
 
-export const projectStore = writable({
+const STORAGE_KEY = 'spritemagician.project.v1';
+
+const defaultProjectState = {
 	frames: [],
 	currentFrame: 0,
 	fps: 12, // 12fps default, good balance of smoothness and length
@@ -18,7 +21,55 @@ export const projectStore = writable({
 	// Pre-selected save folder for animations
 	animSaveFolderId: null,
 	animSaveFolderPath: null
-});
+};
+
+function toPersistedState(state) {
+	return {
+		frames: Array.isArray(state.frames) ? state.frames : [],
+		currentFrame: Number.isFinite(state.currentFrame) ? state.currentFrame : 0,
+		fps: Number.isFinite(state.fps) ? state.fps : 12,
+		prompt: typeof state.prompt === 'string' ? state.prompt : '',
+		firstFrame: typeof state.firstFrame === 'string' ? state.firstFrame : null,
+		lastFrame: typeof state.lastFrame === 'string' ? state.lastFrame : null,
+		generationMode: typeof state.generationMode === 'string' ? state.generationMode : 'prompt',
+		frameCount: Number.isFinite(state.frameCount) ? state.frameCount : 8,
+		duration: Number.isFinite(state.duration) ? state.duration : null,
+		projectName: typeof state.projectName === 'string' ? state.projectName : 'Untitled Project',
+		lastSaved: state.lastSaved || null,
+		editImage: typeof state.editImage === 'string' ? state.editImage : null,
+		styleImage: typeof state.styleImage === 'string' ? state.styleImage : null,
+		animSaveFolderId: typeof state.animSaveFolderId === 'string' ? state.animSaveFolderId : null,
+		animSaveFolderPath: typeof state.animSaveFolderPath === 'string' ? state.animSaveFolderPath : null
+	};
+}
+
+function readStoredState() {
+	if (!browser) return defaultProjectState;
+	try {
+		const raw = localStorage.getItem(STORAGE_KEY);
+		if (!raw) return defaultProjectState;
+		const parsed = JSON.parse(raw);
+		if (!parsed || typeof parsed !== 'object') return defaultProjectState;
+		return {
+			...defaultProjectState,
+			...toPersistedState(parsed)
+		};
+	} catch {
+		return defaultProjectState;
+	}
+}
+
+export const projectStore = writable(readStoredState());
+
+if (browser) {
+	projectStore.subscribe((state) => {
+		try {
+			localStorage.setItem(STORAGE_KEY, JSON.stringify(toPersistedState(state)));
+		} catch {
+			// ignore quota/storage issues
+		}
+	});
+}
 
 export function addFrame(frameData) {
 	projectStore.update(project => ({
