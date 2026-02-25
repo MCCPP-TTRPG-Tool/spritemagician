@@ -1,6 +1,14 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { setProgress, clearProgress } from '$lib/utils/generationProgress.js';
+import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 /**
  * Process frames asynchronously (runs in background)
@@ -180,11 +188,60 @@ At ${progressPercent}% through a "${prompt}" animation, the character should be 
 /**
  * Generates animation frames using Replicate API
  */
-export async function POST({ request }) {
+export async function POST({ request, locals }) {
 	const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 
 	try {
+		if (!locals.user) {
+			return json({ error: 'Authentication required' }, { status: 401 });
+		}
+
 		const { firstFrame, lastFrame, prompt, frameCount, mode } = await request.json();
+		const payload = { firstFrame, lastFrame, prompt, frameCount, mode };
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 8 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'generate-frames',
+			maxRequests: 10,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-frames',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!firstFrame) {
 			return json({ error: 'First frame is required' }, { status: 400 });
@@ -201,6 +258,7 @@ export async function POST({ request }) {
 		if (!env.GEMINI_API_KEY) {
 			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
 		}
+		setProgressOwner(jobId, locals.user.uid);
 
 		// Initialize progress immediately
 		setProgress(jobId, {
@@ -214,9 +272,55 @@ export async function POST({ request }) {
 		processFramesAsync(jobId, firstFrame, lastFrame, prompt, frameCount, mode);
 
 		// Return immediately with jobId so client can start polling
-		return json({ jobId, status: 'started', message: 'Generation started' });
+		const responseBody = { jobId, status: 'started', message: 'Generation started' };
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-frames',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'generate-frames',
+			provider: 'gemini',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: {
+				mode: mode || 'prompt',
+				frameCount: Number(frameCount) || 0
+			}
+		});
+		return json(responseBody);
 	} catch (error) {
 		console.error('API error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'generate-frames',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'generate-frames',
+				provider: 'gemini',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message }, { status: 500 });
 	}
 }

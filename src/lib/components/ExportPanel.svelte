@@ -6,6 +6,7 @@
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -33,6 +34,38 @@
 	let saveFolderPath = $state(null);
 	let saveName = $state('');
 	let isSaving = $state(false);
+	let exportSaveNote = $state('');
+	let featureP1ActiveAssetDestinationGuard = $state(true);
+	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
+
+	if (typeof window !== 'undefined') {
+		try {
+			const rawAssetGuardFlag = localStorage.getItem(FEATURE_P1_ACTIVE_ASSET_GUARD_KEY);
+			if (rawAssetGuardFlag === '0') {
+				featureP1ActiveAssetDestinationGuard = false;
+			}
+		} catch {
+			// ignore localStorage access errors
+		}
+	}
+
+	function emitAssetUiEvent(name, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(new CustomEvent(name, { detail: payload }));
+	}
+
+	function emitAssetTelemetry(eventName, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(
+			new CustomEvent('smTelemetryEvent', {
+				detail: {
+					eventName,
+					payload,
+					ts: new Date().toISOString()
+				}
+			})
+		);
+	}
 
 	function closePreview() {
 		if (spriteSheetPreview) {
@@ -212,6 +245,14 @@
 		saveFolderId = folderId;
 		saveFolderPath = folderPath;
 		showFolderPicker = false;
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: folderPath || null,
+				confirmationSource: 'explicit_picker_select'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 		// Auto-save after selecting folder
 		if (project.frames.length > 0) {
 			await performSave();
@@ -220,6 +261,14 @@
 
 	async function performSave() {
 		if (!project.frames.length) return;
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: saveFolderPath || null,
+				confirmationSource: 'dialog_submit'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 
 		isSaving = true;
 		try {
@@ -257,10 +306,10 @@
 				thumbnailUrl: thumbnailUrl || null
 			});
 
-			alert(`Animation saved! ${frameCount} frames → ${saveFolderPath || 'root'}`);
+			exportSaveNote = `Animation saved! ${frameCount} frames -> ${saveFolderPath || 'root'}`;
 		} catch (err) {
 			console.error('Save error:', err);
-			alert('Failed to save animation: ' + err.message);
+			exportSaveNote = 'Failed to save animation: ' + err.message;
 		} finally {
 			isSaving = false;
 		}
@@ -268,15 +317,29 @@
 
 	async function saveToFolder() {
 		if (!project.frames.length) {
-			alert('No frames to save');
+			exportSaveNote = 'No frames to save.';
+			return;
+		}
+		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId && !saveFolderId) {
+			const blockedPayload = {
+				entryPoint: 'export',
+				sourceType: 'animation'
+			};
+			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
+			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
+			exportSaveNote = 'Select an active asset folder first.';
 			return;
 		}
 		
 		if (!saveFolderId) {
+			saveFolderId = $activeAssetStore?.folderId || null;
+			saveFolderPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || null;
+			exportSaveNote = '';
 			showFolderPicker = true;
 			return;
 		}
 
+		exportSaveNote = '';
 		await performSave();
 	}
 </script>
@@ -564,6 +627,11 @@
 					>✕</button>
 				{/if}
 			</div>
+			{#if featureP1ActiveAssetDestinationGuard && saveFolderPath}
+				<p class="text-[10px] text-emerald-700 px-1">Saving to: {saveFolderPath}</p>
+			{:else if featureP1ActiveAssetDestinationGuard}
+				<p class="text-[10px] text-amber-700 px-1">No active asset selected. Save requires destination context.</p>
+			{/if}
 
 			<button
 				class="w-full px-2 py-1.5 text-xs bg-indigo-500 text-white rounded hover:bg-indigo-600 disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
@@ -578,6 +646,9 @@
 					💾 Save Animation to Folder
 				{/if}
 			</button>
+			{#if exportSaveNote}
+				<p class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">{exportSaveNote}</p>
+			{/if}
 		</div>
 	{/if}
 
@@ -595,5 +666,7 @@
 	<FolderPicker
 		onSelect={onFolderSelect}
 		onClose={() => showFolderPicker = false}
+		startFolderId={$activeAssetStore.folderId}
+		startFolderName={$activeAssetStore.folderName || 'Asset'}
 	/>
 {/if}

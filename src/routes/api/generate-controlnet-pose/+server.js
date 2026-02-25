@@ -15,8 +15,20 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { isDataUrl, normalizeBoundedInt } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
 		if (!locals.user) {
 			return json({ error: 'Authentication required' }, { status: 401 });
@@ -33,12 +45,83 @@ export async function POST({ request, locals }) {
 			width,             // output width, default 512
 			height,            // output height, default 512
 		} = await request.json();
+		const safePrompt = String(prompt || '').trim().slice(0, 4000);
+		const safeName = String(characterName || '').trim().slice(0, 120);
+		const safeWidth = normalizeBoundedInt(width, 512, 256, 1536);
+		const safeHeight = normalizeBoundedInt(height, 512, 256, 1536);
+		const safeNumSteps = normalizeBoundedInt(numSteps, 30, 10, 60);
+		const rawControlnetScale = Number(controlnetScale);
+		const safeControlnetScale = Number.isFinite(rawControlnetScale)
+			? Math.max(0, Math.min(1.5, rawControlnetScale))
+			: 0.8;
+		const rawIpAdapterScale = Number(ipAdapterScale);
+		const safeIpAdapterScale = Number.isFinite(rawIpAdapterScale)
+			? Math.max(0, Math.min(1.5, rawIpAdapterScale))
+			: 0.7;
+		const payload = {
+			characterImage,
+			poseReference,
+			prompt: safePrompt,
+			characterName: safeName,
+			controlnetScale: safeControlnetScale,
+			ipAdapterScale: safeIpAdapterScale,
+			numSteps: safeNumSteps,
+			width: safeWidth,
+			height: safeHeight
+		};
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 12 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'generate-controlnet-pose',
+			maxRequests: 20,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-controlnet-pose',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!characterImage) {
 			return json({ error: 'Styled character image is required (IP-Adapter identity source)' }, { status: 400 });
 		}
-		if (!prompt && !poseReference) {
+		if (!safePrompt && !poseReference) {
 			return json({ error: 'Provide a pose description, a reference image, or both.' }, { status: 400 });
+		}
+		if (!isDataUrl(characterImage)) {
+			return json({ error: 'characterImage must be a base64 data URL' }, { status: 400 });
+		}
+		if (poseReference && !isDataUrl(poseReference)) {
+			return json({ error: 'poseReference must be a base64 data URL' }, { status: 400 });
 		}
 
 		const RUNPOD_API_KEY = env.RUNPOD_API_KEY;
@@ -51,8 +134,8 @@ export async function POST({ request, locals }) {
 			return json({ error: 'POSE_ENDPOINT_ID not configured. Deploy the pose handler to RunPod first.' }, { status: 500 });
 		}
 
-		console.log(`[Pose Gen] Generating pose for "${characterName}" via RunPod`);
-		console.log(`[Pose Gen] Prompt: ${prompt || '(none)'}`);
+		console.log(`[Pose Gen] Generating pose for "${safeName}" via RunPod`);
+		console.log(`[Pose Gen] Prompt: ${safePrompt || '(none)'}`);
 		console.log(`[Pose Gen] Has pose reference: ${!!poseReference}`);
 
 		// ── Upload images to Firebase for URLs ──
@@ -72,7 +155,7 @@ export async function POST({ request, locals }) {
 		}
 
 		// ── Build prompt ──────────────────────────
-		const stylePrompt = prompt || `${characterName || 'fantasy creature'} in a dynamic pose`;
+		const stylePrompt = safePrompt || `${safeName || 'fantasy creature'} in a dynamic pose`;
 		const fullPrompt = [
 			stylePrompt + ',',
 			'HoMM3 style, pre-rendered 3D sprite, isometric game character,',
@@ -111,12 +194,12 @@ export async function POST({ request, locals }) {
 						pose_reference: poseReferenceUrl,  // null if no reference
 						prompt: fullPrompt,
 						negative_prompt: negativePrompt,
-						controlnet_scale: controlnetScale ?? 0.8,
-						ip_adapter_scale: ipAdapterScale ?? 0.7,
-						num_steps: numSteps ?? 30,
+						controlnet_scale: safeControlnetScale,
+						ip_adapter_scale: safeIpAdapterScale,
+						num_steps: safeNumSteps,
 						guidance_scale: 7.5,
-						width: width ?? 512,
-						height: height ?? 512,
+						width: safeWidth,
+						height: safeHeight,
 						seed: -1,
 					}
 				}),
@@ -182,16 +265,63 @@ export async function POST({ request, locals }) {
 			return json({ error: 'No image returned from pose generator' }, { status: 500 });
 		}
 
-		console.log(`[Pose Gen] ✓ Pose generated for "${characterName}" in ${output.total_time || '?'}s`);
+		console.log(`[Pose Gen] ✓ Pose generated for "${safeName}" in ${output.total_time || '?'}s`);
 
-		return json({
+		const responseBody = {
 			image: output.image,
 			generationTime: output.generation_time,
 			seed: output.seed,
+		};
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-controlnet-pose',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'generate-controlnet-pose',
+			provider: 'runpod',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: {
+				width: safeWidth,
+				height: safeHeight,
+				hasPoseReference: !!poseReference
+			}
 		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('[Pose Gen] Error:', error);
-		return json({ error: error.message }, { status: 500 });
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'generate-controlnet-pose',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'generate-controlnet-pose',
+				provider: 'runpod',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
+		return json({ error: error.message || 'Pose generation failed' }, { status: 500 });
 	}
 }

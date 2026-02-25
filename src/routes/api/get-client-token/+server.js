@@ -10,6 +10,8 @@
 import { json } from '@sveltejs/kit';
 import { getAdminAuth } from '$lib/firebase/admin.js';
 import { verifySessionCookie } from '$lib/firebase/admin.js';
+import { enforceRateLimit } from '$lib/server/security.js';
+import { recordUsageEvent } from '$lib/server/requestTracking.js';
 
 export async function GET({ cookies }) {
 	try {
@@ -22,6 +24,18 @@ export async function GET({ cookies }) {
 		if (!decodedClaims) {
 			return json({ error: 'Invalid session' }, { status: 401 });
 		}
+		const rate = enforceRateLimit({
+			uid: decodedClaims.uid,
+			routeKey: 'get-client-token',
+			maxRequests: 30,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
 
 		const auth = getAdminAuth();
 		const customToken = await auth.createCustomToken(decodedClaims.uid, {
@@ -30,6 +44,13 @@ export async function GET({ cookies }) {
 			picture: decodedClaims.picture
 		});
 
+		await recordUsageEvent({
+			uid: decodedClaims.uid,
+			routeKey: 'get-client-token',
+			provider: 'firebase',
+			statusCode: 200,
+			requestBytes: 0
+		});
 		return json({ token: customToken });
 	} catch (error) {
 		console.error('[get-client-token] Error:', error);

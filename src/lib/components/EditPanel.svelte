@@ -1,6 +1,7 @@
 <script>
 	import { browser } from '$app/environment';
 	import { projectStore } from '$lib/stores/project.js';
+	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -20,6 +21,7 @@
 	let imgWidth = $state(0);
 	let imgHeight = $state(0);
 	let lightboxSrc = $state(null);
+	let queueJobId = $state(null);
 	
 	// Save to folder
 	let showFolderPicker = $state(false);
@@ -161,7 +163,7 @@
 		reader.readAsDataURL(file);
 	}
 
-	// Load image from parent (wizard or store) whenever the prop changes
+	// Load image from parent handoff/store whenever the prop changes
 	let _lastLoadedImage = null;
 	$effect(() => {
 		if (initialImage && initialImage !== _lastLoadedImage) {
@@ -403,6 +405,15 @@
 		generating = true;
 		error = null;
 		resultImage = null;
+		queueJobId = jobQueue.addJob({
+			type: mode === 'edit' ? 'Edit' : 'Expand',
+			kind: 'image',
+			origin: 'edit',
+			name: editContext || 'image',
+			status: 'processing',
+			progress: 10,
+			message: mode === 'edit' ? 'Applying edit...' : 'Preparing expansion...'
+		});
 
 		try {
 			let imageToSend = sourceImage;
@@ -411,9 +422,16 @@
 			if (mode === 'expand') {
 				try {
 					imageToSend = await buildExpandedImage();
+					if (queueJobId) {
+						jobQueue.updateJob(queueJobId, { progress: 35, message: 'Expanded canvas prepared...' });
+					}
 				} catch (expandError) {
 					error = `Failed to build expanded image: ${expandError.message}. Make sure the image is from the same origin or has CORS enabled.`;
+					if (queueJobId) {
+						jobQueue.failJob(queueJobId, error);
+					}
 					generating = false;
+					queueJobId = null;
 					return;
 				}
 				promptToSend = `OUTPAINTING: The provided image has gray (#C0C0C0) border areas where the canvas was expanded. The original artwork is intact in its position. Generate new content ONLY in the gray areas to seamlessly extend the scene. Keep the original pixels untouched. Expansion direction: ${expandDirection}. What to generate in the new space: ${editPrompt}`;
@@ -440,6 +458,9 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 			const data = await res.json();
 			if (!res.ok) throw new Error(data.error || 'Edit failed');
 
+			if (queueJobId) {
+				jobQueue.updateJob(queueJobId, { progress: 90, message: 'Finalizing image...' });
+			}
 			resultImage = data.image;
 			onChange?.(data.image);
 			if ($activeAssetStore?.autoSave && $activeAssetStore?.folderId) {
@@ -459,10 +480,17 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 					}
 				}));
 			}
+			if (queueJobId) {
+				jobQueue.completeJob(queueJobId, { image: data.image });
+			}
 		} catch (e) {
 			error = e.message;
+			if (queueJobId) {
+				jobQueue.failJob(queueJobId, e.message || 'Edit failed');
+			}
 		} finally {
 			generating = false;
+			queueJobId = null;
 		}
 	}
 

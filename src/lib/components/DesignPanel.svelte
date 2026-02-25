@@ -2,6 +2,7 @@
 	import { tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import { projectStore } from '$lib/stores/project.js';
+	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { setActiveAssetContext } from '$lib/stores/activeAsset.js';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
@@ -35,6 +36,11 @@
 			'Theme add-on: Oil Painting Fantasy style with rich brushwork, cinematic lighting, volumetric depth, and moody 1980s fantasy atmosphere.',
 		pixel_anchor: 'Theme add-on: crisp 2D pixel-art game rendering with readable silhouette, controlled palette, and sprite-ready detail.'
 	};
+	const GENESIS_MODEL_OPTIONS = [
+		{ id: 'nano_banana', label: '🍌 Nano Banana (Gemini)' },
+		{ id: 'gpt4', label: '🧠 GPT-4 Image (OpenAI)' },
+		{ id: 'dalle', label: '🎨 DALL·E (OpenAI)' }
+	];
 
 	let isChatting = $state(false);
 	let isGenerating = $state(false);
@@ -50,11 +56,13 @@
 	let referenceInputEl;
 	let showPreview = $state(false);
 	let showNewAssetModal = $state(false);
+	let showConversationModal = $state(false);
 	let newAssetName = $state('');
 	let newAssetType = $state('character');
 	let newAssetNotes = $state('');
 	let newAssetTags = $state('');
 	let isCreatingAsset = $state(false);
+	let queueJobId = $state(null);
 
 	function clearTransientMessages() {
 		chatError = null;
@@ -169,6 +177,14 @@
 
 	function closeNewAssetModal() {
 		showNewAssetModal = false;
+	}
+
+	function openConversationModal() {
+		showConversationModal = true;
+	}
+
+	function closeConversationModal() {
+		showConversationModal = false;
 	}
 
 	async function createAssetFromDesign() {
@@ -366,6 +382,15 @@
 		clearTransientMessages();
 		isGenerating = true;
 		updateDesignState({ generatedImage: null });
+		queueJobId = jobQueue.addJob({
+			type: 'Genesis',
+			kind: 'image',
+			origin: 'design',
+			name: state.contentPreset || 'Design',
+			status: 'processing',
+			progress: 10,
+			message: 'Starting genesis generation...'
+		});
 
 		try {
 			const referenceImage = state.chatReferenceImage || null;
@@ -386,7 +411,13 @@
 						Pragma: 'no-cache',
 						Expires: '0'
 					},
-					body: JSON.stringify({ prompt: groundedPrompt, referenceImage, useMasterStyleAnchor, generationNonce })
+					body: JSON.stringify({
+						prompt: groundedPrompt,
+						referenceImage,
+						useMasterStyleAnchor,
+						generationNonce,
+						generationModel: state.genesisModel || 'nano_banana'
+					})
 				},
 				180000
 			);
@@ -394,8 +425,20 @@
 			if (!response.ok) throw new Error(data.error || 'Genesis generation failed');
 			updateDesignState({ generatedImage: data.image });
 			uiNote = '\u{1F389} Genesis image generated.';
+			if (queueJobId) {
+				jobQueue.updateJob(queueJobId, {
+					progress: 95,
+					message: 'Finalizing generated image...'
+				});
+				jobQueue.completeJob(queueJobId, { image: data.image });
+			}
 		} catch (err) {
 			generationError = err.name === 'AbortError' ? 'Generation timed out. Try again.' : err.message;
+			if (queueJobId) {
+				jobQueue.failJob(queueJobId, generationError || 'Genesis generation failed');
+			}
+		} finally {
+			queueJobId = null;
 		}
 
 		isGenerating = false;
@@ -586,21 +629,9 @@
 		</div>
 	</div>
 
-	<div class="grid grid-cols-[1fr_auto] gap-2">
-		<input class="border rounded px-2 py-1 text-xs" placeholder="Save current conversation as..." bind:value={saveName} />
-		<button class="px-3 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={saveConversation}>&#x1F4BE; Save</button>
-	</div>
-
-	<div class="grid grid-cols-[1fr_auto_auto] gap-2">
-		<select class="border rounded px-2 py-1 text-xs bg-white" bind:value={selectedConversationId}>
-			<option value="">&#x1F4DA; Saved conversations</option>
-			{#each $designStore.savedConversations as convo}
-				<option value={convo.id}>{convo.name} Â· {new Date(convo.createdAt).toLocaleDateString()}</option>
-			{/each}
-		</select>
-		<button class="px-2 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={loadConversation} disabled={!selectedConversationId}>&#x1F4C2; Load</button>
-		<button class="px-2 py-1 rounded bg-gray-100 text-red-600 text-xs border" onclick={deleteConversation} disabled={!selectedConversationId}>&#x1F5D1;&#xFE0F; Delete</button>
-	</div>
+	<button class="w-full px-3 py-1.5 rounded bg-gray-100 text-gray-700 text-xs border hover:bg-gray-200" onclick={openConversationModal}>
+		&#x1F4D2; Conversations
+	</button>
 
 	<div class="flex gap-1 rounded-lg border p-1 bg-gray-50">
 		<button
@@ -701,6 +732,18 @@
 		</div>
 	{:else}
 		<div class="rounded-lg border p-2 space-y-2">
+			<div>
+				<p class="text-[10px] text-gray-500 mb-1">🧠 Genesis Model</p>
+				<select
+					class="w-full border rounded px-2 py-1 text-xs bg-white"
+					value={$designStore.genesisModel || 'nano_banana'}
+					onchange={(e) => updateDesignState({ genesisModel: e.target.value })}
+				>
+					{#each GENESIS_MODEL_OPTIONS as model}
+						<option value={model.id}>{model.label}</option>
+					{/each}
+				</select>
+			</div>
 			<p class="text-xs font-medium text-gray-700">&#x26A1; Genesis Prompt</p>
 			<textarea
 				class="w-full border rounded px-2 py-1 text-xs"
@@ -825,6 +868,38 @@
 				>
 					{isCreatingAsset ? '\u23F3 Creating...' : 'Create Asset'}
 				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if showConversationModal}
+	<div
+		class="fixed inset-0 z-40 bg-black/40 flex items-stretch justify-end"
+		onclick={closeConversationModal}
+		onkeydown={(e) => { if (e.key === 'Escape') closeConversationModal(); }}
+		tabindex="0"
+		role="dialog"
+		aria-modal="true"
+	>
+		<div class="w-full max-w-md h-full bg-white border-l p-3 space-y-2 overflow-y-auto" onclick={(e) => e.stopPropagation()}>
+			<div class="flex items-center justify-between">
+				<p class="text-sm font-semibold text-gray-800">&#x1F4D2; Conversations</p>
+				<button class="text-xs text-gray-500 hover:text-gray-700" onclick={closeConversationModal}>&#x2715; Close</button>
+			</div>
+			<div class="grid grid-cols-[1fr_auto] gap-2">
+				<input class="border rounded px-2 py-1 text-xs" placeholder="Save current conversation as..." bind:value={saveName} />
+				<button class="px-3 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={saveConversation}>&#x1F4BE; Save</button>
+			</div>
+			<div class="grid grid-cols-[1fr_auto_auto] gap-2">
+				<select class="border rounded px-2 py-1 text-xs bg-white" bind:value={selectedConversationId}>
+					<option value="">&#x1F4DA; Saved conversations</option>
+					{#each $designStore.savedConversations as convo}
+						<option value={convo.id}>{convo.name} Â· {new Date(convo.createdAt).toLocaleDateString()}</option>
+					{/each}
+				</select>
+				<button class="px-2 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={loadConversation} disabled={!selectedConversationId}>&#x1F4C2; Load</button>
+				<button class="px-2 py-1 rounded bg-gray-100 text-red-600 text-xs border" onclick={deleteConversation} disabled={!selectedConversationId}>&#x1F5D1;&#xFE0F; Delete</button>
 			</div>
 		</div>
 	</div>

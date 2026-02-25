@@ -1,16 +1,609 @@
 ﻿# 03 CURRENT STATE AUDIT
 
-Last Updated: 2026-02-24
+Last Updated: 2026-02-25
 
 ## Product State
 - Main app remains a three-panel workspace on desktop.
 - Mobile supports horizontal swiping between the same three sections.
-- Left workflow tabs:
+- Top header now includes a center mode toggle:
+  - `2D`
+  - `3D`
+- `2D` mode left workflow tabs:
   - Design
   - Edit
   - Animate
+- Center file system panel remains unchanged across modes.
 
 ## Recent Significant Change
+- Cleaned active-path legacy logic after deprecated panel removal:
+  - Updated `src/lib/components/JobsPanel.svelte` to use kind-based image handling for save/download flows instead of sprite-only assumptions.
+  - Updated default save fallback labels from `sprite` to `image`.
+  - Updated empty-state copy to "Generate an image or animation...".
+  - Updated `src/lib/components/CenterPanel.svelte` source-label resolver to remove deprecated branches (`pose`, `sprite`, `keyframe`) and keep active mappings (`Genesis`, `Edit`, `Expand`, `Animation`).
+  - Updated stale wizard wording in `src/lib/components/EditPanel.svelte` comment.
+  - Added session log `docs/session_logs/2026-02-25_session_130.md`.
+- Removed deprecated legacy generation panels (2D scope cleanup):
+  - Deleted unmounted components from `src/lib/components`:
+    - `AssetWizard.svelte`
+    - `CharacterWizard.svelte`
+    - `SpriteGenerator.svelte`
+    - `PosePanel.svelte`
+    - `KeyframePanel.svelte`
+  - Verified zero remaining references in `src/`.
+  - Confirmed active surfaces remain intact via lint checks:
+    - `src/routes/+page.svelte`
+    - `DesignPanel.svelte`
+    - `EditPanel.svelte`
+    - `GenerationPanel.svelte`
+    - `JobsPanel.svelte`
+    - `CenterPanel.svelte`
+  - Added session log `docs/session_logs/2026-02-25_session_129.md`.
+- Fixed JobsPanel compatibility with normalized 2D job types:
+  - Updated `src/lib/components/JobsPanel.svelte` to use case-insensitive type detection helpers.
+  - Sprite-specific checks now work for both `sprite` and `Sprite`.
+  - Affected behavior corrected in:
+    - lifecycle metadata inference (`canonicalKind`, `canonicalOrigin`)
+    - preview thumbnail selection
+    - "Use in project" still-image path
+    - save default filename fallback
+  - Purpose: prevent regressions introduced by canonical type normalization across remaining producers.
+  - Added session log `docs/session_logs/2026-02-25_session_128.md`.
+- Refined 2D center-strip source labeling to reduce misclassification:
+  - Updated `src/lib/components/CenterPanel.svelte` so source labels prefer explicit job `type` matches for:
+    - `Pose`
+    - `Sprite`
+    - `Keyframe`
+    - `Genesis`
+  - Maintains origin/fallback mapping for `Edit`, `Expand`, and `Animation`.
+  - Fixes issue where design-origin non-Genesis jobs could appear as `Genesis`.
+  - Added session log `docs/session_logs/2026-02-25_session_127.md`.
+- Scope correction applied (2D-only Priority 1 focus):
+  - Reverted 3D queue lifecycle integration from `src/lib/components/ModelGeneration3DPanel.svelte`.
+  - Reverted 3D-specific center-strip label mapping from `src/lib/components/CenterPanel.svelte`.
+  - 2D lifecycle work remains intact and is still the active execution scope.
+  - Added session log `docs/session_logs/2026-02-25_session_126.md`.
+- Tuned middle-bottom generation strip for multi-job readability:
+  - Updated `src/lib/components/CenterPanel.svelte` display copy to summarize concurrent runs as:
+    - `<primary generation text> + N more`
+  - Removed duplicate active-count suffix near percentage to reduce visual noise.
+  - Progress percentage and progress bar behavior remain unchanged.
+  - Added session log `docs/session_logs/2026-02-25_session_123.md`.
+- Extended canonical queue metadata to remaining generation producers:
+  - `CharacterWizard` queue jobs now emit normalized metadata:
+    - `type: 'Sprite'|'Pose'`, `kind: 'image'`, `origin: 'design'`
+  - `SpriteGenerator` queue jobs now emit:
+    - `type: 'Sprite'`, `kind: 'image'`, `origin: 'design'`
+  - `PosePanel` queue jobs now emit:
+    - `type: 'Pose'`, `kind: 'image'`, `origin: 'design'`
+  - `KeyframePanel` queue jobs now emit:
+    - `type: 'Keyframe'`, `kind: 'image'`, `origin: 'animate'`
+  - Purpose: improve lifecycle contract consistency and reduce ad-hoc type parsing across queue consumers.
+  - Added session log `docs/session_logs/2026-02-25_session_122.md`.
+- Added canonical queue metadata wiring (`origin`/`kind`) for key generation producers:
+  - `DesignPanel` Genesis jobs now write:
+    - `origin: 'design'`
+    - `kind: 'image'`
+  - `EditPanel` Edit/Expand jobs now write:
+    - `origin: 'edit'`
+    - `kind: 'image'`
+  - `GenerationPanel` animation jobs now write:
+    - `origin: 'animate'`
+    - `kind: 'animation'`
+  - `CenterPanel` middle-bottom generation strip now prefers `origin` for source label resolution.
+  - Purpose: strengthen job lifecycle contract consistency across queue producers/consumers.
+  - Added session log `docs/session_logs/2026-02-25_session_121.md`.
+- Tuned middle-bottom generation strip copy clarity:
+  - Updated `src/lib/components/CenterPanel.svelte` so active job labels are normalized to readable source names:
+    - `Genesis`, `Edit`, `Expand`, `Animation` (fallback: `Generation`)
+  - Strip still includes optional job name and message for context.
+  - Purpose: improve immediate comprehension of what is generating at a glance.
+  - Added session log `docs/session_logs/2026-02-25_session_120.md`.
+- Added Edit/Expand generation to shared queue progress visibility:
+  - Root cause: `EditPanel` generation flow was not integrated with `jobQueue`, so middle-bottom progress strip did not appear for Edit/Expand.
+  - Updated `src/lib/components/EditPanel.svelte` `generate()` lifecycle to:
+    - create queue job on start
+    - update progress/message during expansion prep/finalization
+    - complete job on success
+    - fail job on error
+  - Result: Genesis + Edit now both drive the bottom-middle generation status/progress bar.
+  - Added session log `docs/session_logs/2026-02-25_session_119.md`.
+- Fixed Genesis progress visibility in middle-section bottom strip:
+  - Root cause: Genesis flow (`DesignPanel`) was not writing to `jobQueue`, while the new middle-bottom generation strip reads active jobs from `jobQueue`.
+  - Updated `src/lib/components/DesignPanel.svelte` to add Genesis queue lifecycle integration:
+    - create queue job on generation start
+    - update progress/message during finalization
+    - complete job on success
+    - fail job on error
+  - Result: Genesis now appears in the middle-bottom generating strip with progress while running.
+  - Added session log `docs/session_logs/2026-02-25_session_118.md`.
+- Normalized lifecycle vocabulary in `JobQueue` UI surface:
+  - Updated `src/lib/components/JobQueue.svelte` to use canonical lifecycle mapping:
+    - `queued`, `processing`, `completed`, `failed`, `saved`
+  - `pending` and `cancelled` are now normalized for display/action logic to canonical states.
+  - Status icon/color rendering, active-job detection, done-clear visibility, progress display checks, and action affordances now run through canonical mapping.
+  - Purpose: ensure consistent status language across all jobs-facing surfaces.
+  - Added session log `docs/session_logs/2026-02-25_session_117.md`.
+- Implemented Priority 1 requested job ticket visibility behavior in middle section:
+  - Updated `src/lib/components/CenterPanel.svelte` to show a bottom status strip when generation is active.
+  - Strip displays:
+    - what is generating (`job name/type + message`)
+    - progress percentage
+    - progress bar
+    - active job count when multiple generations are running
+  - Data source is `jobQueue` active lifecycle states (`pending`/`processing`).
+  - Purpose: provide always-visible generation status in the exact requested location (bottom of middle section).
+  - Added session log `docs/session_logs/2026-02-25_session_116.md`.
+- Implemented Priority 1 Step 8 (non-blocking save feedback on upgraded save surfaces):
+  - Replaced browser alert usage in save flows with inline status notes in:
+    - `src/lib/components/JobsPanel.svelte`
+    - `src/lib/components/AnimationPreview.svelte`
+    - `src/lib/components/ExportPanel.svelte`
+  - Save feedback now appears in-component for:
+    - missing destination context
+    - auth requirement failures
+    - save success
+    - save failure
+  - Purpose: align save UX with unified non-blocking interaction model and reduce disruptive modal interruption.
+  - Added session log `docs/session_logs/2026-02-25_session_115.md`.
+- Implemented Priority 1 Step 7 (active destination guard expansion to Export save flow):
+  - Updated `src/lib/components/ExportPanel.svelte` to apply active asset destination guard to `Save Animation to Folder`.
+  - Added guard block behavior when destination context is missing:
+    - emits `asset.destination.blocked_missing_context`
+    - telemetry `sm.p1.save_without_active_asset_blocked`
+  - Added destination confirmation events:
+    - `asset.destination.confirmed`
+    - `sm.p1.save_destination_confirmed`
+  - Added explicit destination visibility text in export save controls:
+    - `Saving to: <path>` or missing-context warning
+  - Export folder picker now opens scoped to active asset folder.
+  - Added session log `docs/session_logs/2026-02-25_session_114.md`.
+  - Scope intentionally limited to Export panel save behavior in this step.
+- Implemented Priority 1 Step 6 (active destination guard expansion to Animation Preview frame save):
+  - Updated `src/lib/components/AnimationPreview.svelte` to apply active asset destination guard in frame-save flow.
+  - Added guard behavior for missing destination context:
+    - blocks save launch when no active asset is selected
+    - emits `asset.destination.blocked_missing_context`
+    - telemetry `sm.p1.save_without_active_asset_blocked`
+  - Added destination confirmation events on selection and submit:
+    - `asset.destination.confirmed`
+    - `sm.p1.save_destination_confirmed`
+  - Save modal now preloads and displays destination context (`Saving to: <path>`).
+  - Nested folder picker now opens scoped to active asset destination.
+  - Added session log `docs/session_logs/2026-02-25_session_113.md`.
+  - Scope intentionally limited to `AnimationPreview` save frame flow.
+- Implemented Priority 1 Step 5 (active destination guard expansion to Jobs save paths):
+  - Updated `src/lib/components/JobsPanel.svelte` to apply active asset destination confidence behavior to:
+    - single job save
+    - batch save
+  - Added guard block behavior when no active destination exists:
+    - emits `asset.destination.blocked_missing_context`
+    - telemetry `sm.p1.save_without_active_asset_blocked`
+  - Added destination confirmation events on save destination selection/submit:
+    - `asset.destination.confirmed`
+    - `sm.p1.save_destination_confirmed`
+  - Save dialog now preloads active destination context and shows explicit destination text.
+  - Folder picker now opens scoped to active asset folder for Jobs saves.
+  - Added session log `docs/session_logs/2026-02-25_session_112.md`.
+  - Scope intentionally limited to Jobs panel save entry points.
+- Implemented Priority 1 Step 4 (active asset destination guard, scoped rollout):
+  - Updated `src/routes/+page.svelte` right-panel still save path with explicit destination confidence behavior.
+  - Added destination visibility near right-panel save actions:
+    - `Saving to: <active asset path>` badge when active context exists
+    - explicit warning badge when active destination is missing
+  - Added destination guard block:
+    - save open is blocked when no active asset destination is selected
+    - no ambiguous save fallback behavior in this path
+  - Added feature-flag gate:
+    - `sm.ff.p1_active_asset_destination_guard` (`'0'` disables guard)
+  - Added new events:
+    - `asset.active.changed`
+    - `asset.destination.blocked_missing_context`
+    - `asset.destination.confirmed`
+  - Added telemetry dispatch:
+    - `sm.p1.active_asset_changed`
+    - `sm.p1.save_without_active_asset_blocked`
+    - `sm.p1.save_destination_confirmed`
+  - Added session log `docs/session_logs/2026-02-25_session_111.md`.
+  - Scope intentionally limited to right-panel still save flow in this step.
+- Hotfix applied for page unresponsive regression after Priority 1 Step 3:
+  - Root cause: reactive lifecycle-tracking variables in `src/lib/components/JobsPanel.svelte` (`$state(new Map())` + `$state(false)`) could re-trigger lifecycle effect processing continuously under active job-grid updates.
+  - Fix: converted lifecycle tracking holders to non-reactive local variables to prevent self-triggering effect churn.
+  - Result: restores responsiveness while preserving Step 3 canonical status/event behavior.
+  - Added session log `docs/session_logs/2026-02-25_session_110.md`.
+- Implemented Priority 1 Step 3 (job lifecycle standardization in Jobs UI):
+  - Updated `src/lib/components/JobsPanel.svelte` to normalize job status vocabulary to canonical lifecycle states:
+    - `queued`, `processing`, `completed`, `failed`, `saved`
+  - Added unified status metadata mapping (label/icon/color) for consistent ticket rendering.
+  - Added lifecycle event emissions:
+    - `job.created`
+    - `job.status.changed`
+    - `job.completed`
+    - `job.failed`
+    - `job.saved`
+  - Added telemetry dispatch events:
+    - `sm.p1.job_created`
+    - `sm.p1.job_status_changed`
+    - `sm.p1.job_completed`
+    - `sm.p1.job_failed`
+    - `sm.p1.job_saved`
+  - Added `job.saved` event dispatch on successful save operations prior to completed-job removal.
+  - Added session log `docs/session_logs/2026-02-25_session_109.md`.
+  - Scope intentionally limited to Jobs panel lifecycle normalization and observability instrumentation.
+- Implemented Priority 1 Step 2 (save-flow unification, scoped rollout):
+  - Added shared save component `src/lib/components/UnifiedSaveDialog.svelte`.
+  - Migrated right-panel still-image save flow in `src/routes/+page.svelte` to use the unified save dialog pattern.
+  - Retained existing backend persistence behavior (`/api/upload-file` + `createFile`), with no route behavior changes.
+  - Added save-flow event emissions:
+    - `save.dialog.opened`
+    - `save.dialog.validation_failed`
+    - `save.dialog.submitted`
+    - `save.dialog.succeeded`
+    - `save.dialog.failed`
+  - Added telemetry dispatch events:
+    - `sm.p1.save_opened`
+    - `sm.p1.save_validation_failed`
+    - `sm.p1.save_succeeded`
+    - `sm.p1.save_failed`
+  - Added session log `docs/session_logs/2026-02-25_session_108.md`.
+  - Scope intentionally limited to one entry point for controlled rollout (Jobs/AnimationPreview migration deferred).
+- Implemented Priority 1 Step 1 (right-panel preview context clarity):
+  - Added `src/lib/components/PreviewContextHeader.svelte` and integrated it into right panel rendering in `src/routes/+page.svelte`.
+  - Added explicit preview context surface with:
+    - context chip (`Design Result`, `Edit Result`, `Jobs Preview`, `Animation Playback`, `Export Mode`)
+    - source breadcrumb label
+    - action safety line
+    - reset context action for temporary jobs preview overrides
+  - Added Step 1 event wiring:
+    - `preview.context.changed`
+    - `preview.context.reset`
+    - `preview.action.invoked`
+  - Added Step 1 telemetry dispatch events:
+    - `sm.p1.preview_context_changed`
+    - `sm.p1.preview_context_reset`
+    - `sm.p1.preview_action_invoked`
+  - Added session log `docs/session_logs/2026-02-25_session_107.md`.
+  - Scope intentionally limited to Step 1 (no save-flow unification/job schema migration/asset guard enforcement changes).
+- Created implementation-ready Priority 1 execution documentation (documentation-only milestone):
+  - Added `docs/PRIORITY1_EXECUTION_SPEC.md` with execution-grade definition for approved Priority 1 direction:
+    - user stories and explicit non-goals
+    - exact component/state/event contracts
+    - telemetry schema (event names + payload fields)
+    - QA acceptance checklist + edge-case matrix
+    - rollout plan with feature flags + success metrics
+  - Added session log `docs/session_logs/2026-02-25_session_106.md`.
+  - Purpose: move from approved direction to build-ready implementation handoff without starting UI changes.
+- Deepened Priority 1 planning to enterprise-quality standards (documentation-only):
+  - Expanded `docs/DESIGN_SYSTEMS_IMPROVEMENT_PLAN.md` with a new Priority 1 deep pass:
+    - quality principles
+    - detailed component/interaction specs
+    - acceptance criteria + telemetry expectations
+    - rollout sequencing and quality rubric
+  - Added `docs/PRODUCT_QUALITY_BAR.md` as a standing quality contract:
+    - UX/system/release standards
+    - measurable quality expectations
+    - stop-ship red flags for core workflows
+  - Purpose: move from high-level recommendations to implementation-grade product standards.
+- Added ranked design/systems planning documentation (no runtime changes):
+  - New `docs/DESIGN_SYSTEMS_IMPROVEMENT_PLAN.md` capturing prioritized improvements for:
+    - right-panel context clarity
+    - save-flow consistency
+    - job lifecycle standardization
+    - active-asset visibility
+    - wizard-based onboarding defaults
+    - distributed infra + telemetry follow-through
+  - Purpose: provide a concrete decision framework for upcoming UX and architecture improvements.
+- Added deep workspace documentation (no behavior changes):
+  - New `docs/WORKSPACE_UI_DEEP_DIVE.md` provides an implementation-grounded map of:
+    - 2D tabs (Design/Edit/Animate)
+    - Center tabs (File Tree/Jobs/Frames)
+    - Right tabs (Preview/Export)
+    - 3D mode (Generate/Rigging/Animate + Preview)
+    - cross-tab store/event handoffs and current UX constraints
+  - Purpose: establish a shared baseline before upcoming design/system improvement work.
+- 3D foundation API hardening completed:
+  - Hardened `3d/generate`, `3d/rig`, and `3d/animate` with:
+    - payload-size limits (`413`)
+    - per-user rate limits (`429`)
+    - idempotency key support (`409` replay/conflict/in-flight handling)
+    - usage-ledger event writes (success/failure)
+    - stricter input normalization and URL allowlist enforcement for model/reference URLs
+  - Result: 3D stubs now match Phase 1 baseline security controls before provider wiring.
+- Remaining generation-route hardening pass completed:
+  - Hardened `generate-styled-character` with:
+    - payload-size limit, per-user rate limit, idempotency support, usage-ledger writes
+    - bounded numeric input normalization for sprite/canvas sizing
+    - upstream URL allowlist enforcement for server-side image fetches (SSRF risk reduction)
+  - Hardened `style-anchor` with:
+    - rate limits on GET/PUT/DELETE
+    - payload-size cap + idempotency + base64/mime validation on PUT
+    - usage-ledger writes across operations
+  - Hardened `generation-progress` with:
+    - per-user rate limit, jobId format validation, usage-ledger writes
+    - ownership enforcement via in-memory job owner binding (`jobId` -> `uid`)
+  - Added owner binding registration where jobs are created:
+    - `generate-animation`
+    - `generate-frames`
+  - Result: closes cross-tenant progress probing and remaining high-value SSRF/spam vectors on these routes.
+- Keyframe status ownership hardening completed:
+  - Added RunPod job ownership registration in `generate-keyframe` at submit-time under user scope (`users/{uid}/runpod_jobs/{runpodId}`).
+  - Added ownership verification in `generate-keyframe-status` so users can only poll status for jobs tied to their own UID.
+  - This closes cross-tenant status probing risk for RunPod keyframe jobs.
+- Adversarial hardening pass ("abuse-case closure") completed on high-cost generation surfaces:
+  - Added full baseline controls (rate limits, payload limits, idempotency, usage ledger) to:
+    - `design-chat`
+    - `generate-keyframe`
+    - `generate-controlnet-pose`
+    - `generate-character-sheet`
+  - Added idempotency to previously partial routes:
+    - `generate-sprite`
+    - `edit-image`
+  - Added abuse controls for status/token utility routes:
+    - `generate-keyframe-status`: per-user rate limit, runpodId format validation, usage ledger writes
+    - `get-client-token`: per-user rate limit, usage ledger writes
+  - Added stricter bounded input normalization for keyframe/controlnet dimensions and tunables to reduce malformed/expensive request abuse.
+  - Updated `docs/PHASE1_BULLETPROOF_STATUS.md` to reflect improved coverage and the new remaining punch list.
+- Phase 1 closure audit documentation was added for future upkeep:
+  - Added `docs/PHASE1_BULLETPROOF_STATUS.md` with:
+    - fully hardened route inventory
+    - partially hardened route inventory
+    - special-route exceptions
+    - prioritized remaining work and Phase 1 definition-of-done
+  - This now serves as the canonical punch list for finishing bulletproofing.
+- Phase 1 bulletproofing hardening pass 6 completed user-scope and maintenance-doc uplift:
+  - Hardened data-read/data-create surfaces:
+    - `create-folder`
+    - `load-project` (GET + list)
+    - `load-animation`
+  - Added payload-size limits, per-user rate limits, and usage-ledger writes for these routes.
+  - Added idempotency support to `create-folder`.
+  - Strengthened ownership controls:
+    - `save-project` now writes to `users/{uid}/projects/{projectId}` and includes `ownerUid`.
+    - `load-project` list now reads only `users/{uid}/projects/`.
+    - `load-project` legacy fallback (`projects/{id}`) is allowed only when `ownerUid` matches caller.
+    - `load-animation` now requires URL path ownership marker (`/users/{uid}/`) plus storage-domain allowlist.
+  - Added upkeep guides for future contributors:
+    - `docs/MAINTENANCE_GUIDE.md`
+    - `docs/API_ROUTE_CHECKLIST.md`
+- Design panel conversation management controls were compacted into a modal flow:
+  - Replaced always-visible save/load/delete rows in `DesignPanel` with a single `📒 Conversations` button.
+  - Added a right-side modal drawer that contains:
+    - save current conversation input + save action
+    - saved conversation selector + load/delete actions
+  - Result: reduced persistent vertical UI footprint in the right panel while keeping conversation actions unchanged.
+- Phase 1 bulletproofing hardening pass 5 covered persistence/save surfaces:
+  - Hardened endpoints:
+    - `upload-file`
+    - `replace-file`
+    - `save-animation`
+    - `save-project`
+  - Added consistent controls across these routes:
+    - request payload size limits (`413`)
+    - per-user rate limits (`429`)
+    - idempotency-key support with replay/conflict handling (`409`)
+    - usage ledger event writes (success/failure)
+  - Added stricter validation/sanitization:
+    - sanitized upload filename/folder path segments
+    - `replace-file` URL/domain + ownership path guard (`users/{uid}/...`)
+    - bounded frame/fps/project-field checks in animation/project save flows
+  - Result: save/upload paths now align with generation-route hardening standards.
+- Genesis OpenAI model compatibility hotfix:
+  - Fixed `/api/generate-sprite` OpenAI request by removing unsupported `response_format` parameter from `/v1/images/generations` payload.
+  - Kept dual response parsing (`b64_json` first, URL fallback) for model-output compatibility.
+  - Addresses runtime error: `Unknown parameter: response_format`.
+- Genesis image generation now supports user-selectable model routing:
+  - Added Genesis model picker in `DesignPanel` with:
+    - `Nano Banana (Gemini)`
+    - `GPT-4 Image (OpenAI)`
+    - `DALL·E (OpenAI)`
+  - Persisted selected model in `designStore` (`genesisModel`) and included it in saved conversation snapshots.
+  - `/api/generate-sprite` now accepts `generationModel` and routes provider calls:
+    - `nano_banana` -> Gemini path
+    - `gpt4` / `dalle` -> OpenAI images API path
+  - Added explicit API-key error messaging for OpenAI routes (`OPENAI_API_KEY`).
+  - Current limitation: reference-image lock remains supported on Nano Banana path; OpenAI path currently rejects reference-image input with a clear error.
+- Phase 1 bulletproofing hardening pass 4 expanded strict validation + idempotency coverage:
+  - Added shared input validation module `src/lib/server/validation.js` with URL/data-url/image-array and bounded-int helpers.
+  - Expanded idempotency support (`Idempotency-Key`) to:
+    - `remove-background`
+    - `upscale`
+    - `extract-frames`
+    - `proxy-image`
+  - Added usage ledger event writes for the same routes (success + failure paths).
+  - Added stricter request normalization/validation:
+    - bounded upscale scale values
+    - bounded extract-frame numeric/mode values
+    - image input format checks
+    - image-array structure/size checks
+  - Result: tighter schema enforcement, safer retries, and broader billing/audit telemetry.
+- Phase 1 bulletproofing hardening pass 3 added idempotency and usage-ledger foundations:
+  - Added `src/lib/server/requestTracking.js` for:
+    - idempotent request begin/complete/fail handling
+    - request payload hashing
+    - usage ledger event writes
+  - Added idempotency-key support (`Idempotency-Key`) for:
+    - `generate-animation`
+    - `generate-frames`
+    - duplicate in-flight / conflicting payload protections now return `409`
+  - Added usage ledger writes for:
+    - `generate-animation`
+    - `generate-frames`
+    - `generate-sprite`
+    - `edit-image`
+  - Usage events now persist per-user under `users/{uid}/usage_ledger` to support later BYOK/token billing accounting.
+- Phase 1 bulletproofing hardening pass 2 added route-level abuse controls:
+  - Added shared server utility `src/lib/server/security.js` for:
+    - user-scoped rate limiting
+    - approximate JSON payload sizing
+    - upstream URL allowlist checks
+  - Added payload size guards (`413`) and rate limits (`429`) to high-cost endpoints:
+    - `generate-animation`, `generate-sprite`, `edit-image`, `remove-background`, `upscale`, `generate-frames`, `extract-frames`, `proxy-image`
+  - `extract-frames` + `proxy-image` now use shared upstream URL allowlist helper.
+  - Risk reduction: lowers abuse/cost-spike exposure and oversized payload pressure.
+- Phase 1 bulletproofing hardening pass started on API security:
+  - Added auth checks (`locals.user`) on previously unauthenticated, high-cost routes:
+    - generation/editing: `generate-animation`, `generate-sprite`, `edit-image`, `remove-background`, `upscale`, `generate-frames`
+    - data access/proxy: `proxy-image`, `generation-progress`, `save-project`, `load-project` (GET/POST), `load-animation`
+  - Hardened `extract-frames` with:
+    - auth requirement
+    - upstream URL domain allowlist validation
+  - Restricted diagnostic endpoints (`test-replicate`, `test-models`) to authenticated, non-production access.
+  - Result: reduced unauthenticated cost-abuse risk and narrowed SSRF-style fetch surface.
+- Full-project technical documentation baseline was produced from live code:
+  - Added `docs/PROJECT_TECHNICAL_REFERENCE.md` as a current architecture and operations reference.
+  - Captures: auth/session model, UI shell routing (2D/3D), component map, store map, API inventory, server/Firebase utilities, env vars, and Blender/Godot addon scope.
+  - Intended as the source draft for professional doc split (`architecture`, `api-reference`, `frontend-workflows`, `operations`, `roadmap-3d`).
+- 3D layout now mirrors requested split responsibilities:
+  - Left 3D panel now owns the workflow tabs:
+    - `Generate`
+    - `Rigging`
+    - `Animate`
+  - Right 3D panel is now preview-only and no longer contains workflow controls.
+  - FileTree 3D actions now route to left-side workflow tabs (`open3DLeftTab`) while preserving compatibility with prior event naming.
+- 3D workflow now uses in-app file browser handoffs like 2D:
+  - File tree file actions now include:
+    - `3D Generate` (send file URL to 3D generation reference input)
+    - `3D Model` (send file URL to 3D model/viewer + rigging flow)
+  - These actions are available in both grid and list file menus.
+  - Triggering either action can route UI into `3D` mode and open the relevant right-side 3D tab.
+  - 3D panels now auto-consume file-tree handoff values via `projectStore` fields (`threeDReferenceImage`, `threeDModelUrl`).
+- 3D mode right panel is now tabbed to mirror 2D panel behavior:
+  - Added `Generate`, `Rigging`, and `Animation` tabs inside the 3D right panel.
+  - `Generate` tab wires to `/api/3d/generate`.
+  - `Rigging` tab wires to `/api/3d/rig`.
+  - `Animation` tab wires to `/api/3d/animate`.
+  - 3D viewer preview remains available in the right panel with model URL loading.
+- 3D mode right panel now includes an interactive 3D model viewer:
+  - `Rigging + Animation` panel includes a live `model-viewer` preview area.
+  - Users can paste a model URL and click `Load in Viewer` to inspect the model with camera controls.
+  - Existing rigging/animation controls remain in place below the preview section.
+- 3D pipeline foundation was added without disrupting current 2D workflows:
+  - Added top-center `2D/3D` mode toggle persisted with panel state in local storage.
+  - Left and right columns now mode-route:
+    - `2D` keeps existing Design/Edit/Animate and Preview/Export behavior.
+    - `3D` uses new dedicated foundation panels (Model Generation on left, Rigging + Animation on right).
+  - Added initial 3D API scaffold endpoints:
+    - `/api/3d/generate`
+    - `/api/3d/rig`
+    - `/api/3d/animate`
+  - Endpoints currently validate auth/input and return stage-structured placeholder responses for future provider wiring.
+- Animate CTA visibility and labeling were simplified again:
+  - Primary generate button moved directly below `🎬 Animation Setup` so it remains visible without scrolling to lower cards.
+  - Removed non-essential model label strip from Animate panel.
+  - No generation behavior changes; this is a pure UI placement/clarity update.
+- Top navigation now includes an in-app billing info entry point:
+  - Added `💳 Billing` button in the top header.
+  - Opens a `Billing & Usage` modal describing the recommended hybrid model (monthly bundled credits + prepaid top-ups).
+  - Modal includes Starter/Pro/Studio plan framing, abuse guardrails, and implementation direction (Stripe subscriptions + credit packs + server-side credit checks).
+  - Modal supports backdrop and `Esc` close behavior.
+- Video extraction timeout handling was hardened:
+  - Added single-settle guards to prevent timeout/reject and late-success callbacks from both firing.
+  - Added explicit cleanup of video handlers/source on settle to stop stale async events.
+  - Increased extraction timeout from `60s` to `120s` to reduce false CORS-timeout failures on slower loads.
+  - Prevents confusing "failed then succeeded" race behavior in animation extraction logs.
+- Animate generation now enforces configurable input-resolution caps:
+  - Added `📐 Max Input` control in Animate setup (640/768/1024/1280/1536 long edge).
+  - Start/end source frames are resized client-side to the selected long-edge cap before `/api/generate-animation`.
+  - Prevents oversized source uploads from implicitly driving unnecessary large generation inputs.
+  - Setting persists in Animate panel local state.
+- Background removal actions now use Replicate `rembg` in the main UI flows:
+  - `AnimationPreview` (`✨ BG` / `✨ All`) now calls `/api/remove-background` instead of local chroma cleanup.
+  - Animate post-processing ("Remove BG") in `GenerationPanel` now also routes through `/api/remove-background`.
+  - Batched API calls were added for frame sets to keep progress feedback responsive.
+  - Failed frame-level rembg results in batch runs now keep original frame instead of failing the entire pass.
+- Blender standalone static export now supports larger output size presets:
+  - Added static-only `Output Size` selector in the `SpriteAsset` tab.
+  - Presets now include `3072`, `4096`, `6144`, and `8192` for single-frame asset exports.
+  - Character animation frame-size control remains unchanged.
+- Switched chroma-only cleanup to a different toolchain to avoid chunk loss:
+  - Replaced flood/region-kill strategy with HSV soft-matte keying.
+  - Added alpha decontamination solve against selected chroma key color.
+  - Kept only a conservative final edge despill pass.
+  - Goal: preserve silhouettes while removing trapped green edge contamination.
+- Chroma cleanup now includes edge decontamination to fix trapped green:
+  - Chroma-only candidate detection now catches near-opaque green-dominant edge pixels.
+  - Added explicit hard kill path for stubborn thin (1px) chroma-like edge rings.
+  - Added final edge recolor/decontaminate pass that pulls contaminated edge pixels toward nearby cleaner subject colors.
+  - Fallback hard despill now runs when local clean neighbors are unavailable.
+- Chroma-only background cleanup was refactored to a dedicated pipeline:
+  - Added explicit candidate-mask + border-connected flood removal for chroma-only mode.
+  - Added dedicated edge trim + despill stages in that path.
+  - Purpose is to resolve persistent green rims that previous additive passes did not remove reliably.
+- Animate chroma handling now follows selected asset background color:
+  - Animate prompt construction now includes selected active-asset chroma color (not hardcoded lime).
+  - Post-process cleanup in Animate uses selected `BG` color from active asset context.
+  - Chroma progress messaging also reflects selected color.
+- Green fringe detection was broadened for stubborn outlines:
+  - Border-connected flood cleanup now tracks not only strict chroma matches but also green-dominant semi-opaque anti-aliased edge pixels.
+  - Targets cases where edge halos are visibly green but not close enough to exact `#00FF00` by distance alone.
+- Background cleanup now includes border-connected chroma flood removal:
+  - Added flood-fill pass seeded from image borders to remove contiguous chroma-like remnants.
+  - Specifically targets persistent green outlines connected to background.
+  - Preserves interior subject pixels that are not border-connected.
+- Chroma fringe cleanup tightened again:
+  - Added additional matte-edge green fringe removal pass.
+  - Strongly green edge pixels near transparency are hard-cleared.
+  - Moderately green edge pixels are alpha-softened to remove residual halo.
+- Chroma cleanup now includes green edge despill:
+  - Added post-pass in background cleanup to neutralize chroma-green fringe near transparent edges.
+  - Reduces green halos without shrinking or eroding object silhouette.
+- Animate generate CTA visibility improved:
+  - Primary generate button moved higher in panel (above advanced settings) so it remains visible without scrolling.
+  - Generate labels now use explicit emoji states (`🚀`, `⚡`, `⏳`).
+- Animate UI was redesigned for clarity around time vs frames:
+  - Layout now uses clearer section cards (`🖼️ Source Frames`, `🎬 Animation Setup`, `🧮 Frame Planner`).
+  - Explicit frame math now shown: `duration × fps = raw frames`.
+  - Exact output frame control remains available via manual mode (slider + numeric input).
+  - Emoji labels added across key controls to reduce scanning friction.
+- Animate img-to-video duration/length limits were expanded:
+  - Non-interpolation duration slider now supports up to `10s` (previously `4s`).
+  - Auto frame target cap increased to `96`.
+  - Manual frame target cap increased to `120`.
+  - Enables longer-than-4-second playback sequences from extracted frames.
+- Jobs click behavior now respects animation preview semantics:
+  - Clicking animation jobs now loads frames into project and shows the right-side animation player.
+  - Clicking still/sprite jobs continues to show static image preview on the right.
+  - Prevents animation jobs from being forced into the static preview override.
+- Static object lock was hardened for Animate mode:
+  - `Static Asset Lock` now forces first/last-frame interpolation.
+  - When no end frame is provided, start frame is reused as end frame.
+  - Interpolation now receives strict static-lock prompt + negative constraints to block rotation/drift/jitter.
+- Jobs-to-right-preview integration added:
+  - Clicking a job tile now pushes its preview image to the right-side preview area.
+  - Works from the Jobs tab even when Animate mode is active.
+  - Animate timeline preview remains default when no job preview override is selected.
+- Animate mode now includes a stationary-asset animation lock:
+  - Added `Static Asset Lock` toggle for buildings/scenery/non-character assets.
+  - Toggle injects strict no-drift/no-rotation/no-jitter prompt constraints.
+  - Backend adds matching negative constraints and lowers WAN 2.2 motion strength in this mode.
+- File tree same-name upload behavior now updates correctly:
+  - Uploading a file with an existing name in the same folder now replaces that file record (upsert by name) instead of always creating duplicates.
+  - Upload API now returns cache-busted URLs for immediate preview freshness after overwrite.
+- Static asset framing now uses camera-space fit:
+  - Added camera-projected bounds fitting for standalone assets.
+  - Static export re-fits after asset rotation before render.
+  - Eliminates off-center and out-of-frame static exports without touching character/batch behavior.
+- Static asset camera-fit hotfix:
+  - Standalone asset export now auto-fits the selected object at render time.
+  - Static-only orthographic framing tightened to avoid tiny "too far away" outputs.
+  - Character and batch workflows were not modified.
+- Blender standalone asset tab now includes direct object rotation controls:
+  - Added `Asset Angle Z` slider.
+  - Added quick rotation buttons (`-45`, `-15`, `+15`, `+45`).
+  - Added `Apply Rotation` and `Reset` actions for selected static asset.
+- Blender character export tab hotfix:
+  - Restored missing character panel controls after tab split.
+  - Character setup/export now route through dedicated character operators that force character workflow mode.
+- Blender addon now separates character and static asset export into dedicated tabs:
+  - Character animation export panel is in `SpriteSingle`.
+  - Standalone static asset export panel is in new `SpriteAsset`.
+  - Static panel includes its own setup/export actions and asset-specific settings.
+- Blender addon sidebar tab layout updated:
+  - Single export panel now uses its own tab `SpriteSingle` (instead of `Tool`).
+  - Batch export remains in dedicated `SpriteBatch` tab.
+- Blender SpriteGen addon now supports static one-shot asset exports:
+  - Added `Single Frame Asset` workflow mode for buildings/objects/scenery.
+  - New static setup path auto-frames selected asset hierarchy at current projection.
+  - New export path renders exactly one frame at configurable Z angle and writes PNG + JSON manifest.
 - Primary left workflow now removes dedicated Style tab; Edit is the single still-image work area.
 - Right panel is now mode-routed while preserving existing logic:
   - `Design` / `Edit` -> still-image preview + still-image export actions.
@@ -105,3 +698,4 @@ Last Updated: 2026-02-24
 - Optional: route animation/exports/jobs saves through the same active asset context for full end-to-end consistency.
 - Optional: add one-click subfolder auto-creation per stage (`design/edit/style/animation/exports`) under active asset folder.
 - Optional: add a small hint below chat input after 3+ messages reminding users to click `Write Prompt`.
+- Optional: add a guided "New Asset Wizard" mode that asks what the user is building (e.g., anime tree scenery asset) and auto-configures matching presets/theme defaults across the workflow.

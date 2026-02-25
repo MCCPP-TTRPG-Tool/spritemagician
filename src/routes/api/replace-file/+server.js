@@ -12,6 +12,21 @@ import { uploadImageToFirebase, deleteImageFromFirebase } from '$lib/utils/fireb
 import { getStorage } from 'firebase-admin/storage';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { env } from '$env/dynamic/private';
+import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { isDataUrl, isHttpUrl } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
+
+const ALLOWED_STORAGE_DOMAINS = [
+	'storage.googleapis.com',
+	'firebasestorage.googleapis.com',
+	'firebasestorage.app'
+];
 
 function initFirebase() {
 	if (getApps().length === 0) {
@@ -71,6 +86,9 @@ function extractStoragePath(url, bucketName) {
 }
 
 export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
 		const user = locals.user;
 		if (!user) {
@@ -78,13 +96,64 @@ export async function POST({ request, locals }) {
 		}
 
 		const { imageData, existingUrl } = await request.json();
+		const payload = { imageData, existingUrl };
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 12 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: user.uid,
+			routeKey: 'replace-file',
+			maxRequests: 30,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: user.uid,
+				routeKey: 'replace-file',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!imageData) {
 			return json({ error: 'imageData is required' }, { status: 400 });
 		}
+		if (typeof imageData !== 'string' || imageData.length > 12 * 1024 * 1024) {
+			return json({ error: 'imageData must be a valid base64/data URL string' }, { status: 400 });
+		}
+		if (isDataUrl(imageData) && !imageData.startsWith('data:image/')) {
+			return json({ error: 'Only image data URLs are supported' }, { status: 400 });
+		}
 
 		if (!existingUrl) {
 			return json({ error: 'existingUrl is required' }, { status: 400 });
+		}
+		if (!isHttpUrl(existingUrl) || !isAllowedUpstreamUrl(existingUrl, ALLOWED_STORAGE_DOMAINS)) {
+			return json({ error: 'existingUrl must be a Firebase/Google Storage URL' }, { status: 400 });
 		}
 
 		const bucket = initFirebase();
@@ -95,6 +164,9 @@ export async function POST({ request, locals }) {
 		
 		if (!storagePath) {
 			return json({ error: 'Could not extract storage path from existing URL' }, { status: 400 });
+		}
+		if (!storagePath.startsWith(`users/${user.uid}/`)) {
+			return json({ error: 'You can only replace your own files' }, { status: 403 });
 		}
 
 		// Detect content type
@@ -136,10 +208,53 @@ export async function POST({ request, locals }) {
 		// Return the same URL (since we overwrote the file)
 		const publicUrl = `https://storage.googleapis.com/${bucketName}/${storagePath}`;
 		
-		return json({ url: publicUrl, path: storagePath });
+		const responseBody = { url: publicUrl, path: storagePath };
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: user.uid,
+				routeKey: 'replace-file',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: user.uid,
+			routeKey: 'replace-file',
+			provider: 'firebase',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: { path: storagePath }
+		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('[replace-file] Error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'replace-file',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'replace-file',
+				provider: 'firebase',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message || 'File replacement failed' }, { status: 500 });
 	}
 }

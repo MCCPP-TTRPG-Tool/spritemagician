@@ -98,10 +98,8 @@ export async function extractFramesFromWebP(webpUrl, numFrames = 8) {
  */
 export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 	return new Promise((resolve, reject) => {
-		const timeout = setTimeout(() => {
-			console.error('Video extraction timed out');
-			reject(new Error('Video extraction timed out - CORS issue likely'));
-		}, 60000);
+		let settled = false;
+		let timeout = null;
 		
 		const video = document.createElement('video');
 		video.crossOrigin = 'anonymous';
@@ -118,21 +116,53 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 		let currentFrame = 0;
 		
 		let canvas, ctx, videoWidth, videoHeight, duration, interval;
+
+		function cleanup() {
+			if (timeout) {
+				clearTimeout(timeout);
+				timeout = null;
+			}
+			video.onseeked = null;
+			video.onloadedmetadata = null;
+			video.oncanplaythrough = null;
+			video.onerror = null;
+			video.removeAttribute('src');
+			video.load();
+			video.remove();
+		}
+
+		function safeResolve(value) {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			resolve(value);
+		}
+
+		function safeReject(error) {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(error);
+		}
+
+		timeout = setTimeout(() => {
+			console.error('Video extraction timed out');
+			safeReject(new Error('Video extraction timed out - CORS issue likely'));
+		}, 120000);
 		
 		function initializeExtraction() {
+			if (settled) return;
 			videoWidth = video.videoWidth;
 			videoHeight = video.videoHeight;
 			
 			if (!videoWidth || !videoHeight) {
-				clearTimeout(timeout);
-				reject(new Error('Video dimensions not available'));
+				safeReject(new Error('Video dimensions not available'));
 				return;
 			}
 			
 			duration = video.duration;
 			if (!duration || duration <= 0) {
-				clearTimeout(timeout);
-				reject(new Error('Invalid video duration'));
+				safeReject(new Error('Invalid video duration'));
 				return;
 			}
 			
@@ -155,12 +185,10 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 		}
 		
 		function captureFrame() {
+			if (settled) return;
 			if (currentFrame >= numFrames) {
-				clearTimeout(timeout);
 				console.log(`Extracted ${frames.length} frames at ${videoWidth}x${videoHeight}`);
-				// Clean up video element
-				video.remove();
-				resolve(frames);
+				safeResolve(frames);
 				return;
 			}
 			
@@ -169,6 +197,7 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 		}
 		
 		video.onseeked = () => {
+			if (settled) return;
 			try {
 				// Draw video frame at exact resolution - use natural video dimensions
 				ctx.drawImage(video, 0, 0, videoWidth, videoHeight);
@@ -179,13 +208,12 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 				captureFrame();
 			} catch (e) {
 				console.error('Frame capture error:', e);
-				clearTimeout(timeout);
-				video.remove();
-				reject(new Error('CORS blocked frame capture'));
+				safeReject(new Error('CORS blocked frame capture'));
 			}
 		};
 		
 		video.onloadedmetadata = () => {
+			if (settled) return;
 			// Check if video is already ready
 			if (video.readyState >= 2) { // HAVE_CURRENT_DATA
 				initializeExtraction();
@@ -196,9 +224,9 @@ export async function extractFramesFromVideo(videoUrl, numFrames = 8) {
 		};
 		
 		video.onerror = (e) => {
-			clearTimeout(timeout);
+			if (settled) return;
 			console.error('Video load error:', e);
-			reject(new Error('Failed to load video - check CORS'));
+			safeReject(new Error('Failed to load video - check CORS'));
 		};
 		
 		// Try loading the video

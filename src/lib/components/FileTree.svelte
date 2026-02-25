@@ -3,7 +3,7 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import {
 		createFolder,
-		createFile,
+		upsertFileByName,
 		renameItem,
 		deleteItem,
 		deleteFolderRecursive,
@@ -302,7 +302,7 @@
 				const ft = file.type.startsWith('video/') ? 'video'
 					: file.type === 'image/gif' ? 'animation' : 'image';
 
-				await createFile(fs.uid, fs.currentFolderId, file.name, url, ft, {
+				await upsertFileByName(fs.uid, fs.currentFolderId, file.name, url, ft, {
 					sourceType: 'upload', size: file.size, mimeType: file.type
 				});
 			}
@@ -337,6 +337,28 @@
 		if (!item.url) return;
 		projectStore.update(p => ({ ...p, styleImage: item.url }));
 		menuItemId = null;
+	}
+
+	function useFor3DGenerate(item) {
+		if (!item.url) return;
+		projectStore.update(p => ({ ...p, threeDReferenceImage: item.url }));
+		menuItemId = null;
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('open3DMode'));
+			window.dispatchEvent(new CustomEvent('open3DLeftTab', { detail: { tab: 'generate' } }));
+			window.dispatchEvent(new CustomEvent('open3DRightTab', { detail: { tab: 'generate' } }));
+		}
+	}
+
+	function useAs3DModel(item) {
+		if (!item.url) return;
+		projectStore.update(p => ({ ...p, threeDModelUrl: item.url }));
+		menuItemId = null;
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('open3DMode'));
+			window.dispatchEvent(new CustomEvent('open3DLeftTab', { detail: { tab: 'rigging' } }));
+			window.dispatchEvent(new CustomEvent('open3DRightTab', { detail: { tab: 'rigging' } }));
+		}
 	}
 
 	async function loadAnimation(item) {
@@ -758,6 +780,15 @@
 										🎭 <span>Remove Background</span>
 									</button>
 									<div class="border-t my-0.5"></div>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useFor3DGenerate(item)}>
+										🧊 <span>3D Generate</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-cyan-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAs3DModel(item)}>
+										📦 <span>3D Model</span>
+									</button>
+									<div class="border-t my-0.5"></div>
 									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
 										onclick={() => useAsStartFrame(item)}>
 										▶ <span>Start Frame</span>
@@ -875,6 +906,15 @@
 									<button class="w-full text-left px-3 py-1.5 hover:bg-orange-50 text-gray-700 flex items-center gap-2"
 										onclick={() => { removeBackgroundFromFile(item); menuItemId = null; }}>
 										🎭 <span>Remove Background</span>
+									</button>
+									<div class="border-t my-0.5"></div>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useFor3DGenerate(item)}>
+										🧊 <span>3D Generate</span>
+									</button>
+									<button class="w-full text-left px-3 py-1.5 hover:bg-cyan-50 text-gray-700 flex items-center gap-2"
+										onclick={() => useAs3DModel(item)}>
+										📦 <span>3D Model</span>
 									</button>
 									<div class="border-t my-0.5"></div>
 									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"

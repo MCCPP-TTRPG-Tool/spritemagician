@@ -22,6 +22,142 @@ function colorDistance(r1, g1, b1, r2, g2, b2) {
 	);
 }
 
+function clamp255(v) {
+	return Math.max(0, Math.min(255, Math.round(v)));
+}
+
+function pixelIndex(x, y, width) {
+	return (y * width + x) * 4;
+}
+
+function smoothstep(edge0, edge1, x) {
+	if (edge0 === edge1) return x < edge0 ? 0 : 1;
+	const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+	return t * t * (3 - 2 * t);
+}
+
+function rgbToHsv(r, g, b) {
+	const rn = r / 255;
+	const gn = g / 255;
+	const bn = b / 255;
+	const max = Math.max(rn, gn, bn);
+	const min = Math.min(rn, gn, bn);
+	const d = max - min;
+	let h = 0;
+	const s = max === 0 ? 0 : d / max;
+	const v = max;
+
+	if (d !== 0) {
+		if (max === rn) {
+			h = ((gn - bn) / d + (gn < bn ? 6 : 0)) * 60;
+		} else if (max === gn) {
+			h = ((bn - rn) / d + 2) * 60;
+		} else {
+			h = ((rn - gn) / d + 4) * 60;
+		}
+	}
+
+	return { h, s, v };
+}
+
+function hueDistanceDegrees(a, b) {
+	const d = Math.abs(a - b) % 360;
+	return d > 180 ? 360 - d : d;
+}
+
+function isLikelyGreenSpill(r, g, b, a, chromaRgb, tolerance) {
+	const d = colorDistance(r, g, b, chromaRgb.r, chromaRgb.g, chromaRgb.b);
+	if (d <= tolerance) return true;
+
+	// Catch anti-aliased green rims that drift away from exact #00FF00.
+	const greenDominant = g > r + 14 && g > b + 14 && g > 50;
+	const semiOpaque = a < 250;
+	return greenDominant && semiOpaque;
+}
+
+function runChromaOnlyCleanup(data, width, height, chromaRgb, chromaTolerance, alphaThreshold) {
+	// Different toolchain than flood-kill:
+	// HSV soft key + alpha decontamination keeps silhouettes intact and removes spill.
+	const pixelCount = width * height;
+	const keyHsv = rgbToHsv(chromaRgb.r, chromaRgb.g, chromaRgb.b);
+	const keyHue = keyHsv.h;
+	const tolScale = Math.max(0.6, Math.min(2.4, chromaTolerance / 60));
+	const hueInner = 16 * tolScale;
+	const hueOuter = 52 * tolScale;
+	const satMin = 0.16;
+	const satFull = 0.5;
+	const valMin = 0.08;
+	const valFull = 0.28;
+	const alphaBuffer = new Uint8ClampedArray(pixelCount);
+
+	for (let p = 0; p < pixelCount; p++) {
+		const i = p * 4;
+		const r = data[i];
+		const g = data[i + 1];
+		const b = data[i + 2];
+		const a = data[i + 3];
+
+		if (a <= alphaThreshold) {
+			alphaBuffer[p] = 0;
+			continue;
+		}
+
+		const hsv = rgbToHsv(r, g, b);
+		const hDist = hueDistanceDegrees(hsv.h, keyHue);
+		const hueMatch = 1 - smoothstep(hueInner, hueOuter, hDist);
+		const satMatch = smoothstep(satMin, satFull, hsv.s);
+		const valMatch = smoothstep(valMin, valFull, hsv.v);
+		const greenDominance = Math.max(0, (g - Math.max(r, b)) / 255);
+		const spillBoost = smoothstep(0.02, 0.20, greenDominance);
+
+		// Strongly keys true chroma while being conservative on dark/neutral subject details.
+		let keyStrength = hueMatch * satMatch * valMatch;
+		keyStrength = Math.max(keyStrength, keyStrength * 0.65 + spillBoost * 0.35);
+		keyStrength = Math.max(0, Math.min(0.98, keyStrength));
+
+		const newAlpha = clamp255(a * (1 - keyStrength));
+		alphaBuffer[p] = newAlpha;
+	}
+
+	// Decontaminate RGB against known chroma background using solved foreground equation:
+	// observed = fg * alpha + bg * (1 - alpha)  => fg = (observed - bg*(1-alpha)) / alpha
+	for (let p = 0; p < pixelCount; p++) {
+		const i = p * 4;
+		const newA = alphaBuffer[p];
+		data[i + 3] = newA;
+		if (newA === 0) continue;
+		if (newA >= 250) continue;
+
+		const af = newA / 255;
+		const invA = 1 - af;
+
+		const rr = (data[i] - chromaRgb.r * invA) / af;
+		const rg = (data[i + 1] - chromaRgb.g * invA) / af;
+		const rb = (data[i + 2] - chromaRgb.b * invA) / af;
+
+		data[i] = clamp255(rr);
+		data[i + 1] = clamp255(rg);
+		data[i + 2] = clamp255(rb);
+	}
+
+	// Minimal edge despill (conservative, avoids chewing).
+	for (let y = 1; y < height - 1; y++) {
+		for (let x = 1; x < width - 1; x++) {
+			const i = pixelIndex(x, y, width);
+			const a = data[i + 3];
+			if (a === 0 || a > 245) continue;
+
+			const r = data[i];
+			const g = data[i + 1];
+			const b = data[i + 2];
+			const maxOther = Math.max(r, b);
+			if (g > maxOther + 5) {
+				data[i + 1] = clamp255(maxOther + 3);
+			}
+		}
+	}
+}
+
 /**
  * Clean up remaining background pixels from an image
  * Uses aggressive multi-pass approach for better results
@@ -55,6 +191,14 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 			const chromaRgb = hexToRgb(options.chromaKeyHex || '');
 			const chromaTolerance = Number.isFinite(options.chromaTolerance) ? options.chromaTolerance : 60;
 			const chromaOnly = !!options.chromaOnly;
+
+			// Dedicated refactored path for chroma-key-only cleanup.
+			if (chromaRgb && chromaOnly) {
+				runChromaOnlyCleanup(data, canvas.width, canvas.height, chromaRgb, chromaTolerance, alphaThreshold);
+				ctx.putImageData(imageData, 0, 0);
+				resolve(canvas.toDataURL('image/png'));
+				return;
+			}
 
 			// Detect background color by sampling corners and edges
 			const sampleSize = 20; // Sample 20px from each corner/edge
@@ -285,6 +429,157 @@ export async function cleanupBackground(imageDataUrl, alphaThreshold = 80, remov
 				// Simple removal for non-aggressive mode
 				for (const idx of toRemove) {
 					data[idx + 3] = 0;
+				}
+			}
+
+			// Border-connected chroma flood pass:
+			// removes green halo regions still connected to outside background.
+			if (chromaRgb) {
+				const floodTolerance = Math.max(chromaTolerance + 10, Math.round(chromaTolerance * 1.35));
+				const visited = new Uint8Array(canvas.width * canvas.height);
+				const queue = [];
+				let qHead = 0;
+
+				function trySeed(x, y) {
+					const p = y * canvas.width + x;
+					if (visited[p]) return;
+					const idx = pixelIndex(x, y, canvas.width);
+					const a = data[idx + 3];
+					if (a === 0) {
+						visited[p] = 1;
+						queue.push([x, y]);
+						return;
+					}
+					if (isLikelyGreenSpill(data[idx], data[idx + 1], data[idx + 2], a, chromaRgb, floodTolerance)) {
+						visited[p] = 1;
+						queue.push([x, y]);
+					}
+				}
+
+				for (let x = 0; x < canvas.width; x++) {
+					trySeed(x, 0);
+					trySeed(x, canvas.height - 1);
+				}
+				for (let y = 0; y < canvas.height; y++) {
+					trySeed(0, y);
+					trySeed(canvas.width - 1, y);
+				}
+
+				const neighbors = [
+					[-1, -1], [0, -1], [1, -1],
+					[-1, 0],           [1, 0],
+					[-1, 1],  [0, 1],  [1, 1]
+				];
+
+				while (qHead < queue.length) {
+					const [cx, cy] = queue[qHead++];
+					const cIdx = pixelIndex(cx, cy, canvas.width);
+					// Any traversed flood pixel is treated as background.
+					data[cIdx + 3] = 0;
+
+					for (const [dx, dy] of neighbors) {
+						const nx = cx + dx;
+						const ny = cy + dy;
+						if (nx < 0 || ny < 0 || nx >= canvas.width || ny >= canvas.height) continue;
+						const np = ny * canvas.width + nx;
+						if (visited[np]) continue;
+
+						const nIdx = pixelIndex(nx, ny, canvas.width);
+						const na = data[nIdx + 3];
+						if (na === 0) {
+							visited[np] = 1;
+							queue.push([nx, ny]);
+							continue;
+						}
+
+						// Follow chroma-ish and green-dominant fringe adjacent to background.
+						if (isLikelyGreenSpill(data[nIdx], data[nIdx + 1], data[nIdx + 2], na, chromaRgb, floodTolerance)) {
+							visited[np] = 1;
+							queue.push([nx, ny]);
+						}
+					}
+				}
+			}
+
+			// Final pass: despill green edges left by chroma key extraction.
+			// This reduces bright green halos without shrinking silhouette.
+			if (chromaRgb) {
+				const spillWindow = Math.max(12, chromaTolerance * 2.2);
+				const despillStrength = 0.65;
+				for (let i = 0; i < data.length; i += 4) {
+					const a = data[i + 3];
+					if (a === 0) continue;
+
+					const x = (i / 4) % canvas.width;
+					const y = Math.floor((i / 4) / canvas.width);
+					if (x <= 0 || x >= canvas.width - 1 || y <= 0 || y >= canvas.height - 1) continue;
+
+					// Only despill near matte edges.
+					let transparentNeighbors = 0;
+					for (let dy = -1; dy <= 1; dy++) {
+						for (let dx = -1; dx <= 1; dx++) {
+							if (dx === 0 && dy === 0) continue;
+							const ni = ((y + dy) * canvas.width + (x + dx)) * 4;
+							if (data[ni + 3] < 24) transparentNeighbors++;
+						}
+					}
+					if (transparentNeighbors === 0) continue;
+
+					const r = data[i];
+					const g = data[i + 1];
+					const b = data[i + 2];
+					const nearestChroma = colorDistance(r, g, b, chromaRgb.r, chromaRgb.g, chromaRgb.b);
+					if (nearestChroma > spillWindow) continue;
+
+					const maxOther = Math.max(r, b);
+					const greenExcess = g - maxOther;
+					if (greenExcess <= 10) continue;
+
+					// Pull green channel down toward non-green channels.
+					const reducedG = g - greenExcess * despillStrength;
+					data[i + 1] = clamp255(Math.max(maxOther + 2, reducedG));
+				}
+
+				// Extra fringe pass: fully remove pixels that are still strongly chroma-like
+				// on the immediate matte edge. This specifically targets "neon green rims".
+				for (let i = 0; i < data.length; i += 4) {
+					const a = data[i + 3];
+					if (a === 0) continue;
+
+					const x = (i / 4) % canvas.width;
+					const y = Math.floor((i / 4) / canvas.width);
+					if (x <= 0 || x >= canvas.width - 1 || y <= 0 || y >= canvas.height - 1) continue;
+
+					let transparentNeighbors = 0;
+					for (let dy = -1; dy <= 1; dy++) {
+						for (let dx = -1; dx <= 1; dx++) {
+							if (dx === 0 && dy === 0) continue;
+							const ni = ((y + dy) * canvas.width + (x + dx)) * 4;
+							if (data[ni + 3] < 24) transparentNeighbors++;
+						}
+					}
+					if (transparentNeighbors < 2) continue;
+
+					const r = data[i];
+					const g = data[i + 1];
+					const b = data[i + 2];
+					const chromaDistance = colorDistance(r, g, b, chromaRgb.r, chromaRgb.g, chromaRgb.b);
+					const maxOther = Math.max(r, b);
+					const greenExcess = g - maxOther;
+
+					// Hard-kill only when both conditions are met:
+					// - still very close to chroma
+					// - green channel is clearly dominating
+					if (chromaDistance < Math.max(10, chromaTolerance * 0.7) && greenExcess > 22) {
+						data[i + 3] = 0;
+						continue;
+					}
+
+					// If it's edge-adjacent and mildly green-biased, softly reduce alpha.
+					if (chromaDistance < Math.max(18, chromaTolerance * 1.0) && greenExcess > 12 && a < 220) {
+						const fade = Math.min(0.65, (greenExcess - 10) / 40);
+						data[i + 3] = clamp255(a * (1 - fade));
+					}
 				}
 			}
 

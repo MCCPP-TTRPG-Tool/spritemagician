@@ -5,6 +5,7 @@
 	import { browser } from '$app/environment';
 import { userFiles } from '$lib/stores/userFiles.js';
 import { updateFolderChromaKey } from '$lib/firebase/firestore.js';
+import { jobQueue } from '$lib/stores/jobQueue.js';
 	import {
 		activeAssetStore,
 		clearActiveAssetContext,
@@ -15,6 +16,53 @@ import { updateFolderChromaKey } from '$lib/firebase/firestore.js';
 	let activeTab = $state('files'); // 'files' | 'jobs' | 'frames'
 let isSavingChroma = $state(false);
 let chromaUiNote = $state('');
+let queue = $state([]);
+
+jobQueue.subscribe((value) => {
+	queue = value;
+});
+
+let activeGenerationJobs = $derived.by(() =>
+	queue.filter((job) => job?.status === 'pending' || job?.status === 'processing')
+);
+
+let primaryGenerationJob = $derived.by(() => activeGenerationJobs[0] || null);
+
+let primaryGenerationProgress = $derived.by(() => {
+	const raw = primaryGenerationJob?.progress;
+	if (!Number.isFinite(raw)) return 0;
+	return Math.max(0, Math.min(100, Number(raw)));
+});
+
+let primaryGenerationText = $derived.by(() => {
+	if (!primaryGenerationJob) return '';
+	const origin = String(primaryGenerationJob?.origin || '').toLowerCase();
+	const rawType = String(primaryGenerationJob?.type || '').toLowerCase();
+	const sourceLabel = rawType.includes('genesis')
+		? 'Genesis'
+		: origin === 'edit'
+			? rawType.includes('expand') ? 'Expand' : 'Edit'
+			: origin === 'animate'
+				? 'Animation'
+				: origin === 'design'
+					? 'Genesis'
+					: rawType.includes('edit')
+						? 'Edit'
+						: rawType.includes('expand')
+							? 'Expand'
+							: rawType.includes('animation')
+								? 'Animation'
+								: 'Generation';
+	const name = primaryGenerationJob?.name ? ` (${primaryGenerationJob.name})` : '';
+	const msg = primaryGenerationJob?.message ? ` - ${primaryGenerationJob.message}` : '';
+	return `${sourceLabel}${name}${msg}`;
+});
+
+let generationSummaryText = $derived.by(() => {
+	if (!primaryGenerationJob) return '';
+	const extra = activeGenerationJobs.length > 1 ? ` + ${activeGenerationJobs.length - 1} more` : '';
+	return `${primaryGenerationText}${extra}`;
+});
 
 	// ── Event bridges ──────────────────────────────────────
 	// Keep lightweight listeners that other panels dispatch so we
@@ -132,4 +180,23 @@ let chromaUiNote = $state('');
 			<FramesPanel />
 		{/if}
 	</div>
+
+	{#if primaryGenerationJob}
+		<div class="border-t bg-blue-50 px-2 py-1.5">
+			<div class="flex items-center justify-between gap-2 text-[10px]">
+				<p class="truncate text-blue-800 font-medium">
+					⚡ Generating: {generationSummaryText}
+				</p>
+				<div class="shrink-0 text-blue-700 tabular-nums font-semibold">
+					{primaryGenerationProgress}%
+				</div>
+			</div>
+			<div class="mt-1 h-1.5 w-full rounded bg-blue-200 overflow-hidden">
+				<div
+					class="h-1.5 rounded bg-blue-600 transition-all duration-300"
+					style="width: {primaryGenerationProgress}%"
+				></div>
+			</div>
+		</div>
+	{/if}
 </div>

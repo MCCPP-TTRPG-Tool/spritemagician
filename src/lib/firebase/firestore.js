@@ -78,6 +78,38 @@ export async function createFile(uid, parentId, name, url, fileType = 'image', m
 }
 
 /**
+ * Upsert a file by (parentId + exact name).
+ * If a file with same name exists in the same folder, update its URL/metadata.
+ * Otherwise create a new file document.
+ * @returns {Promise<{id: string, replaced: boolean}>}
+ */
+export async function upsertFileByName(uid, parentId, name, url, fileType = 'image', metadata = {}) {
+	const { thumbnailUrl, size, ...rest } = metadata;
+	const q = query(
+		filesCol(uid),
+		where('parentId', '==', parentId || null),
+		where('name', '==', name),
+		where('isFolder', '==', false)
+	);
+	const snap = await getDocs(q);
+	if (!snap.empty) {
+		const existing = snap.docs[0];
+		await updateDoc(existing.ref, {
+			url,
+			thumbnailUrl: thumbnailUrl || null,
+			fileType,
+			metadata: { ...rest },
+			size: size || null,
+			updatedAt: serverTimestamp()
+		});
+		return { id: existing.id, replaced: true };
+	}
+
+	const id = await createFile(uid, parentId, name, url, fileType, metadata);
+	return { id, replaced: false };
+}
+
+/**
  * One-shot fetch of children (sorted folders-first, then A-Z)
  */
 export async function getChildren(uid, parentId = null) {

@@ -59,6 +59,58 @@ export async function prepareImageForModel(dataUrl, minSize = 480) {
 }
 
 /**
+ * Resize an image so its longest edge is capped at `maxLongEdge`.
+ * If the image is already within the cap, it is returned unchanged.
+ *
+ * @param {string} imageUrlOrDataUrl - Data URL or regular URL
+ * @param {number} maxLongEdge - Maximum long edge in px (default 1024)
+ * @returns {Promise<string>} Resized PNG data URL or original input when unchanged
+ */
+export async function clampImageLongEdge(imageUrlOrDataUrl, maxLongEdge = 1024) {
+	if (!imageUrlOrDataUrl || !Number.isFinite(maxLongEdge) || maxLongEdge <= 0) {
+		return imageUrlOrDataUrl;
+	}
+
+	return new Promise((resolve) => {
+		const img = new Image();
+		img.crossOrigin = 'anonymous';
+		img.onload = () => {
+			const width = img.naturalWidth || img.width;
+			const height = img.naturalHeight || img.height;
+			if (!width || !height) {
+				resolve(imageUrlOrDataUrl);
+				return;
+			}
+
+			const longEdge = Math.max(width, height);
+			if (longEdge <= maxLongEdge) {
+				resolve(imageUrlOrDataUrl);
+				return;
+			}
+
+			const scale = maxLongEdge / longEdge;
+			const targetWidth = Math.max(1, Math.round(width * scale));
+			const targetHeight = Math.max(1, Math.round(height * scale));
+
+			const canvas = document.createElement('canvas');
+			canvas.width = targetWidth;
+			canvas.height = targetHeight;
+			const ctx = canvas.getContext('2d');
+			if (!ctx) {
+				resolve(imageUrlOrDataUrl);
+				return;
+			}
+			ctx.imageSmoothingEnabled = true;
+			ctx.imageSmoothingQuality = 'high';
+			ctx.drawImage(img, 0, 0, targetWidth, targetHeight);
+			resolve(canvas.toDataURL('image/png'));
+		};
+		img.onerror = () => resolve(imageUrlOrDataUrl);
+		img.src = imageUrlOrDataUrl;
+	});
+}
+
+/**
  * Apply an unsharp-mask sharpening filter to a single frame.
  * This counteracts the softness/blur that video generation models introduce.
  *

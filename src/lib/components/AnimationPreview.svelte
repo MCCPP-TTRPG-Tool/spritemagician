@@ -3,9 +3,8 @@
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
-	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	import AnimationQueueBar from './AnimationQueueBar.svelte';
-	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
+	import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
 import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
@@ -24,8 +23,40 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	let saveFolderPath = $state(null);
 	let isSavingFrame = $state(false);
 	let saveFrameName = $state('');
+	let saveFrameNote = $state('');
+	let featureP1ActiveAssetDestinationGuard = $state(true);
+	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
 	
 	let previewSize = $state('md'); // 'sm' | 'md' | 'lg'
+
+	if (typeof window !== 'undefined') {
+		try {
+			const rawAssetGuardFlag = localStorage.getItem(FEATURE_P1_ACTIVE_ASSET_GUARD_KEY);
+			if (rawAssetGuardFlag === '0') {
+				featureP1ActiveAssetDestinationGuard = false;
+			}
+		} catch {
+			// ignore localStorage access errors
+		}
+	}
+
+	function emitAssetUiEvent(name, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(new CustomEvent(name, { detail: payload }));
+	}
+
+	function emitAssetTelemetry(eventName, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(
+			new CustomEvent('smTelemetryEvent', {
+				detail: {
+					eventName,
+					payload,
+					ts: new Date().toISOString()
+				}
+			})
+		);
+	}
 
 	// Shorthand getter/setter for currentFrame via the store
 	function getCurrentFrame() { return project.currentFrame || 0; }
@@ -203,6 +234,22 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	let isRemovingBackground = $state(false);
 	let bgRemovalProgress = $state(null); // { status: string, message: string, progress?: number, current?: number, total?: number }
 
+	async function removeBackgroundViaApi(images) {
+		const res = await fetch('/api/remove-background', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ images })
+		});
+		const data = await res.json();
+		if (!res.ok) {
+			throw new Error(data?.error || 'Background removal request failed');
+		}
+		if (!data?.images || !Array.isArray(data.images)) {
+			throw new Error('Background removal returned invalid response');
+		}
+		return data.images;
+	}
+
 	async function removeBackgroundFromCurrent() {
 		const cf = getCurrentFrame();
 		if (project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
@@ -213,16 +260,15 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		
 		try {
 			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
-			bgRemovalProgress = { status: 'processing', message: `Removing ${activeChroma} background...`, progress: 35 };
-			const cleaned = await cleanupBackground(project.frames[cf], 70, true, true, false, {
-				chromaKeyHex: activeChroma,
-				chromaTolerance: CHROMA_KEY_TOLERANCE,
-				chromaOnly: true
-			});
+			bgRemovalProgress = { status: 'processing', message: `Running rembg on ${activeChroma} frame...`, progress: 35 };
+			const [cleaned] = await removeBackgroundViaApi([project.frames[cf]]);
+			if (!cleaned) {
+				throw new Error('rembg failed for this frame');
+			}
 			const newFrames = [...project.frames];
 			newFrames[cf] = cleaned;
 			projectStore.update(p => ({ ...p, frames: newFrames }));
-			bgRemovalProgress = { status: 'completed', message: 'Background removed successfully!', progress: 100 };
+			bgRemovalProgress = { status: 'completed', message: 'Background removed with rembg!', progress: 100 };
 			setTimeout(() => {
 				bgRemovalProgress = null;
 			}, 2000);
@@ -251,22 +297,25 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		try {
 			const newFrames = [...project.frames];
 			const totalFrames = newFrames.length;
+			const batchSize = 4;
 			
-			for (let i = 0; i < newFrames.length; i++) {
+			for (let i = 0; i < newFrames.length; i += batchSize) {
 				const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+				const end = Math.min(i + batchSize, totalFrames);
+				const batch = newFrames.slice(i, end);
 				bgRemovalProgress = { 
 					status: 'processing', 
-					message: `Removing ${activeChroma} (${i + 1}/${totalFrames})...`, 
+					message: `Running rembg (${i + 1}-${end}/${totalFrames}) on ${activeChroma}...`, 
 					progress: Math.round((i / totalFrames) * 90),
 					current: i,
 					total: totalFrames
 				};
-				const cleaned = await cleanupBackground(newFrames[i], 70, true, true, false, {
-					chromaKeyHex: activeChroma,
-					chromaTolerance: CHROMA_KEY_TOLERANCE,
-					chromaOnly: true
-				});
-				newFrames[i] = cleaned;
+				const cleanedBatch = await removeBackgroundViaApi(batch);
+				for (let j = 0; j < cleanedBatch.length; j++) {
+					const cleaned = cleanedBatch[j];
+					// Keep original frame if rembg fails on one item instead of nuking the whole run.
+					newFrames[i + j] = cleaned || newFrames[i + j];
+				}
 			}
 
 			bgRemovalProgress = { status: 'processing', message: 'Finalizing...', progress: 95, current: totalFrames, total: totalFrames };
@@ -290,13 +339,26 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	async function saveCurrentFrame() {
 		const cf = getCurrentFrame();
 		if (project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
+		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId) {
+			const blockedPayload = {
+				entryPoint: 'animation_preview',
+				sourceType: 'frame'
+			};
+			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
+			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
+			saveFrameNote = 'Select an active asset folder first.';
+			return;
+		}
 		
 		// Initialize default filename if not set
 		if (!saveFrameName) {
 			saveFrameName = `frame_${String(cf + 1).padStart(3, '0')}`;
 		}
+		saveFolderId = $activeAssetStore?.folderId || saveFolderId || null;
+		saveFolderPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || saveFolderPath || null;
 		
 		// Always show the save dialog with filename input
+		saveFrameNote = '';
 		showFolderPicker = true;
 	}
 	
@@ -306,12 +368,28 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		saveFolderId = folderId;
 		saveFolderPath = folderPath;
 		showNestedFolderPicker = false;
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: folderPath || null,
+				confirmationSource: 'explicit_picker_select'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 		// Don't close main dialog - let user confirm with filename
 	}
 	
 	async function performSaveFrame() {
 		const cf = getCurrentFrame();
 		if (!saveFolderId || project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: saveFolderPath || null,
+				confirmationSource: 'dialog_submit'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 		
 		isSavingFrame = true;
 		stop();
@@ -319,7 +397,7 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		try {
 			const uid = userFiles.getUid();
 			if (!uid) {
-				alert('You must be logged in to save files');
+				saveFrameNote = 'You must be logged in to save files.';
 				return;
 			}
 			
@@ -358,10 +436,10 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 			saveFolderId = null;
 			saveFolderPath = null;
 			
-			alert(`Frame ${cf + 1} saved successfully!`);
+			saveFrameNote = `Frame ${cf + 1} saved successfully.`;
 		} catch (err) {
 			console.error('Save frame error:', err);
-			alert('Failed to save frame: ' + err.message);
+			saveFrameNote = 'Failed to save frame: ' + err.message;
 		} finally {
 			isSavingFrame = false;
 		}
@@ -529,6 +607,9 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 				>¾</button>
 			</div>
 		{/if}
+		{#if saveFrameNote}
+			<p class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">{saveFrameNote}</p>
+		{/if}
 	</div>
 	
 	<!-- ═══ ANIMATION QUEUE BAR ═══ -->
@@ -608,6 +689,9 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 						<span class="text-xs font-medium text-blue-700">{saveFolderPath}</span>
 						<button class="text-xs text-blue-600 hover:text-blue-800" onclick={() => { saveFolderId = null; saveFolderPath = null; }}>Change</button>
 					</div>
+					{#if featureP1ActiveAssetDestinationGuard}
+						<p class="mt-1 text-[10px] text-emerald-700">Saving to: {saveFolderPath}</p>
+					{/if}
 				{:else}
 					<button
 						class="w-full px-2 py-1.5 text-xs bg-gray-100 hover:bg-gray-200 rounded border text-left text-gray-600"
@@ -644,5 +728,7 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	<FolderPicker
 		onSelect={onFolderSelect}
 		onClose={() => showNestedFolderPicker = false}
+		startFolderId={$activeAssetStore.folderId}
+		startFolderName={$activeAssetStore.folderName || 'Asset'}
 	/>
 {/if}

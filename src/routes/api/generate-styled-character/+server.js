@@ -15,8 +15,20 @@ import {
 } from '$lib/server/gemini.js';
 import { getMasterStyle } from '$lib/server/styleAnchor.js';
 import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
+import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { isDataUrl, normalizeBoundedInt } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
 		// ── Auth ──────────────────────────────────────────
 		if (!locals.user) {
@@ -30,6 +42,57 @@ export async function POST({ request, locals }) {
 			characterPixels,
 			canvasPixels,
 		} = await request.json();
+		const safeName = String(characterName || '').trim().slice(0, 120);
+		const charPx = normalizeBoundedInt(characterPixels, 160, 32, 512);
+		const canvasPx = normalizeBoundedInt(canvasPixels, 224, 64, 1024);
+		const payload = {
+			referenceImage,
+			characterSheet,
+			characterName: safeName,
+			characterPixels: charPx,
+			canvasPixels: canvasPx
+		};
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 12 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'generate-styled-character',
+			maxRequests: 20,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-styled-character',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!characterSheet && !referenceImage) {
 			return json({ error: 'Need at least one reference image' }, { status: 400 });
@@ -43,9 +106,6 @@ export async function POST({ request, locals }) {
 				{ status: 500 },
 			);
 		}
-
-		const charPx = characterPixels || 160;
-		const canvasPx = canvasPixels || 224;
 
 		// ── Build multimodal parts ───────────────────────
 		/** @type {import('@google/genai').Part[]} */
@@ -68,6 +128,9 @@ export async function POST({ request, locals }) {
 			if (!img) return null;
 			// If it's a URL, fetch and convert to base64
 			if (typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://'))) {
+				if (!isAllowedUpstreamUrl(img)) {
+					throw new Error('Reference image URL domain not allowed');
+				}
 				const res = await fetch(img);
 				if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
 				const buf = Buffer.from(await res.arrayBuffer());
@@ -75,6 +138,9 @@ export async function POST({ request, locals }) {
 				return { mimeType: mime, data: buf.toString('base64') };
 			}
 			// Otherwise treat as base64 / data-url
+			if (!isDataUrl(img)) {
+				throw new Error('Reference image must be a base64 data URL or an allowed image URL');
+			}
 			return { mimeType: 'image/png', data: stripDataUrl(img) };
 		}
 
@@ -113,7 +179,7 @@ export async function POST({ request, locals }) {
 		});
 
 		console.log(
-			`[Style] "${characterName || 'unnamed'}" | ${charPx}px in ${canvasPx}px | anchor=${masterStyle.source}`,
+			`[Style] "${safeName || 'unnamed'}" | ${charPx}px in ${canvasPx}px | anchor=${masterStyle.source}`,
 		);
 
 		// ── Generate with model cascade ──────────────────
@@ -126,11 +192,54 @@ export async function POST({ request, locals }) {
 			return json({ error: 'No image generated' }, { status: 500 });
 		}
 
-		console.log(`[Style] ✓ Done "${characterName || 'unnamed'}" via ${model}`);
-		return json({ image });
+		console.log(`[Style] ✓ Done "${safeName || 'unnamed'}" via ${model}`);
+		const responseBody = { image };
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-styled-character',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'generate-styled-character',
+			provider: 'gemini',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: { model: model || 'unknown' }
+		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('[Style] Error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'generate-styled-character',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'generate-styled-character',
+				provider: 'gemini',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		if (error.name === 'AbortError') {
 			return json({ error: 'Timed out after 5 minutes' }, { status: 504 });
 		}

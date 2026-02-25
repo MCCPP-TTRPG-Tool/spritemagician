@@ -12,21 +12,82 @@ import {
 	stripDataUrl,
 } from '$lib/server/gemini.js';
 import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { isDataUrl } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
 		if (!locals.user) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
 		const { referenceImage, characterName } = await request.json();
+		const safeCharacterName = String(characterName || '').trim().slice(0, 120);
+		const payload = {
+			referenceImage,
+			characterName: safeCharacterName
+		};
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 8 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'generate-character-sheet',
+			maxRequests: 20,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-character-sheet',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required' }, { status: 400 });
 		}
+		if (!isDataUrl(referenceImage)) {
+			return json({ error: 'referenceImage must be a base64 data URL' }, { status: 400 });
+		}
 
 		const refBase64 = stripDataUrl(referenceImage);
-		const name = characterName || 'Character';
+		const name = safeCharacterName || 'Character';
 
 		// ── Build multimodal parts ───────────────────────
 		/** @type {import('@google/genai').Part[]} */
@@ -86,10 +147,53 @@ Accuracy and consistency across all 4 views are the top priority.`,
 		}
 
 		console.log(`[Sheet] ✓ Turnaround generated via ${model}`);
-		return json({ sheet: sheetImage });
+		const responseBody = { sheet: sheetImage };
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-character-sheet',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'generate-character-sheet',
+			provider: 'gemini',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: { model: model || 'unknown' }
+		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('[Sheet] Error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'generate-character-sheet',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'generate-character-sheet',
+				provider: 'gemini',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message }, { status: 500 });
 	}
 }

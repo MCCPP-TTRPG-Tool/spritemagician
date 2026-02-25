@@ -20,7 +20,10 @@ const defaultProjectState = {
 	styleImage: null,
 	// Pre-selected save folder for animations
 	animSaveFolderId: null,
-	animSaveFolderPath: null
+	animSaveFolderPath: null,
+	// FileTree-to-3D handoff values
+	threeDReferenceImage: null,
+	threeDModelUrl: null
 };
 
 function toPersistedState(state) {
@@ -39,7 +42,9 @@ function toPersistedState(state) {
 		editImage: typeof state.editImage === 'string' ? state.editImage : null,
 		styleImage: typeof state.styleImage === 'string' ? state.styleImage : null,
 		animSaveFolderId: typeof state.animSaveFolderId === 'string' ? state.animSaveFolderId : null,
-		animSaveFolderPath: typeof state.animSaveFolderPath === 'string' ? state.animSaveFolderPath : null
+		animSaveFolderPath: typeof state.animSaveFolderPath === 'string' ? state.animSaveFolderPath : null,
+		threeDReferenceImage: typeof state.threeDReferenceImage === 'string' ? state.threeDReferenceImage : null,
+		threeDModelUrl: typeof state.threeDModelUrl === 'string' ? state.threeDModelUrl : null
 	};
 }
 

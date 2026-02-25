@@ -12,6 +12,15 @@
  */
 import { json } from '@sveltejs/kit';
 import { getAdminStorage } from '$lib/firebase/admin.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { normalizeBoundedInt, validateImageArray } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 /** Extract raw bytes + content type from a data-URL string */
 function parseDataUrl(dataUrl) {
@@ -21,6 +30,9 @@ function parseDataUrl(dataUrl) {
 }
 
 export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
 		const user = locals.user;
 		if (!user) {
@@ -29,10 +41,58 @@ export async function POST({ request, locals }) {
 
 		const body = await request.json();
 		const { name, frames, fps, prompt } = body;
-
-		if (!frames || !Array.isArray(frames) || frames.length === 0) {
-			return json({ error: 'frames array is required and must not be empty' }, { status: 400 });
+		const payload = { name, frames, fps, prompt };
+		payloadBytes = approxJsonBytes(payload);
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		if (payloadBytes > 25 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
 		}
+		const rate = enforceRateLimit({
+			uid: user.uid,
+			routeKey: 'save-animation',
+			maxRequests: 20,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: user.uid,
+				routeKey: 'save-animation',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
+
+		const framesValidation = validateImageArray(frames, {
+			minItems: 1,
+			maxItems: 240,
+			maxItemChars: 2_000_000
+		});
+		if (!framesValidation.ok) {
+			return json({ error: framesValidation.error }, { status: 400 });
+		}
+		const safeFps = normalizeBoundedInt(fps, 12, 1, 60);
 
 		const bucket = getAdminStorage();
 		const safeName = (name || 'animation').slice(0, 40).replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -61,7 +121,7 @@ export async function POST({ request, locals }) {
 			type: 'animation',
 			name: name || 'animation',
 			frames,
-			fps: fps || 12,
+			fps: safeFps,
 			frameCount: frames.length,
 			prompt: prompt || '',
 			thumbnailUrl,
@@ -87,9 +147,52 @@ export async function POST({ request, locals }) {
 		const publicUrl = `https://storage.googleapis.com/${bucket.name}/${storagePath}`;
 		console.log(`[save-animation] Saved ${fname}: ${frames.length} frames, ${(buffer.length / 1024).toFixed(1)} KB, thumb=${!!thumbnailUrl}`);
 
-		return json({ url: publicUrl, path: storagePath, frameCount: frames.length, thumbnailUrl });
+		const responseBody = { url: publicUrl, path: storagePath, frameCount: frames.length, thumbnailUrl };
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: user.uid,
+				routeKey: 'save-animation',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: user.uid,
+			routeKey: 'save-animation',
+			provider: 'firebase',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: { frameCount: frames.length, fps: safeFps }
+		});
+		return json(responseBody);
 	} catch (error) {
 		console.error('[save-animation] Error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'save-animation',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'save-animation',
+				provider: 'firebase',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message || 'Save failed' }, { status: 500 });
 	}
 }

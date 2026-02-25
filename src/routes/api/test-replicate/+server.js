@@ -28,7 +28,14 @@ const MODELS = {
 /**
  * Test Replicate API connection and model availability
  */
-export async function GET() {
+export async function GET({ locals }) {
+	if (!locals.user) {
+		return json({ error: 'Authentication required' }, { status: 401 });
+	}
+	if (process.env.NODE_ENV === 'production') {
+		return json({ error: 'Not available in production' }, { status: 404 });
+	}
+
 	if (!env.REPLICATE_API_TOKEN) {
 		return json({ error: 'REPLICATE_API_TOKEN not configured' }, { status: 500 });
 	}
@@ -97,7 +104,14 @@ export async function GET() {
 /**
  * Test generation with a specific model
  */
-export async function POST({ request }) {
+export async function POST({ request, locals }) {
+	if (!locals.user) {
+		return json({ error: 'Authentication required' }, { status: 401 });
+	}
+	if (process.env.NODE_ENV === 'production') {
+		return json({ error: 'Not available in production' }, { status: 404 });
+	}
+
 	if (!env.REPLICATE_API_TOKEN) {
 		return json({ error: 'REPLICATE_API_TOKEN not configured' }, { status: 500 });
 	}

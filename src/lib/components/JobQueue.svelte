@@ -24,7 +24,7 @@
 	
 	// Click a completed job to preview it
 	function previewJob(job) {
-		if (job.status !== 'completed') return;
+		if (canonicalStatus(job.status) !== 'completed') return;
 		
 		// Find matching completed job by name/type
 		const index = completed.jobs.findIndex(cj => {
@@ -39,25 +39,35 @@
 			document.querySelector('.flex-1.overflow-y-auto')?.scrollTo({ top: 0, behavior: 'smooth' });
 		}
 	}
+
+	function canonicalStatus(status) {
+		if (status === 'pending') return 'queued';
+		if (status === 'processing') return 'processing';
+		if (status === 'completed') return 'completed';
+		if (status === 'failed') return 'failed';
+		if (status === 'saved') return 'saved';
+		if (status === 'cancelled') return 'failed';
+		return 'queued';
+	}
 	
 	function getStatusIcon(status) {
-		switch (status) {
-			case 'pending': return '⏳';
+		switch (canonicalStatus(status)) {
+			case 'queued': return '⏳';
 			case 'processing': return '⚡';
 			case 'completed': return '👁️'; // Eye = clickable to preview
 			case 'failed': return '❌';
-			case 'cancelled': return '🚫';
+			case 'saved': return '💾';
 			default: return '❓';
 		}
 	}
 	
 	function getStatusColor(status) {
-		switch (status) {
-			case 'pending': return 'text-yellow-600 bg-yellow-50';
+		switch (canonicalStatus(status)) {
+			case 'queued': return 'text-yellow-600 bg-yellow-50';
 			case 'processing': return 'text-blue-600 bg-blue-50';
 			case 'completed': return 'text-green-600 bg-green-50';
 			case 'failed': return 'text-red-600 bg-red-50';
-			case 'cancelled': return 'text-gray-500 bg-gray-50';
+			case 'saved': return 'text-violet-600 bg-violet-50';
 			default: return 'text-gray-600 bg-gray-50';
 		}
 	}
@@ -79,7 +89,10 @@
 		return `${minutes}m ${remainingSeconds}s`;
 	}
 	
-	const activeJobs = $derived(jobs.filter(j => j.status === 'pending' || j.status === 'processing'));
+	const activeJobs = $derived(jobs.filter(j => {
+		const cStatus = canonicalStatus(j.status);
+		return cStatus === 'queued' || cStatus === 'processing';
+	}));
 	const hasActiveJobs = $derived(activeJobs.length > 0);
 </script>
 
@@ -105,7 +118,10 @@
 			</div>
 			<div class="flex items-center gap-2">
 				<span class="text-[10px] text-gray-400">{jobs.length} jobs</span>
-				{#if jobs.some(j => j.status === 'completed' || j.status === 'failed')}
+				{#if jobs.some(j => {
+					const cStatus = canonicalStatus(j.status);
+					return cStatus === 'completed' || cStatus === 'failed' || cStatus === 'saved';
+				})}
 					<button
 						class="text-[10px] text-gray-500 hover:text-red-500 px-1"
 						onclick={(e) => { e.stopPropagation(); jobQueue.clearFinished(); }}
@@ -118,10 +134,11 @@
 		{#if !isCollapsed}
 			<div class="max-h-40 overflow-y-auto">
 				{#each jobs as job}
+					{@const cStatus = canonicalStatus(job.status)}
 					<div 
-						class="flex items-center gap-2 px-3 py-1.5 border-t border-gray-100 text-xs {getStatusColor(job.status)} {job.status === 'completed' ? 'cursor-pointer hover:bg-green-100' : ''}"
+						class="flex items-center gap-2 px-3 py-1.5 border-t border-gray-100 text-xs {getStatusColor(job.status)} {cStatus === 'completed' ? 'cursor-pointer hover:bg-green-100' : ''}"
 						onclick={() => previewJob(job)}
-						role={job.status === 'completed' ? 'button' : undefined}
+						role={cStatus === 'completed' ? 'button' : undefined}
 					>
 						<!-- Status Icon -->
 						<span class="text-sm">{getStatusIcon(job.status)}</span>
@@ -133,7 +150,7 @@
 								<span class="text-[10px] text-gray-400">{job.name || ''}</span>
 							</div>
 							
-							{#if job.status === 'processing' && job.progress > 0}
+							{#if (cStatus === 'processing' || cStatus === 'queued') && job.progress > 0}
 								<div class="w-full bg-gray-200 rounded-full h-1 mt-1">
 									<div 
 										class="bg-blue-500 h-1 rounded-full transition-all duration-300" 
@@ -159,7 +176,7 @@
 						
 						<!-- Actions -->
 						<div class="flex items-center gap-1">
-							{#if job.status === 'pending' || job.status === 'processing'}
+							{#if cStatus === 'queued' || cStatus === 'processing'}
 								<button
 									class="p-1 text-gray-400 hover:text-red-500"
 									onclick={() => jobQueue.cancelJob(job.id)}

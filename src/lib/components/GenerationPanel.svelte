@@ -7,8 +7,9 @@
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	import { pixelateFrames } from '$lib/utils/pixelate.js';
-	import { cleanupBackgrounds } from '$lib/utils/backgroundCleanup.js';
-	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
+	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
+	import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
 	let savedPoses = $state({ poses: [] });
@@ -31,15 +32,16 @@
 	const ANIMATE_STATE_KEY = 'spritemagician.animate.panel.v1';
 	
 	const MIN_TARGET_FRAMES = 12;
-	const MAX_TARGET_FRAMES = 24;
+	const MAX_TARGET_FRAMES = 96;
 	const MIN_MANUAL_FRAMES = 8;
-	const MAX_MANUAL_FRAMES = 48;
+	const MAX_MANUAL_FRAMES = 120;
 
 	// Animation settings tuned for faster sprite iteration
 	let duration = $state(2); // seconds (shorter by default for faster turnaround)
 	let motionAmount = $state(50); // 1-255, lower = subtle motion for sprites
 	let shouldLoop = $state(false); // Loop animation back to first frame
 	let perfectLoop = $state(false); // Force end/start seam smoothing + exact closure
+	let staticAssetLock = $state(false); // Keep object anchored in place (no drift/rotation/jitter)
 	let selectedPose = $state('idle'); // Pose preset
 	
 	// Advanced settings for better accuracy and loops
@@ -64,6 +66,7 @@
 	let endFrame = $state(null);
 	let frameTargetMode = $state('auto'); // 'auto' | 'manual'
 	let manualFrameCount = $state(16);
+	let inputLongEdge = $state(1024); // Cap source image long edge before video generation
 	
 	function handleEndFrameUpload(dataUrl) {
 		endFrame = dataUrl;
@@ -144,6 +147,7 @@
 				if (typeof parsed?.motionAmount === 'number') motionAmount = parsed.motionAmount;
 				if (typeof parsed?.shouldLoop === 'boolean') shouldLoop = parsed.shouldLoop;
 				if (typeof parsed?.perfectLoop === 'boolean') perfectLoop = parsed.perfectLoop;
+				if (typeof parsed?.staticAssetLock === 'boolean') staticAssetLock = parsed.staticAssetLock;
 				if (typeof parsed?.selectedPose === 'string') selectedPose = parsed.selectedPose;
 				if (typeof parsed?.showAdvanced === 'boolean') showAdvanced = parsed.showAdvanced;
 				if (parsed?.guidanceScale === null || typeof parsed?.guidanceScale === 'number') guidanceScale = parsed.guidanceScale;
@@ -160,6 +164,7 @@
 				if (parsed?.endFrame === null || typeof parsed?.endFrame === 'string') endFrame = parsed.endFrame;
 				if (typeof parsed?.frameTargetMode === 'string') frameTargetMode = parsed.frameTargetMode;
 				if (typeof parsed?.manualFrameCount === 'number') manualFrameCount = parsed.manualFrameCount;
+				if (parsed?.inputLongEdge != null) inputLongEdge = Number(parsed.inputLongEdge) || 1024;
 				if (typeof parsed?.removeBackground === 'boolean') removeBackground = parsed.removeBackground;
 				if (typeof parsed?.pixelateOutput === 'boolean') pixelateOutput = parsed.pixelateOutput;
 				if (typeof parsed?.pixelSize === 'number') pixelSize = parsed.pixelSize;
@@ -242,6 +247,7 @@
 					motionAmount,
 					shouldLoop,
 					perfectLoop,
+					staticAssetLock,
 					selectedPose,
 					showAdvanced,
 					guidanceScale,
@@ -258,6 +264,7 @@
 					endFrame,
 					frameTargetMode,
 					manualFrameCount,
+					inputLongEdge,
 					removeBackground,
 					pixelateOutput,
 					pixelSize,
@@ -277,6 +284,11 @@
 			? Math.round(flfDurationSeconds * project.fps)
 			: Math.round(duration * project.fps);
 		return clampFrameBudget(base);
+	});
+
+	let rawEstimatedFrames = $derived.by(() => {
+		const seconds = useInterpolation ? flfDurationSeconds : duration;
+		return Math.max(1, Math.round(seconds * project.fps));
 	});
 
 	function handleFirstFrameUpload(dataUrl) {
@@ -356,22 +368,15 @@
 					
 					if (removeBackground) {
 						const totalFrames = rawFrames.length;
-						progress = { ...progress, message: `Removing chroma background (${totalFrames} frames)...` };
+						progress = { ...progress, message: `Removing background with rembg (${totalFrames} frames)...` };
 						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: `Chroma keying ${CHROMA_KEY_HEX} background...` });
+							jobQueue.updateJob(queueJobId, { message: `Running rembg background removal...` });
 						}
 						
-						const cleanedFrames = await cleanupBackgrounds(
+						const cleanedFrames = await removeBackgroundWithRembg(
 							rawFrames,
-							70,
 							(done, total) => {
-								progress = { ...progress, message: `Chroma key cleanup (${done}/${total})...` };
-							},
-							false,
-							{
-								chromaKeyHex: CHROMA_KEY_HEX,
-								chromaTolerance: CHROMA_KEY_TOLERANCE,
-								chromaOnly: true
+								progress = { ...progress, message: `rembg cleanup (${done}/${total})...` };
 							}
 						);
 						
@@ -472,13 +477,49 @@
 		}
 	}
 
+	async function removeBackgroundWithRembg(frames, onProgress) {
+		const output = [...frames];
+		const total = frames.length;
+		const batchSize = 4;
+
+		for (let i = 0; i < total; i += batchSize) {
+			const end = Math.min(i + batchSize, total);
+			const batch = frames.slice(i, end);
+			const response = await fetch('/api/remove-background', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ images: batch })
+			});
+			const data = await response.json();
+			if (!response.ok) {
+				throw new Error(data?.error || 'rembg background removal failed');
+			}
+			if (!data?.images || !Array.isArray(data.images)) {
+				throw new Error('rembg returned invalid response');
+			}
+
+			for (let j = 0; j < data.images.length; j++) {
+				const frameIndex = i + j;
+				output[frameIndex] = data.images[j] || output[frameIndex];
+				if (onProgress) onProgress(frameIndex + 1, total);
+			}
+		}
+
+		return output;
+	}
+
 	async function generateFrames() {
 		if (!project.firstFrame) {
 			generationError = 'Reference image is required. Upload your sprite first.';
 			return;
 		}
-		
-		if (useInterpolation && !endFrame) {
+
+		const lockedInterpolation = staticAssetLock ? true : useInterpolation;
+		const lockedEndFrame = staticAssetLock
+			? (endFrame || project.firstFrame)
+			: endFrame;
+
+		if (lockedInterpolation && !lockedEndFrame) {
 			generationError = 'End frame is required for interpolation mode. Upload an end frame.';
 			return;
 		}
@@ -494,7 +535,9 @@
 		// Add job to queue
 		const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
 		queueJobId = jobQueue.addJob({
-			type: '🎬 Animation',
+			type: 'Animation',
+			kind: 'animation',
+			origin: 'animate',
 			name: poseName,
 			status: 'processing',
 			message: `Starting ${effectiveDuration}s animation...`
@@ -504,6 +547,14 @@
 		projectStore.update(p => ({ ...p, frames: [] }));
 
 		try {
+			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+			const chromaPromptLock = `Background must be a flat solid chroma key ${activeChroma}. Use ${activeChroma} for background only, never on the subject.`;
+			const normalizedLongEdge = Number(inputLongEdge) || 1024;
+			const sourceImage = await clampImageLongEdge(project.firstFrame, normalizedLongEdge);
+			const sourceEndImage = lockedInterpolation && lockedEndFrame
+				? await clampImageLongEdge(lockedEndFrame, normalizedLongEdge)
+				: null;
+
 			// Calculate frame count from effective duration and FPS
 			const requestedFrameCount = targetFrameCount;
 			
@@ -522,14 +573,18 @@
 			} else {
 				posePrompt = posePresets.find(p => p.id === selectedPose)?.description || selectedPose;
 			}
+			posePrompt = `${posePrompt}. ${chromaPromptLock}`;
+			if (staticAssetLock) {
+				posePrompt = `${posePrompt}. STATIC ASSET MODE: Keep the main object perfectly locked in place. No translation, no camera movement, no orbit, no rotation, no zoom, no scale change, and no jitter. Only animate internal emissive lighting, glow pulses, subtle aura, or window/light flicker while silhouette and base remain fixed.`;
+			}
 			
 			// Use animation endpoint
 			const response = await fetch('/api/generate-animation', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
-					referenceImage: project.firstFrame,
-					endImage: useInterpolation ? endFrame : null,
+					referenceImage: sourceImage,
+					endImage: lockedInterpolation ? sourceEndImage : null,
 					prompt: posePrompt,
 					pose: selectedPose,
 					frameCount: requestedFrameCount,
@@ -538,14 +593,15 @@
 					fps: project.fps,
 					loop: shouldLoop || perfectLoop,
 					perfectLoop,
+					staticAssetMode: staticAssetLock,
 					model: ACTIVE_MODEL_ID,
-					interpolate: useInterpolation,
+					interpolate: lockedInterpolation,
 					// Standard advanced settings (non-FLF models)
 					guidanceScale: guidanceScale,
 					seed: seed,
 					negativePrompt: negativePrompt,
 					// FLF-specific parameters (interpolation mode only)
-					...(useInterpolation && {
+					...(lockedInterpolation && {
 						flfDurationSeconds: flfDurationSeconds,
 						flfInferenceSteps: flfInferenceSteps,
 						flfGuidanceScale: flfGuidanceScale,
@@ -588,198 +644,158 @@
 	}
 </script>
 
-<div class="space-y-2">
-	<!-- Interpolation checkbox -->
-	<label class="flex items-center gap-2 text-xs">
-		<input type="checkbox" bind:checked={useInterpolation} class="w-3 h-3" />
-		<span class="text-gray-700">Start → End interpolation</span>
-		{#if useInterpolation}
-			<span class="text-gray-400 text-[10px]">(morph between two frames)</span>
-		{/if}
-	</label>
-
-	<!-- Sprite Preview(s) -->
-	<div class="flex gap-2 {useInterpolation ? '' : 'justify-center'}">
-		<!-- Start Frame -->
-		<div class="{useInterpolation ? 'flex-1' : 'w-full'}">
-			{#if useInterpolation}
-				<p class="text-[10px] text-gray-500 text-center mb-1">Start Frame</p>
-			{/if}
-			{#if project.firstFrame}
-				<div class="relative">
-					<img src={project.firstFrame} alt="Start" class="w-full {useInterpolation ? 'aspect-square' : 'h-56'} object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
-					<button 
-						class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
-						onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}
-					>×</button>
-				</div>
-			{:else}
-				<div class={useInterpolation ? 'aspect-square' : 'h-56'}>
-					<FrameUpload label={useInterpolation ? "Start" : "Upload Sprite"} onUpload={handleFirstFrameUpload} />
-				</div>
-			{/if}
+<div class="space-y-3">
+	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
+		<div class="flex items-center justify-between">
+			<p class="text-xs font-semibold text-gray-700">🖼️ Source Frames</p>
+			<label class="flex items-center gap-1 text-xs">
+				<input type="checkbox" bind:checked={useInterpolation} class="w-3 h-3" />
+				<span>🔀 Start → End</span>
+			</label>
 		</div>
-		
-		<!-- End Frame (only when interpolation enabled) -->
-		{#if useInterpolation}
-			<div class="flex-1">
-				<p class="text-[10px] text-gray-500 text-center mb-1">End Frame</p>
-				{#if endFrame}
+
+		<div class="flex gap-2 {useInterpolation ? '' : 'justify-center'}">
+			<div class="{useInterpolation ? 'flex-1' : 'w-full'}">
+				{#if useInterpolation}
+					<p class="text-[10px] text-gray-500 text-center mb-1">Start</p>
+				{/if}
+				{#if project.firstFrame}
 					<div class="relative">
-						<img src={endFrame} alt="End" class="w-full aspect-square object-contain rounded-lg border-2 border-green-400 bg-gray-100" />
-						<button 
-							class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center"
-							onclick={clearEndFrame}
-						>×</button>
+						<img src={project.firstFrame} alt="Start" class="w-full {useInterpolation ? 'aspect-square' : 'h-56'} object-contain rounded-lg border-2 border-blue-400 bg-gray-100" />
+						<button class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center" onclick={() => projectStore.update(p => ({ ...p, firstFrame: null }))}>×</button>
 					</div>
 				{:else}
-					<div class="aspect-square">
-						<FrameUpload label="End" onUpload={handleEndFrameUpload} />
+					<div class={useInterpolation ? 'aspect-square' : 'h-56'}>
+						<FrameUpload label={useInterpolation ? "Start" : "Upload Sprite"} onUpload={handleFirstFrameUpload} />
 					</div>
 				{/if}
 			</div>
+
+			{#if useInterpolation}
+				<div class="flex-1">
+					<p class="text-[10px] text-gray-500 text-center mb-1">End</p>
+					{#if endFrame}
+						<div class="relative">
+							<img src={endFrame} alt="End" class="w-full aspect-square object-contain rounded-lg border-2 border-green-400 bg-gray-100" />
+							<button class="absolute top-1 right-1 bg-red-500 text-white text-xs w-5 h-5 rounded-full hover:bg-red-600 flex items-center justify-center" onclick={clearEndFrame}>×</button>
+						</div>
+					{:else}
+						<div class="aspect-square">
+							<FrameUpload label="End" onUpload={handleEndFrameUpload} />
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
+
+		{#if !project.firstFrame && savedPoses.poses.length > 0}
+			<button class="w-full px-2 py-1.5 text-xs bg-purple-100 text-purple-700 border border-purple-300 rounded hover:bg-purple-200" onclick={openPosePicker}>
+				🎭 Use Saved Pose ({savedPoses.poses.length})
+			</button>
 		{/if}
 	</div>
-	
-	<!-- Use Saved Pose button (only when no first frame) -->
-	{#if !project.firstFrame && savedPoses.poses.length > 0}
-		<button 
-			class="w-full px-2 py-1.5 text-xs bg-purple-100 text-purple-700 border border-purple-300 rounded hover:bg-purple-200"
-			onclick={openPosePicker}
-		>
-			🎭 Use Saved Pose ({savedPoses.poses.length})
-		</button>
-	{/if}
 
-	<!-- Animation Type -->
-	<div class="flex items-center gap-2">
-		<span class="text-xs font-medium text-gray-700">Type:</span>
-		<select 
-			bind:value={selectedPose}
-			class="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white"
-		>
-			{#each posePresets as pose}
-				<option value={pose.id}>{pose.name}</option>
-			{/each}
-		</select>
-	</div>
-
-	<!-- Custom prompt (only for custom) -->
-	{#if selectedPose === 'custom'}
-		<input
-			type="text"
-			bind:value={prompt}
-			placeholder="Describe animation..."
-			class="w-full px-2 py-1 text-xs border border-gray-300 rounded"
-		/>
-	{/if}
-
-	<!-- Settings Row -->
-	<div class="flex items-center gap-2 text-xs">
-		{#if useInterpolation}
-			<!-- FLF mode: duration is controlled by flfDurationSeconds in Advanced Settings -->
-			<div class="flex-1">
-				<span class="text-gray-600">{flfDurationSeconds}s</span>
-				<input type="range" min="1" max="10" step="0.5" bind:value={flfDurationSeconds} class="w-full h-1" />
-			</div>
-		{:else}
-			<div class="flex-1">
-				<span class="text-gray-600">{duration}s</span>
-				<input type="range" min="1" max="4" step="0.5" bind:value={duration} class="w-full h-1" />
-			</div>
-		{/if}
-		<div class="w-16">
-			<span class="text-gray-600">{project.fps}fps</span>
-			<select 
-				value={project.fps} 
-				onchange={(e) => updateFPS(Number(e.target.value))}
-				class="w-full text-[10px] border rounded px-1"
-			>
-				<option value={6}>6 fps (long)</option>
-				<option value={8}>8 fps</option>
-				<option value={10}>10 fps</option>
-				<option value={12}>12 fps</option>
+	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
+		<p class="text-xs font-semibold text-gray-700">🎬 Animation Setup</p>
+		<div class="flex items-center gap-2">
+			<span class="text-xs font-medium text-gray-700">Type:</span>
+			<select bind:value={selectedPose} class="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white">
+				{#each posePresets as pose}
+					<option value={pose.id}>{pose.name}</option>
+				{/each}
 			</select>
 		</div>
-		{#if !useInterpolation}
-			<div class="flex-1">
-				<span class="text-gray-600">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</span>
-				<input type="range" min="50" max="180" bind:value={motionAmount} class="w-full h-1" />
-			</div>
-		{:else}
-			<div class="flex-1">
-				<span class="text-gray-600">{flfInferenceSteps} steps</span>
-				<input type="range" min="1" max="30" step="1" bind:value={flfInferenceSteps} class="w-full h-1" />
-			</div>
+		{#if selectedPose === 'custom'}
+			<input type="text" bind:value={prompt} placeholder="Describe animation..." class="w-full px-2 py-1 text-xs border border-gray-300 rounded" />
 		{/if}
+
+		<div class="flex items-center gap-2 text-xs">
+			<span class="text-gray-700 font-medium">📐 Max Input:</span>
+			<select bind:value={inputLongEdge} onchange={(e) => inputLongEdge = Number(e.target.value)} class="px-2 py-1 border border-gray-300 rounded bg-white text-xs">
+				<option value={640}>640px</option>
+				<option value={768}>768px</option>
+				<option value={1024}>1024px</option>
+				<option value={1280}>1280px</option>
+				<option value={1536}>1536px</option>
+			</select>
+			<span class="text-[10px] text-gray-500">Caps source long edge before generation</span>
+		</div>
+
+		<div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+			<div class="p-2 rounded border bg-gray-50">
+				<p class="text-[10px] text-gray-500">⏱️ Duration</p>
+				<p class="font-medium">{useInterpolation ? flfDurationSeconds : duration}s</p>
+				{#if useInterpolation}
+					<input type="range" min="1" max="10" step="0.5" bind:value={flfDurationSeconds} class="w-full h-1" />
+				{:else}
+					<input type="range" min="1" max="10" step="0.5" bind:value={duration} class="w-full h-1" />
+				{/if}
+			</div>
+			<div class="p-2 rounded border bg-gray-50">
+				<p class="text-[10px] text-gray-500">🎞️ FPS</p>
+				<p class="font-medium">{project.fps} fps</p>
+				<select value={project.fps} onchange={(e) => updateFPS(Number(e.target.value))} class="w-full text-[10px] border rounded px-1 py-0.5">
+					<option value={6}>6 fps</option>
+					<option value={8}>8 fps</option>
+					<option value={10}>10 fps</option>
+					<option value={12}>12 fps</option>
+				</select>
+			</div>
+			<div class="p-2 rounded border bg-gray-50">
+				{#if !useInterpolation}
+					<p class="text-[10px] text-gray-500">💨 Motion</p>
+					<p class="font-medium">{motionAmount < 80 ? 'Low' : motionAmount < 140 ? 'Med' : 'High'}</p>
+					<input type="range" min="50" max="180" bind:value={motionAmount} class="w-full h-1" />
+				{:else}
+					<p class="text-[10px] text-gray-500">🧠 FLF Steps</p>
+					<p class="font-medium">{flfInferenceSteps} steps</p>
+					<input type="range" min="1" max="30" step="1" bind:value={flfInferenceSteps} class="w-full h-1" />
+				{/if}
+			</div>
+		</div>
+
+		<div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+			<label class="flex items-center gap-1"><input type="checkbox" bind:checked={shouldLoop} class="w-3 h-3" />🔁 Loop</label>
+			<label class="flex items-center gap-1 text-purple-700"><input type="checkbox" bind:checked={perfectLoop} class="w-3 h-3" />♾️ Perfect</label>
+			<label class="flex items-center gap-1 text-gray-600"><input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />🧽 Remove BG</label>
+			<label class="flex items-center gap-1 text-gray-600"><input type="checkbox" bind:checked={pixelateOutput} class="w-3 h-3" />🧊 Pixelate</label>
+			<label class="flex items-center gap-1 text-amber-700" title="For buildings/scenery. Locks object position and orientation."><input type="checkbox" bind:checked={staticAssetLock} class="w-3 h-3" />📌 Static Lock</label>
+		</div>
 	</div>
 
-	<!-- Options Row -->
-	<div class="flex items-center gap-3 text-xs">
-		<label class="flex items-center gap-1">
-			<input type="checkbox" bind:checked={shouldLoop} class="w-3 h-3" />
-			Loop
-		</label>
-		<label class="flex items-center gap-1 text-purple-700">
-			<input type="checkbox" bind:checked={perfectLoop} class="w-3 h-3" />
-			Perfect Loop
-		</label>
-		<label class="flex items-center gap-1 text-gray-600">
-			<input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />
-			Remove BG
-		</label>
-		<label class="flex items-center gap-1 text-gray-600" title="Force pixel art look">
-			<input type="checkbox" bind:checked={pixelateOutput} class="w-3 h-3" />
-			Pixelate
-		</label>
-		<span class="ml-auto text-gray-400">~{targetFrameCount}f</span>
-	</div>
+	<!-- Primary action kept high in layout -->
+	<button
+		class="w-full px-3 py-2 text-sm text-white rounded disabled:bg-gray-400 disabled:cursor-not-allowed font-medium {useInterpolation ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-500 hover:bg-blue-600'}"
+		onclick={generateFrames}
+		disabled={isGenerating || !project.firstFrame || (useInterpolation && !endFrame)}
+	>
+		{isGenerating ? '⏳ Generating...' : useInterpolation ? '⚡ Interpolate Frames' : '🚀 Generate Animation'}
+	</button>
 
-	<!-- Frame Target Controls -->
-	<div class="space-y-1.5 p-2 bg-gray-50 border border-gray-200 rounded">
+	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
+		<p class="text-xs font-semibold text-gray-700">🧮 Frame Planner</p>
+		<div class="text-[11px] bg-blue-50 border border-blue-200 rounded px-2 py-1 text-blue-800">
+			⏱️ {useInterpolation ? flfDurationSeconds : duration}s × 🎞️ {project.fps} fps = <strong>{rawEstimatedFrames}</strong> raw frames
+		</div>
 		<div class="flex items-center justify-between text-xs">
-			<span class="font-medium text-gray-700">Frame Target</span>
+			<span class="font-medium text-gray-700">🎯 Output Frames</span>
 			<div class="flex items-center gap-3">
-				<label class="flex items-center gap-1">
-					<input type="radio" name="frameTargetMode" value="auto" bind:group={frameTargetMode} class="w-3 h-3" />
-					Auto
-				</label>
-				<label class="flex items-center gap-1">
-					<input type="radio" name="frameTargetMode" value="manual" bind:group={frameTargetMode} class="w-3 h-3" />
-					Manual
-				</label>
+				<label class="flex items-center gap-1"><input type="radio" name="frameTargetMode" value="auto" bind:group={frameTargetMode} class="w-3 h-3" />Auto</label>
+				<label class="flex items-center gap-1"><input type="radio" name="frameTargetMode" value="manual" bind:group={frameTargetMode} class="w-3 h-3" />Manual</label>
 			</div>
 		</div>
 		{#if frameTargetMode === 'manual'}
 			<div class="grid grid-cols-[1fr_auto] gap-2 items-center">
-				<input
-					type="range"
-					min={MIN_MANUAL_FRAMES}
-					max={MAX_MANUAL_FRAMES}
-					step="1"
-					bind:value={manualFrameCount}
-					class="w-full h-1"
-				/>
-				<input
-					type="number"
-					min={MIN_MANUAL_FRAMES}
-					max={MAX_MANUAL_FRAMES}
-					step="1"
-					bind:value={manualFrameCount}
-					onchange={() => manualFrameCount = clampManualFrameCount(manualFrameCount)}
-					class="w-16 px-1 py-0.5 border rounded text-xs"
-				/>
+				<input type="range" min={MIN_MANUAL_FRAMES} max={MAX_MANUAL_FRAMES} step="1" bind:value={manualFrameCount} class="w-full h-1" />
+				<input type="number" min={MIN_MANUAL_FRAMES} max={MAX_MANUAL_FRAMES} step="1" bind:value={manualFrameCount} onchange={() => manualFrameCount = clampManualFrameCount(manualFrameCount)} class="w-20 px-1 py-0.5 border rounded text-xs" />
 			</div>
 		{/if}
-		<p class="text-[10px] text-gray-500">
-			Targeting <strong>{targetFrameCount}</strong> extracted frames.
+		<p class="text-[11px] text-gray-600">
+			Final target: <strong>{targetFrameCount}</strong> frames
+			{#if frameTargetMode === 'auto'}
+				<span class="text-gray-400"> (auto range {MIN_TARGET_FRAMES}-{MAX_TARGET_FRAMES})</span>
+			{/if}
 		</p>
-	</div>
-
-	<div class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-		⏱️ {frameTargetMode === 'auto'
-			? `Fast frame budget active: auto-target ${MIN_TARGET_FRAMES}-${MAX_TARGET_FRAMES} frames (walking-friendly).`
-			: `Manual frame target active: ${targetFrameCount} frames.`}
 	</div>
 	
 	<!-- Pixelation Settings (when enabled) -->
@@ -806,10 +822,6 @@
 			</label>
 		</div>
 	{/if}
-
-	<div class="text-[10px] text-indigo-700 bg-indigo-50 border border-indigo-200 rounded px-2 py-1">
-		🤖 Model locked: WAN 2.2
-	</div>
 
 	<!-- Advanced Settings Toggle -->
 	<button
@@ -1012,21 +1024,6 @@
 			{/if}
 		</div>
 	{/if}
-
-	<!-- Generate Button -->
-	{#if useInterpolation}
-		<div class="text-[10px] text-indigo-600 bg-indigo-50 px-2 py-1.5 rounded space-y-0.5">
-			<p>⚡ <strong>Replicate WAN 2.2 FLF</strong> — {flfDurationSeconds}s, {flfInferenceSteps} steps, guidance {flfGuidanceScale}/{flfGuidanceScale2}, shift {flfShift}</p>
-			<p class="text-indigo-400">Open Advanced Settings to fine-tune all parameters</p>
-		</div>
-	{/if}
-	<button
-		class="w-full px-3 py-2 text-sm text-white rounded disabled:bg-gray-400 disabled:cursor-not-allowed font-medium {useInterpolation ? 'bg-indigo-500 hover:bg-indigo-600' : 'bg-blue-500 hover:bg-blue-600'}"
-		onclick={generateFrames}
-		disabled={isGenerating || !project.firstFrame || (useInterpolation && !endFrame)}
-	>
-		{isGenerating ? 'Generating...' : useInterpolation ? 'Interpolate Frames' : 'Generate Animation'}
-	</button>
 
 	<!-- Progress / Error -->
 	{#if isGenerating && progress.status !== 'idle'}

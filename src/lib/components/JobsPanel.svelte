@@ -3,6 +3,7 @@
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -27,6 +28,9 @@
 	let saveFolderId     = $state(null);
 	let saveFolderPath   = $state(null);
 	let isSaving         = $state(false);
+	let jobsSaveNote     = $state('');
+	let featureP1ActiveAssetDestinationGuard = $state(true);
+	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
 
 	// Multi-select
 	let selectedJobIds = $state(new Set());
@@ -35,10 +39,154 @@
 	jobQueue.subscribe(v => { queue = v; });
 	completedJobs.subscribe(v => { completed = v; });
 
+	if (typeof window !== 'undefined') {
+		try {
+			const rawAssetGuardFlag = localStorage.getItem(FEATURE_P1_ACTIVE_ASSET_GUARD_KEY);
+			if (rawAssetGuardFlag === '0') {
+				featureP1ActiveAssetDestinationGuard = false;
+			}
+		} catch {
+			// ignore localStorage access errors
+		}
+	}
+
 	// ── derived ─────────────────────────────────────────────
 	const activeJobs = $derived(queue.filter(j => j.status === 'pending' || j.status === 'processing'));
 	const failedJobs = $derived(queue.filter(j => j.status === 'failed'));
 	const allJobs = $derived([...activeJobs, ...failedJobs, ...completed.jobs]);
+
+	const STATUS_META = {
+		queued: { label: 'Queued', badgeClass: 'bg-slate-500 text-white', icon: 'Q' },
+		processing: { label: 'Processing', badgeClass: 'bg-blue-500 text-white', icon: '⚡' },
+		completed: { label: 'Completed', badgeClass: 'bg-emerald-500 text-white', icon: '✓' },
+		failed: { label: 'Failed', badgeClass: 'bg-red-500 text-white', icon: '✕' },
+		saved: { label: 'Saved', badgeClass: 'bg-violet-500 text-white', icon: '💾' }
+	};
+
+	function canonicalStatus(job) {
+		if (job?.status === 'pending') return 'queued';
+		if (job?.status === 'processing') return 'processing';
+		if (job?.status === 'completed') return 'completed';
+		if (job?.status === 'failed') return 'failed';
+		if (job?.status === 'saved') return 'saved';
+		if (job?.status === 'cancelled') return 'failed';
+		return 'queued';
+	}
+
+	function normalizedJobType(job) {
+		return String(job?.type || '').toLowerCase();
+	}
+
+	function isSpriteJob(job) {
+		return normalizedJobType(job).includes('sprite');
+	}
+
+	function canonicalKind(job) {
+		if (job?.kind) return job.kind;
+		if (isSpriteJob(job)) return 'image';
+		if (job?.frames?.length) return 'animation';
+		if (job?.videoUrl) return 'video';
+		return 'image';
+	}
+
+	function canonicalOrigin(job) {
+		if (job?.origin) return job.origin;
+		if (isSpriteJob(job)) return 'design';
+		return 'animate';
+	}
+
+	function emitJobUiEvent(name, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(new CustomEvent(name, { detail: payload }));
+	}
+
+	function emitJobTelemetry(eventName, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(
+			new CustomEvent('smTelemetryEvent', {
+				detail: {
+					eventName,
+					payload,
+					ts: new Date().toISOString()
+				}
+			})
+		);
+	}
+
+	function emitAssetUiEvent(name, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(new CustomEvent(name, { detail: payload }));
+	}
+
+	function emitAssetTelemetry(eventName, payload) {
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(
+			new CustomEvent('smTelemetryEvent', {
+				detail: {
+					eventName,
+					payload,
+					ts: new Date().toISOString()
+				}
+			})
+		);
+	}
+
+	let prevJobStatusById = new Map();
+	let hasInitializedLifecycleTracking = false;
+
+	$effect(() => {
+		const next = new Map();
+		for (const job of allJobs) {
+			const normalized = canonicalStatus(job);
+			next.set(job.id, normalized);
+		}
+
+		if (!hasInitializedLifecycleTracking) {
+			prevJobStatusById = next;
+			hasInitializedLifecycleTracking = true;
+			return;
+		}
+
+		for (const job of allJobs) {
+			const normalized = canonicalStatus(job);
+			const previous = prevJobStatusById.get(job.id);
+			const payload = {
+				jobId: job.id,
+				jobKind: canonicalKind(job),
+				jobOrigin: canonicalOrigin(job),
+				progress: Number.isFinite(job.progress) ? job.progress : 0
+			};
+
+			if (!previous) {
+				emitJobUiEvent('job.created', payload);
+				emitJobTelemetry('sm.p1.job_created', payload);
+				continue;
+			}
+
+			if (previous !== normalized) {
+				const changedPayload = { ...payload, fromStatus: previous, toStatus: normalized };
+				emitJobUiEvent('job.status.changed', changedPayload);
+				emitJobTelemetry('sm.p1.job_status_changed', changedPayload);
+
+				if (normalized === 'completed') {
+					emitJobUiEvent('job.completed', payload);
+					emitJobTelemetry('sm.p1.job_completed', payload);
+				}
+
+				if (normalized === 'failed') {
+					const failedPayload = {
+						...payload,
+						errorCode: job?.error?.code || 'job_failed',
+						retryable: false
+					};
+					emitJobUiEvent('job.failed', failedPayload);
+					emitJobTelemetry('sm.p1.job_failed', failedPayload);
+				}
+			}
+		}
+
+		prevJobStatusById = next;
+	});
 
 	// ── animation loop for expanded preview ─────────────────
 	// Note: expandedJob functionality removed - this effect is disabled
@@ -67,9 +215,33 @@
 	}
 
 	function thumbnail(job) {
-		if (job.type === 'sprite' && job.image) return job.image;
+		if (isSpriteJob(job) && job.image) return job.image;
 		if (job.frames?.length) return job.frames[0];
 		return null;
+	}
+
+	function previewInRightPanel(job) {
+		if (typeof window === 'undefined') return;
+
+		// For animations, load into project so the right-side animation player is used.
+		if (job.frames?.length) {
+			useForProject(job);
+			window.dispatchEvent(new CustomEvent('jobsPreviewCleared'));
+			return;
+		}
+
+		// For still jobs, keep right-side static preview behavior.
+		const image = thumbnail(job);
+		if (!image) return;
+		window.dispatchEvent(
+			new CustomEvent('jobsPreviewSelected', {
+				detail: {
+					image,
+					label: job.name || 'Job Preview',
+					jobId: job.id
+				}
+			})
+		);
 	}
 
 	// ── actions ──────────────────────────────────────────────
@@ -79,7 +251,7 @@
 	}
 
 	function useForProject(job) {
-		if (job.type === 'sprite' && job.image) {
+		if (isSpriteJob(job) && job.image) {
 			projectStore.update(p => ({ ...p, firstFrame: job.image }));
 		} else if (job.frames?.length) {
 			// Reset initial state when loading a new animation (so it becomes the new initial)
@@ -104,11 +276,23 @@
 	}
 
 	function startSave(job) {
+		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId) {
+			const blockedPayload = {
+				entryPoint: 'jobs',
+				sourceType: canonicalKind(job)
+			};
+			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
+			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
+			jobsSaveNote = 'Select an active asset folder first.';
+			return;
+		}
+
 		savingJobId = job.id;
-		saveFileName = job.name || (job.type === 'sprite' ? 'sprite' : 'animation');
-		saveFolderId = null;
-		saveFolderPath = null;
+		saveFileName = job.name || (canonicalKind(job) === 'animation' ? 'animation' : 'image');
+		saveFolderId = $activeAssetStore?.folderId || null;
+		saveFolderPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || null;
 		showSaveDialog = true;
+		jobsSaveNote = '';
 		menuItemId = null;
 	}
 
@@ -134,6 +318,14 @@
 		const job = completed.jobs.find(j => j.id === savingJobId);
 		if (!job) return;
 		if (!saveFolderId) { showFolderPicker = true; return; }
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: saveFolderPath || null,
+				confirmationSource: 'dialog_submit'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 
 		const fileName = saveFileName.trim() || job.name || 'file';
 		isSaving = true;
@@ -142,7 +334,7 @@
 			const uid = userFiles.getUid();
 			if (!uid) throw new Error('Not signed in');
 
-			if (job.type === 'sprite' && job.image) {
+			if (canonicalKind(job) === 'image' && job.image) {
 				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
 				const res = await fetch('/api/upload-file', {
 					method: 'POST',
@@ -189,11 +381,20 @@
 				});
 			}
 
+			const savedPayload = {
+				jobId: job.id,
+				jobKind: canonicalKind(job),
+				jobOrigin: canonicalOrigin(job),
+				progress: 100
+			};
+			emitJobUiEvent('job.saved', savedPayload);
+			emitJobTelemetry('sm.p1.job_saved', savedPayload);
+
 			completedJobs.removeJob(job.id);
 			cancelSaveDialog();
 		} catch (err) {
 			console.error('[JobsPanel] Save error:', err);
-			alert('Save failed: ' + err.message);
+			jobsSaveNote = 'Save failed: ' + err.message;
 		} finally {
 			isSaving = false;
 		}
@@ -201,16 +402,17 @@
 
 	function download(job) {
 		const a = document.createElement('a');
-		if (job.type === 'sprite' && job.image) { a.href = job.image; a.download = `${job.name || 'sprite'}.png`; }
+		if (canonicalKind(job) === 'image' && job.image) { a.href = job.image; a.download = `${job.name || 'image'}.png`; }
 		else if (job.videoUrl)   { a.href = job.videoUrl; a.download = `${job.name || 'anim'}.mp4`; }
 		else if (job.frames?.[0]) { a.href = job.frames[0]; a.download = `${job.name || 'frame'}.png`; }
 		a.click();
 	}
 
 	function discard(job) {
-		if (job.status === 'pending' || job.status === 'processing') {
+		const cStatus = canonicalStatus(job);
+		if (cStatus === 'queued' || cStatus === 'processing') {
 			jobQueue.cancelJob(job.id);
-		} else if (job.status === 'failed') {
+		} else if (cStatus === 'failed') {
 			jobQueue.removeJob(job.id);
 		} else {
 			completedJobs.removeJob(job.id);
@@ -231,8 +433,7 @@
 
 	function selectAll() {
 		const selectableJobs = allJobs.filter(j => {
-			const isActive = j.status === 'pending' || j.status === 'processing';
-			const isFailed = j.status === 'failed';
+			const isActive = canonicalStatus(j) === 'queued' || canonicalStatus(j) === 'processing';
 			return !isActive; // Can select completed and failed jobs
 		});
 		selectedJobIds = new Set(selectableJobs.map(j => j.id));
@@ -260,6 +461,16 @@
 	async function batchSaveToFolder() {
 		const selected = getSelectedJobs();
 		if (selected.length === 0) return;
+		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId) {
+			const blockedPayload = {
+				entryPoint: 'jobs',
+				sourceType: 'jobs_output'
+			};
+			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
+			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
+			jobsSaveNote = 'Select an active asset folder first.';
+			return;
+		}
 		
 		// Show folder picker first
 		showFolderPicker = true;
@@ -294,6 +505,14 @@
 		showFolderPicker = false;
 		
 		if (!saveFolderId) return;
+		if (featureP1ActiveAssetDestinationGuard) {
+			const confirmedPayload = {
+				destinationPath: folderPath || null,
+				confirmationSource: 'explicit_picker_select'
+			};
+			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
+			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
+		}
 
 		const selected = getSelectedJobs();
 		if (selected.length === 0) return;
@@ -301,17 +520,17 @@
 		isSaving = true;
 		const uid = userFiles.getUid();
 		if (!uid) {
-			alert('You must be signed in to save files');
+			jobsSaveNote = 'You must be signed in to save files.';
 			isSaving = false;
 			return;
 		}
 
 		try {
 			for (const job of selected) {
-				const fileName = job.name || (job.type === 'sprite' ? 'sprite' : 'animation');
+				const fileName = job.name || (canonicalKind(job) === 'animation' ? 'animation' : 'image');
 				const safeName = fileName.slice(0, 40).replace(/[^a-zA-Z0-9_\- ]/g, '_');
 
-				if (job.type === 'sprite' && job.image) {
+				if (canonicalKind(job) === 'image' && job.image) {
 					const res = await fetch('/api/upload-file', {
 						method: 'POST',
 						headers: { 'Content-Type': 'application/json' },
@@ -356,6 +575,15 @@
 					});
 				}
 
+				const savedPayload = {
+					jobId: job.id,
+					jobKind: canonicalKind(job),
+					jobOrigin: canonicalOrigin(job),
+					progress: 100
+				};
+				emitJobUiEvent('job.saved', savedPayload);
+				emitJobTelemetry('sm.p1.job_saved', savedPayload);
+
 				// Remove job after successful save
 				completedJobs.removeJob(job.id);
 			}
@@ -365,7 +593,7 @@
 			saveFolderPath = null;
 		} catch (err) {
 			console.error('[JobsPanel] Batch save error:', err);
-			alert('Batch save failed: ' + err.message);
+			jobsSaveNote = 'Batch save failed: ' + err.message;
 		} finally {
 			isSaving = false;
 		}
@@ -439,22 +667,25 @@
 		{:else if allJobs.length === 0}
 			<div class="flex flex-col items-center justify-center h-full text-gray-400 gap-2 px-4">
 				<span class="text-3xl opacity-50">📭</span>
-				<p class="text-[11px] text-center">No jobs yet.<br/>Generate a sprite or animation to see results here.</p>
+				<p class="text-[11px] text-center">No jobs yet.<br/>Generate an image or animation to see results here.</p>
 			</div>
 		{:else}
 			<!-- Jobs Grid -->
 			<div class="grid grid-cols-4 gap-2">
 				{#each allJobs as job (job.id)}
 					{@const thumb = thumbnail(job)}
-					{@const isActive = job.status === 'pending' || job.status === 'processing'}
-					{@const isFailed = job.status === 'failed'}
-					{@const isCompleted = !isActive && !isFailed}
+					{@const cStatus = canonicalStatus(job)}
+					{@const cMeta = STATUS_META[cStatus]}
+					{@const isActive = cStatus === 'queued' || cStatus === 'processing'}
+					{@const isFailed = cStatus === 'failed'}
+					{@const isCompleted = cStatus === 'completed' || cStatus === 'saved'}
 					{@const isSelected = selectedJobIds.has(job.id)}
 					{@const canSelect = !isActive}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all aspect-square bg-gray-100
 							{isSelected ? 'border-blue-500 ring-2 ring-blue-300' : isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : 'border-transparent hover:border-gray-300'}"
+						onclick={() => previewInRightPanel(job)}
 					>
 						<!-- Selection checkbox -->
 						{#if canSelect}
@@ -488,16 +719,8 @@
 
 						<!-- Status indicator -->
 						<div class="absolute top-1 right-1 px-1 py-0.5 rounded text-[8px] font-bold leading-none z-10
-							{isActive ? 'bg-blue-500 text-white' : isFailed ? 'bg-red-500 text-white' : job.type === 'sprite' ? 'bg-emerald-500 text-white' : 'bg-blue-500 text-white'}">
-							{#if isActive}
-								⚡
-							{:else if isFailed}
-								✕
-							{:else if job.type === 'sprite'}
-								IMG
-							{:else}
-								{job.frames?.length ? `${job.frames.length}f` : 'VID'}
-							{/if}
+							{cMeta.badgeClass}">
+							{cMeta.icon}
 						</div>
 
 						<!-- Menu button (only for completed jobs) -->
@@ -555,6 +778,7 @@
 
 						<div class="px-1.5 py-1">
 							<p class="text-[11px] truncate text-center font-medium">{job.name || 'Job'}</p>
+							<p class="text-[9px] text-center text-gray-500">{cMeta.label}</p>
 							{#if job.message && isActive}
 								<p class="text-[9px] text-gray-500 text-center truncate">{job.message}</p>
 							{/if}
@@ -569,7 +793,10 @@
 	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
 		<div class="flex items-center gap-2">
 			<span>{allJobs.length} job{allJobs.length !== 1 ? 's' : ''} ({activeJobs.length} active, {completed.jobs.length} completed)</span>
-			{#if !isSelectionMode && allJobs.filter(j => !(j.status === 'pending' || j.status === 'processing')).length > 0}
+			{#if !isSelectionMode && allJobs.filter(j => {
+				const cStatus = canonicalStatus(j);
+				return !(cStatus === 'queued' || cStatus === 'processing');
+			}).length > 0}
 				<button
 					class="text-blue-500 hover:text-blue-700 transition-colors"
 					onclick={selectAll}
@@ -587,6 +814,10 @@
 		{/if}
 	</div>
 </div>
+
+{#if jobsSaveNote}
+	<p class="px-2 py-1 text-[10px] text-amber-700 bg-amber-50 border-t border-amber-200">{jobsSaveNote}</p>
+{/if}
 
 <!-- ── SAVE DIALOG ───────────────────────────────────────── -->
 {#if showSaveDialog}
@@ -623,6 +854,11 @@
 				>
 					{saveFolderPath || '📁 Choose folder…'}
 				</button>
+				{#if featureP1ActiveAssetDestinationGuard && saveFolderPath}
+					<p class="mt-1 text-[10px] text-emerald-700">
+						Saving to: {saveFolderPath}
+					</p>
+				{/if}
 			</div>
 
 			<!-- Actions -->
@@ -648,5 +884,7 @@
 	<FolderPicker
 		onSelect={savingJobId === null ? onBatchFolderSelect : onFolderSelect}
 		onClose={() => showFolderPicker = false}
+		startFolderId={$activeAssetStore.folderId}
+		startFolderName={$activeAssetStore.folderName || 'Asset'}
 	/>
 {/if}

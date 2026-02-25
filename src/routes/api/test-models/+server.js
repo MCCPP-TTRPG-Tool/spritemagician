@@ -4,7 +4,14 @@ import { env } from '$env/dynamic/private';
 /**
  * List available image-to-video models on Replicate
  */
-export async function GET() {
+export async function GET({ locals }) {
+	if (!locals.user) {
+		return json({ error: 'Authentication required' }, { status: 401 });
+	}
+	if (process.env.NODE_ENV === 'production') {
+		return json({ error: 'Not available in production' }, { status: 404 });
+	}
+
 	const models = [
 		// Current models
 		{

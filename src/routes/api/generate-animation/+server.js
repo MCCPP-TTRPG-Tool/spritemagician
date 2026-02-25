@@ -18,8 +18,16 @@
 
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
-import { setProgress, clearProgress } from '$lib/utils/generationProgress.js';
+import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 // Available Replicate models (standard I2V)
 const MODELS = {
@@ -77,9 +85,9 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	// Lightning LoRA model — works best with the model's own default prompt "animate".
-	// The start/end images provide all visual context. Complex prompts hurt quality.
-	const enhancedPrompt = (prompt && prompt.length < 80) ? prompt : 'animate';
+	// Preserve strict static-lock prompts when present; otherwise keep short-prompt optimization.
+	const wantsStrictLock = /STATIC ASSET LOCK/i.test(prompt || '');
+	const enhancedPrompt = wantsStrictLock ? (prompt || 'animate') : ((prompt && prompt.length < 80) ? prompt : 'animate');
 	console.log('[FLF] Prompt:', enhancedPrompt);
 
 	// Use the model's own default negative prompt (Chinese). Only add user extras if provided.
@@ -211,14 +219,22 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 // Main async processor
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, perfectLoop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}) {
-	const isInterpolation = !!endImage;
+async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, motionAmount = 127, fps = 8, modelId = 'wan22', endImage = null, loop = false, perfectLoop = false, guidanceScale = null, seed = null, negativePrompt = null, flfOptions = {}, staticAssetMode = false) {
+	let isInterpolation = !!endImage;
+	if (staticAssetMode && !isInterpolation) {
+		// Hard-lock fallback: interpolate from the same frame when no end frame is provided.
+		endImage = referenceImage;
+		isInterpolation = true;
+	}
 	
 	// Enhanced prompt engineering for better accuracy and loops
 	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic, consistent character design';
 	
 	// Size consistency instructions
 	const SIZE_CONSISTENCY = 'CRITICAL: Character must maintain exact same size and scale throughout entire animation. No scaling, no zoom in or out, no size changes, consistent character dimensions from first frame to last frame. Character size must remain constant.';
+	const STATIC_ASSET_LOCK = staticAssetMode
+		? 'STATIC ASSET LOCK: Main object is anchored in world space. No translation, no camera pan, no orbit, no rotation, no drift, no wobble, and no jitter. Keep silhouette and base fixed. Motion is limited to internal emissive light flicker, glow pulses, or subtle atmospheric shimmer only.'
+		: '';
 	
 	// Loop-specific instructions for seamless animations
 	const LOOP_INSTRUCTIONS = (loop || perfectLoop)
@@ -228,13 +244,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	// Enhanced prompt structure
 	let enhancedPrompt;
 	if (prompt) {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${STATIC_ASSET_LOCK} ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
 	} else {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, mouth closed and static, no mouth movement, no talking, no jaw movement, smooth and natural motion`;
+		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${STATIC_ASSET_LOCK} ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, mouth closed and static, no mouth movement, no talking, no jaw movement, smooth and natural motion`;
 	}
 	
 	// Default negative prompt to avoid common issues
-	const defaultNegativePrompt = 'blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality, mouth movement, talking, jaw movement, lip sync, character scaling, size changes, zoom in, zoom out, character growing, character shrinking, inconsistent character size';
+	const staticLockNegative = staticAssetMode
+		? ', camera motion, camera pan, camera orbit, object rotation, object drift, translation, wobble, jitter, shake, perspective shift, framing change'
+		: '';
+	const defaultNegativePrompt = `blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality, mouth movement, talking, jaw movement, lip sync, character scaling, size changes, zoom in, zoom out, character growing, character shrinking, inconsistent character size${staticLockNegative}`;
 	const finalNegativePrompt = negativePrompt 
 		? `${defaultNegativePrompt}, ${negativePrompt}`
 		: defaultNegativePrompt;
@@ -243,7 +262,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		// ── Interpolation Mode (Start → End frame via Replicate FLF) ────────
 		if (isInterpolation) {
 			console.log('[Animation] Interpolation → Replicate WAN 2.2 FLF');
-			const videoUrl = await runReplicateInterpolation(jobId, referenceImage, endImage, prompt, frameCount, fps, flfOptions);
+			const interpolationNegative = [finalNegativePrompt, flfOptions?.negativePrompt].filter(Boolean).join(', ');
+			const videoUrl = await runReplicateInterpolation(
+				jobId,
+				referenceImage,
+				endImage,
+				enhancedPrompt,
+				frameCount,
+				fps,
+				{ ...flfOptions, negativePrompt: interpolationNegative }
+			);
 
 			setProgress(jobId, {
 				currentFrame: frameCount,
@@ -430,7 +458,9 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else if (modelId === 'wan22') {
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
 			// WAN 2.2 supports motion_bucket_id for motion control
-			const wanMotion = motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127;
+			const wanMotion = staticAssetMode
+				? 24
+				: (motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127);
 			input = {
 				prompt: enhancedPrompt,
 				negative_prompt: finalNegativePrompt,
@@ -551,16 +581,71 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 	}
 }
 
-export async function POST({ request }) {
+export async function POST({ request, locals }) {
 	const jobId = `job-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+		setProgressOwner(jobId, locals.user.uid);
+	let idempotencyKey = null;
+	let requestHash = null;
+	let payloadBytes = 0;
 
 	try {
+		if (!locals.user) {
+			return json({ error: 'Authentication required' }, { status: 401 });
+		}
+
 		const { 
 			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, interpolate, 
 			perfectLoop, guidanceScale, seed, negativePrompt,
+			staticAssetMode,
 			// FLF-specific parameters (for interpolation mode)
 			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
 		} = await request.json();
+		const payload = {
+			referenceImage, endImage, prompt, pose, frameCount, motionAmount, fps, loop, interpolate,
+			perfectLoop, guidanceScale, seed, negativePrompt, staticAssetMode,
+			flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift, flfSeed, flfNegativePrompt
+		};
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash(payload);
+		payloadBytes = approxJsonBytes(payload);
+		if (payloadBytes > 8 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'generate-animation',
+			maxRequests: 10,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-animation',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!referenceImage) {
 			return json({ error: 'Reference image is required. Upload an image first.' }, { status: 400 });
@@ -616,18 +701,65 @@ export async function POST({ request }) {
 			guidanceScale || null,
 			seed || null,
 			negativePrompt || null,
-			flfOptions
+			flfOptions,
+			!!staticAssetMode
 		);
 
-		return json({
+		const responseBody = {
 			jobId,
 			status: 'started',
 			model: displayName,
 			interpolate: isInterpolation
+		};
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'generate-animation',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'generate-animation',
+			provider: 'replicate',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: {
+				interpolate: !!isInterpolation,
+				frameCount: Number(numFrames) || 0
+			}
 		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('API error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'generate-animation',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'generate-animation',
+				provider: 'replicate',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message }, { status: 500 });
 	}
 }

@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Dimetric Sprite Frame Generator",
     "author": "Sprite Magician",
-    "version": (0, 1, 4),
+    "version": (0, 1, 6),
     "blender": (4, 0, 0),
     "location": "View3D > Sidebar > SpriteGen",
     "description": "Generate 16-direction dimetric sprite frames + manifest from armature actions.",
@@ -43,6 +43,15 @@ DIR_LABELS_16 = [
 FEET_TO_METERS = 0.3048
 
 DIRECTION_ENUM_ITEMS = [(d, d, "") for d in DIR_LABELS_16]
+STATIC_ASSET_SIZE_ITEMS = [
+    ("512", "512", "512x512 output"),
+    ("1024", "1024", "1024x1024 output"),
+    ("2048", "2048", "2048x2048 output"),
+    ("3072", "3072", "3072x3072 output"),
+    ("4096", "4096", "4096x4096 output"),
+    ("6144", "6144", "6144x6144 output"),
+    ("8192", "8192", "8192x8192 output"),
+]
 
 
 def direction_label_from_vector(scene, world_vec):
@@ -240,8 +249,30 @@ def iter_character_objects(armature_obj):
     return objects
 
 
+def iter_asset_objects(root_obj):
+    # Static asset isolation: selected root object + hierarchy.
+    objects = [root_obj]
+    objects.extend(_collect_descendants(root_obj))
+    return objects
+
+
 def isolate_render_to_character(scene, armature_obj):
     keep = set(iter_character_objects(armature_obj))
+    if scene.camera:
+        keep.add(scene.camera)
+    for obj in scene.objects:
+        if obj.type == "LIGHT":
+            keep.add(obj)
+
+    previous_hide_render = {}
+    for obj in scene.objects:
+        previous_hide_render[obj.name] = obj.hide_render
+        obj.hide_render = obj not in keep
+    return previous_hide_render
+
+
+def isolate_render_to_asset(scene, root_obj):
+    keep = set(iter_asset_objects(root_obj))
     if scene.camera:
         keep.add(scene.camera)
     for obj in scene.objects:
@@ -321,8 +352,49 @@ def auto_setup_character(scene, armature_obj, cam_obj, projection_mode="DIMETRIC
     cam_obj.data.ortho_scale = max(size.x, size.y) * 2.0 + 0.5
 
 
+def auto_setup_static_asset(scene, root_obj, cam_obj, projection_mode="DIMETRIC"):
+    asset_objects = iter_asset_objects(root_obj)
+    for obj in asset_objects:
+        set_visible_for_render(obj)
+
+    min_v, max_v = world_bounds(asset_objects)
+    if not min_v or not max_v:
+        set_visible_for_render(root_obj)
+        return
+
+    center = (min_v + max_v) * 0.5
+    ground_offset = min_v.z
+
+    # Ground and center static assets for deterministic one-shot exports.
+    root_obj.location -= Vector((center.x, center.y, ground_offset))
+    bpy.context.view_layer.update()
+
+    min_v, max_v = world_bounds(asset_objects)
+    if not min_v or not max_v:
+        return
+
+    center = (min_v + max_v) * 0.5
+    size = max_v - min_v
+    fit = max(size.x, size.y, size.z, 1.0)
+    if projection_mode == "ISOMETRIC":
+        z_factor = 1.25
+    else:
+        z_factor = 0.75
+    cam_obj.location = center + Vector((fit * 1.8, -fit * 1.8, fit * z_factor))
+    # Initial placement before precise camera-space fit.
+    cam_obj.data.ortho_scale = max(0.1, max(size.x, size.y))
+    fit_camera_to_bounds_for_static_asset(scene, root_obj, margin_ratio=0.06)
+
+
 def character_height_meters(armature_obj):
     min_v, max_v = world_bounds(iter_character_objects(armature_obj))
+    if not min_v or not max_v:
+        return None
+    return max(0.0, float(max_v.z - min_v.z))
+
+
+def asset_height_meters(root_obj):
+    min_v, max_v = world_bounds(iter_asset_objects(root_obj))
     if not min_v or not max_v:
         return None
     return max(0.0, float(max_v.z - min_v.z))
@@ -379,6 +451,47 @@ def fit_camera_to_bounds_for_action(scene, armature_obj, action, sampled_frames,
         armature_obj.rotation_mode = original_rot_mode
         armature_obj.rotation_euler = original_rot
         anim_data.action = original_action
+
+    if not found:
+        return
+
+    pad = max(0.0, float(margin_ratio))
+    width = max(0.001, max_x - min_x)
+    height = max(0.001, max_y - min_y)
+    center_x = (min_x + max_x) * 0.5
+    center_y = (min_y + max_y) * 0.5
+
+    aspect = scene.render.resolution_x / max(1.0, float(scene.render.resolution_y))
+    needed_ortho = max(width, height * aspect) * (1.0 + pad)
+    cam_obj.data.ortho_scale = max(0.001, needed_ortho)
+
+    center_offset_world = cam_obj.matrix_world.to_3x3() @ Vector((center_x, center_y, 0.0))
+    cam_obj.location += center_offset_world
+
+
+def fit_camera_to_bounds_for_static_asset(scene, root_obj, margin_ratio=0.06):
+    cam_obj = scene.camera
+    if not cam_obj or cam_obj.type != "CAMERA" or cam_obj.data.type != "ORTHO":
+        return
+
+    asset_objects = iter_asset_objects(root_obj)
+    if not asset_objects:
+        return
+
+    cam_inv = cam_obj.matrix_world.inverted()
+    min_x = float("inf")
+    min_y = float("inf")
+    max_x = float("-inf")
+    max_y = float("-inf")
+    found = False
+
+    for p_world in iter_world_bbox_points(asset_objects):
+        p_cam = cam_inv @ p_world
+        min_x = min(min_x, p_cam.x)
+        min_y = min(min_y, p_cam.y)
+        max_x = max(max_x, p_cam.x)
+        max_y = max(max_y, p_cam.y)
+        found = True
 
     if not found:
         return
@@ -500,6 +613,16 @@ def action_items(_self, context):
     if not arm:
         return []
     return action_options_for_armature(arm)
+
+
+def find_target_static_object(context):
+    obj = context.active_object
+    if obj and obj.type not in {"CAMERA", "LIGHT"}:
+        return obj
+    for selected in context.selected_objects:
+        if selected.type not in {"CAMERA", "LIGHT"}:
+            return selected
+    return None
 
 
 def ensure_sprite_camera(scene, pitch_deg=65.0, yaw_deg=45.0):
@@ -715,6 +838,14 @@ class SPRITEGEN_UL_batch_items(UIList):
 
 
 class SpriteGenProps(PropertyGroup):
+    workflow_mode: EnumProperty(
+        name="Workflow",
+        items=[
+            ("CHARACTER", "Character Animations", "Armature/actions -> directional animation export"),
+            ("STATIC_ASSET", "Single Frame Asset", "Building/object/scenery -> one fixed-angle frame export"),
+        ],
+        default="CHARACTER",
+    )
     unit_name: StringProperty(name="Unit Name", default="unit")
     output_dir: StringProperty(name="Output Folder", subtype="DIR_PATH")
     batch_output_dir: StringProperty(
@@ -834,6 +965,24 @@ class SpriteGenProps(PropertyGroup):
     use_export_target_height: BoolProperty(name="Use Target Height (Export-Only)", default=False)
     target_height_feet: FloatProperty(name="Target Height (ft)", default=6.0, min=0.1, max=30.0)
     measured_height_feet: FloatProperty(name="Measured Height (ft)", default=0.0, min=0.0, max=100.0)
+    single_asset_angle_degrees: FloatProperty(
+        name="Asset Angle Z",
+        description="Static asset world Z angle in degrees for single-frame export",
+        default=0.0,
+        min=-360.0,
+        max=360.0,
+    )
+    single_asset_export_name: StringProperty(
+        name="Save As Name",
+        description="Optional export name for static asset single-frame output",
+        default="single",
+    )
+    single_asset_resolution: EnumProperty(
+        name="Output Size",
+        description="Single-frame static asset output size",
+        items=STATIC_ASSET_SIZE_ITEMS,
+        default="2048",
+    )
     batch_items: CollectionProperty(type=SpriteGenBatchItem)
     batch_index: IntProperty(name="Batch Index", default=0, min=0)
     show_advanced: BoolProperty(name="Show Advanced", default=False)
@@ -848,6 +997,32 @@ class SPRITEGEN_OT_setup_scene(Operator):
     def execute(self, context):
         scene = context.scene
         props = scene.spritegen_props
+
+        if props.workflow_mode == "STATIC_ASSET":
+            root_obj = find_target_static_object(context)
+            if not root_obj:
+                self.report({"ERROR"}, "No static asset object found. Select a building/object first.")
+                return {"CANCELLED"}
+
+            if not props.unit_name or props.unit_name == "unit":
+                props.unit_name = sanitize_token(root_obj.name)
+
+            apply_projection_preset(props)
+            ensure_sprite_camera(
+                scene,
+                pitch_deg=float(props.camera_pitch_degrees),
+                yaw_deg=float(props.camera_yaw_degrees),
+            )
+            cam_obj = scene.camera
+            ensure_lights(scene)
+            configure_render(scene)
+            scene.render.resolution_x = int(props.single_asset_resolution)
+            scene.render.resolution_y = int(props.single_asset_resolution)
+            auto_setup_static_asset(scene, root_obj, cam_obj, projection_mode=str(props.projection_mode))
+            measured_m = asset_height_meters(root_obj)
+            props.measured_height_feet = (measured_m / FEET_TO_METERS) if measured_m else 0.0
+            self.report({"INFO"}, "Static asset scene setup complete.")
+            return {"FINISHED"}
 
         arm = find_target_armature(context)
         if not arm:
@@ -988,6 +1163,90 @@ class SPRITEGEN_OT_generate_selected(Operator):
         scene = context.scene
         props = scene.spritegen_props
         wm = context.window_manager
+
+        if props.workflow_mode == "STATIC_ASSET":
+            root_obj = find_target_static_object(context)
+            if not root_obj:
+                self.report({"ERROR"}, "No static asset object found.")
+                return {"CANCELLED"}
+            if not props.output_dir:
+                self.report({"ERROR"}, "Choose an output folder first.")
+                return {"CANCELLED"}
+
+            unit = sanitize_token(props.unit_name or root_obj.name)
+            export_name = sanitize_token(props.single_asset_export_name or "single")
+            output_file = f"{unit}_{export_name}.png"
+            out_root = bpy.path.abspath(props.output_dir)
+            output_path = os.path.join(out_root, output_file)
+            manifest_path = os.path.join(out_root, f"{unit}_{export_name}_manifest.json")
+
+            try:
+                os.makedirs(out_root, exist_ok=True)
+            except OSError as exc:
+                self.report({"ERROR"}, f"Unable to create output directory: {exc}")
+                return {"CANCELLED"}
+
+            cam_obj = ensure_sprite_camera(
+                scene,
+                pitch_deg=float(props.camera_pitch_degrees),
+                yaw_deg=float(props.camera_yaw_degrees),
+            )
+            ensure_lights(scene)
+            configure_render(scene)
+            scene.render.resolution_x = int(props.single_asset_resolution)
+            scene.render.resolution_y = int(props.single_asset_resolution)
+            auto_setup_static_asset(scene, root_obj, cam_obj, projection_mode=str(props.projection_mode))
+
+            previous_frame = scene.frame_current
+            previous_filepath = scene.render.filepath
+            previous_rot_mode = root_obj.rotation_mode
+            previous_rot = root_obj.rotation_euler.copy()
+            previous_hide_render = isolate_render_to_asset(scene, root_obj)
+            success = False
+
+            try:
+                root_obj.rotation_mode = "XYZ"
+                root_obj.rotation_euler.z = math.radians(float(props.single_asset_angle_degrees))
+                context.view_layer.update()
+                fit_camera_to_bounds_for_static_asset(scene, root_obj, margin_ratio=0.06)
+                scene.render.filepath = output_path
+                props.progress_text = "Rendering 1/1"
+                wm.progress_begin(0, 1)
+                bpy.ops.render.render(write_still=True)
+                wm.progress_update(1)
+
+                manifest = {
+                    "unit": unit,
+                    "asset_type": "single_frame_asset",
+                    "camera_mode": "isometric" if props.projection_mode == "ISOMETRIC" else "dimetric",
+                    "projection_mode": str(props.projection_mode).lower(),
+                    "frame": {
+                        "w": int(scene.render.resolution_x),
+                        "h": int(scene.render.resolution_y),
+                        "pivot": [0.5, 1.0],
+                    },
+                    "asset": {
+                        "image": output_file,
+                        "angle_z_degrees": float(props.single_asset_angle_degrees),
+                    },
+                }
+                with open(manifest_path, "w", encoding="utf-8") as handle:
+                    json.dump(manifest, handle, indent=2)
+                success = True
+                self.report({"INFO"}, f"Single-frame export complete: {output_path}")
+                return {"FINISHED"}
+            except Exception as exc:
+                self.report({"ERROR"}, f"Export failed: {exc}")
+                return {"CANCELLED"}
+            finally:
+                scene.render.filepath = previous_filepath
+                scene.frame_set(previous_frame)
+                root_obj.rotation_mode = previous_rot_mode
+                root_obj.rotation_euler = previous_rot
+                restore_render_visibility(scene, previous_hide_render)
+                wm.progress_end()
+                props.progress_text = "Done" if success else "Failed"
+
         arm = find_target_armature(context)
 
         if not arm:
@@ -1300,21 +1559,97 @@ class SPRITEGEN_OT_generate_all(Operator):
         return {"FINISHED"}
 
 
+class SPRITEGEN_OT_setup_character(Operator):
+    bl_idname = "spritegen.setup_character"
+    bl_label = "Auto Setup Character + Scene"
+    bl_description = "Auto-configure character scene for animation sprite export"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.workflow_mode = "CHARACTER"
+        return bpy.ops.spritegen.setup_scene()
+
+
+class SPRITEGEN_OT_generate_character(Operator):
+    bl_idname = "spritegen.generate_character"
+    bl_label = "Generate Sprite Sheet"
+    bl_description = "Render character animation sprite sheet export"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.workflow_mode = "CHARACTER"
+        return bpy.ops.spritegen.generate_selected()
+
+
+class SPRITEGEN_OT_setup_static_asset(Operator):
+    bl_idname = "spritegen.setup_static_asset"
+    bl_label = "Auto Setup Asset + Scene"
+    bl_description = "Auto-configure static asset scene for one-shot export"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.workflow_mode = "STATIC_ASSET"
+        return bpy.ops.spritegen.setup_scene()
+
+
+class SPRITEGEN_OT_generate_static_asset(Operator):
+    bl_idname = "spritegen.generate_static_asset"
+    bl_label = "Export Single Frame"
+    bl_description = "Render a single-frame static asset export"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.workflow_mode = "STATIC_ASSET"
+        return bpy.ops.spritegen.generate_selected()
+
+
+class SPRITEGEN_OT_rotate_static_asset(Operator):
+    bl_idname = "spritegen.rotate_static_asset"
+    bl_label = "Rotate Asset"
+    bl_description = "Rotate selected static asset around Z and apply in viewport"
+
+    delta_degrees: FloatProperty(name="Delta Degrees", default=0.0)
+    absolute_degrees: FloatProperty(name="Absolute Degrees", default=0.0)
+    use_absolute: BoolProperty(name="Use Absolute", default=False)
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.workflow_mode = "STATIC_ASSET"
+        root_obj = find_target_static_object(context)
+        if not root_obj:
+            self.report({"ERROR"}, "No static asset object found. Select a building/object first.")
+            return {"CANCELLED"}
+
+        if self.use_absolute:
+            props.single_asset_angle_degrees = float(self.absolute_degrees)
+        else:
+            props.single_asset_angle_degrees = float(props.single_asset_angle_degrees) + float(self.delta_degrees)
+
+        root_obj.rotation_mode = "XYZ"
+        root_obj.rotation_euler.z = math.radians(float(props.single_asset_angle_degrees))
+        context.view_layer.update()
+        return {"FINISHED"}
+
+
 class SPRITEGEN_PT_main(Panel):
-    bl_label = "SpriteGen"
+    bl_label = "Character Export"
     bl_idname = "SPRITEGEN_PT_main"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
-    bl_category = "Tool"
+    bl_category = "SpriteSingle"
 
     def draw(self, context):
         layout = self.layout
         props = context.scene.spritegen_props
 
         step1 = layout.box()
-        step1.label(text="Step 1: Character", icon="OUTLINER_OB_ARMATURE")
+        step1.label(text="Step 1: Target", icon="OUTLINER_OB_ARMATURE")
         step1.prop(props, "unit_name", text="Character Name")
-        step1.operator("spritegen.setup_scene", icon="TOOL_SETTINGS", text="Auto Setup Character + Scene")
+        step1.operator(
+            "spritegen.setup_character",
+            icon="TOOL_SETTINGS",
+            text="Auto Setup Character + Scene",
+        )
         step1.label(text=f"Detected Height: {props.measured_height_feet:.2f} ft")
         step1.prop(props, "use_export_target_height", text="Set Target Height For Export")
         if props.use_export_target_height:
@@ -1347,7 +1682,7 @@ class SPRITEGEN_PT_main(Panel):
 
         step4 = layout.box()
         step4.label(text="Step 4: Generate", icon="RENDER_STILL")
-        step4.operator("spritegen.generate_selected", icon="RENDER_STILL", text="Generate Sprite Sheet")
+        step4.operator("spritegen.generate_character", icon="RENDER_STILL", text="Generate Sprite Sheet")
         step4.label(text=f"Progress: {props.progress_text}")
 
         box = layout.box()
@@ -1367,6 +1702,59 @@ class SPRITEGEN_PT_main(Panel):
             col.prop(props, "max_sheet_dimension")
             col.prop(props, "max_total_renders")
             col.prop(props, "auto_fit_per_action")
+
+
+class SPRITEGEN_PT_static_asset(Panel):
+    bl_label = "Standalone Asset"
+    bl_idname = "SPRITEGEN_PT_static_asset"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "SpriteAsset"
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.spritegen_props
+
+        step1 = layout.box()
+        step1.label(text="Step 1: Asset", icon="OBJECT_DATA")
+        step1.prop(props, "unit_name", text="Asset Name")
+        step1.operator("spritegen.setup_static_asset", icon="TOOL_SETTINGS", text="Auto Setup Asset + Scene")
+        step1.label(text=f"Detected Height: {props.measured_height_feet:.2f} ft")
+
+        step2 = layout.box()
+        step2.label(text="Step 2: Output", icon="OUTPUT")
+        step2.prop(props, "output_dir", text="Output Folder")
+        step2.prop(props, "single_asset_resolution", text="Output Size")
+        step2.prop(props, "projection_mode", text="Projection")
+        step2.operator("spritegen.apply_projection_preset", icon="FILE_REFRESH", text="Apply Projection Preset")
+        step2.prop(props, "camera_pitch_degrees", text="Camera Pitch")
+        step2.prop(props, "camera_yaw_degrees", text="Camera Yaw")
+
+        step3 = layout.box()
+        step3.label(text="Step 3: Single Frame", icon="RENDER_STILL")
+        step3.prop(props, "single_asset_export_name", text="Save As Name")
+        step3.prop(props, "single_asset_angle_degrees", text="Asset Angle Z", slider=True)
+        row = step3.row(align=True)
+        op = row.operator("spritegen.rotate_static_asset", text="-45")
+        op.delta_degrees = -45.0
+        op = row.operator("spritegen.rotate_static_asset", text="-15")
+        op.delta_degrees = -15.0
+        op = row.operator("spritegen.rotate_static_asset", text="+15")
+        op.delta_degrees = 15.0
+        op = row.operator("spritegen.rotate_static_asset", text="+45")
+        op.delta_degrees = 45.0
+        row2 = step3.row(align=True)
+        op = row2.operator("spritegen.rotate_static_asset", text="Apply Rotation")
+        op.use_absolute = True
+        op.absolute_degrees = float(props.single_asset_angle_degrees)
+        op = row2.operator("spritegen.rotate_static_asset", text="Reset")
+        op.use_absolute = True
+        op.absolute_degrees = 0.0
+
+        step4 = layout.box()
+        step4.label(text="Step 4: Export", icon="RENDER_STILL")
+        step4.operator("spritegen.generate_static_asset", icon="RENDER_STILL", text="Export Single Frame")
+        step4.label(text=f"Progress: {props.progress_text}")
 
 
 class SPRITEGEN_PT_batch(Panel):
@@ -1418,7 +1806,13 @@ CLASSES = (
     SPRITEGEN_OT_apply_safe_preset,
     SPRITEGEN_OT_generate_selected,
     SPRITEGEN_OT_generate_all,
+    SPRITEGEN_OT_setup_character,
+    SPRITEGEN_OT_generate_character,
+    SPRITEGEN_OT_setup_static_asset,
+    SPRITEGEN_OT_generate_static_asset,
+    SPRITEGEN_OT_rotate_static_asset,
     SPRITEGEN_PT_main,
+    SPRITEGEN_PT_static_asset,
     SPRITEGEN_PT_batch,
 )
 

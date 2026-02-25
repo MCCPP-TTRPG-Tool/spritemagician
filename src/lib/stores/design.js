@@ -22,6 +22,7 @@ const defaultState = {
 	chatReferenceImage: null,
 	contentPreset: 'character',
 	stylePreset: 'default',
+	genesisModel: 'nano_banana',
 	savedConversations: []
 };
 
@@ -49,7 +50,11 @@ function normalizeSavedConversations(items) {
 			messages: normalizeMessages(item.messages),
 			draftPrompt: typeof item.draftPrompt === 'string' ? item.draftPrompt : '',
 			contentPreset: typeof item.contentPreset === 'string' ? item.contentPreset : 'character',
-			stylePreset: typeof item.stylePreset === 'string' ? item.stylePreset : 'default'
+			stylePreset: typeof item.stylePreset === 'string' ? item.stylePreset : 'default',
+			genesisModel:
+				item.genesisModel === 'gpt4' || item.genesisModel === 'dalle'
+					? item.genesisModel
+					: 'nano_banana'
 		}))
 		.slice(0, MAX_SAVED_CONVERSATIONS);
 }
@@ -140,7 +145,8 @@ export function saveCurrentConversation(name = 'Conversation') {
 		messages: normalizeMessages(state.messages),
 		draftPrompt: state.draftPrompt,
 		contentPreset: state.contentPreset,
-		stylePreset: state.stylePreset
+		stylePreset: state.stylePreset,
+		genesisModel: state.genesisModel
 	};
 
 	designStore.update((s) => ({
@@ -159,6 +165,7 @@ export function loadSavedConversation(conversationId) {
 			draftPrompt: found.draftPrompt || '',
 			contentPreset: found.contentPreset || state.contentPreset,
 			stylePreset: found.stylePreset || state.stylePreset,
+			genesisModel: found.genesisModel || state.genesisModel,
 			generatedImage: null,
 			mode: 'chat'
 		};

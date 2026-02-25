@@ -8,6 +8,15 @@ import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getStorage } from 'firebase-admin/storage';
 import { env } from '$env/dynamic/private';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { isDataUrl, isHttpUrl, normalizeBoundedInt } from '$lib/server/validation.js';
+import {
+	beginIdempotentRequest,
+	completeIdempotentRequest,
+	failIdempotentRequest,
+	makeRequestHash,
+	recordUsageEvent
+} from '$lib/server/requestTracking.js';
 
 function initFirebase() {
 	if (getApps().length === 0) {
@@ -23,23 +32,87 @@ function initFirebase() {
 	return getStorage().bucket();
 }
 
-export async function POST({ request }) {
+export async function POST({ request, locals }) {
+	let payloadBytes = 0;
+	let idempotencyKey = null;
+	let requestHash = null;
 	try {
+		if (!locals.user) {
+			return json({ error: 'Authentication required' }, { status: 401 });
+		}
+
 		const { project } = await request.json();
+		payloadBytes = approxJsonBytes({ project });
+		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
+		requestHash = makeRequestHash({ project });
+		if (payloadBytes > 30 * 1024 * 1024) {
+			return json({ error: 'Request payload too large' }, { status: 413 });
+		}
+		const rate = enforceRateLimit({
+			uid: locals.user.uid,
+			routeKey: 'save-project',
+			maxRequests: 15,
+			windowMs: 60_000
+		});
+		if (!rate.allowed) {
+			return json(
+				{ error: 'Rate limit exceeded. Please try again shortly.' },
+				{ status: 429, headers: { 'Retry-After': String(rate.retryAfterSec) } }
+			);
+		}
+		if (idempotencyKey) {
+			const idempotency = await beginIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'save-project',
+				idempotencyKey,
+				requestHash
+			});
+			if (idempotency.status === 'replay') {
+				return json(idempotency.responseBody, { status: idempotency.responseStatus });
+			}
+			if (idempotency.status === 'processing') {
+				return json(
+					{ error: 'A request with this Idempotency-Key is already processing.' },
+					{ status: 409 }
+				);
+			}
+			if (idempotency.status === 'conflict') {
+				return json(
+					{ error: 'Idempotency-Key already used with different payload.' },
+					{ status: 409 }
+				);
+			}
+		}
 
 		if (!project) {
 			return json({ error: 'Project data required' }, { status: 400 });
 		}
+		const inputFrames = Array.isArray(project.frames) ? project.frames.slice(0, 240) : [];
+		for (let i = 0; i < inputFrames.length; i += 1) {
+			const frame = inputFrames[i];
+			if (typeof frame !== 'string') {
+				return json({ error: `project.frames[${i}] must be a string` }, { status: 400 });
+			}
+			if (!isDataUrl(frame) && !isHttpUrl(frame)) {
+				return json({ error: `project.frames[${i}] must be a data URL or http(s) URL` }, { status: 400 });
+			}
+			if (frame.length > 2_000_000) {
+				return json({ error: `project.frames[${i}] is too large` }, { status: 400 });
+			}
+		}
 
 		const bucket = initFirebase();
-		const projectId = project.projectId || `project-${Date.now()}`;
-		const projectPath = `projects/${projectId}`;
+		const requestedProjectId = String(project.projectId || '').trim();
+		const projectId = /^[a-zA-Z0-9_-]{1,128}$/.test(requestedProjectId)
+			? requestedProjectId
+			: `project-${Date.now()}`;
+		const projectPath = `users/${locals.user.uid}/projects/${projectId}`;
 
 		// Upload frames to Firebase Storage
 		const frameUrls = [];
-		if (project.frames && project.frames.length > 0) {
-			for (let i = 0; i < project.frames.length; i++) {
-				const frame = project.frames[i];
+		if (inputFrames.length > 0) {
+			for (let i = 0; i < inputFrames.length; i++) {
+				const frame = inputFrames[i];
 				if (frame && frame.startsWith('data:')) {
 					// Upload base64 frame
 					const frameUrl = await uploadImageToFirebase(
@@ -66,13 +139,14 @@ export async function POST({ request }) {
 		// Create project metadata (without frame data, just URLs)
 		const projectData = {
 			projectId,
-			projectName: project.projectName || 'Untitled Project',
-			fps: project.fps || 12,
+			ownerUid: locals.user.uid,
+			projectName: String(project.projectName || 'Untitled Project').slice(0, 120),
+			fps: normalizeBoundedInt(project.fps, 12, 1, 60),
 			prompt: project.prompt || '',
 			firstFrame: firstFrameUrl,
 			lastFrame: project.lastFrame || null,
 			generationMode: project.generationMode || 'prompt',
-			frameCount: project.frameCount || 8,
+			frameCount: normalizeBoundedInt(project.frameCount, inputFrames.length || 8, 1, 240),
 			duration: project.duration || null,
 			frameUrls, // Array of Firebase Storage URLs
 			lastSaved: new Date().toISOString(),
@@ -90,15 +164,58 @@ export async function POST({ request }) {
 		});
 		await metadataFile.makePublic();
 
-		return json({
+		const responseBody = {
 			success: true,
 			projectId,
 			projectUrl: `https://storage.googleapis.com/${bucket.name}/${projectPath}/project.json`,
 			frameCount: frameUrls.length
+		};
+		if (idempotencyKey) {
+			await completeIdempotentRequest({
+				uid: locals.user.uid,
+				routeKey: 'save-project',
+				idempotencyKey,
+				requestHash,
+				responseStatus: 200,
+				responseBody
+			});
+		}
+		await recordUsageEvent({
+			uid: locals.user.uid,
+			routeKey: 'save-project',
+			provider: 'firebase',
+			statusCode: 200,
+			requestBytes: payloadBytes,
+			metadata: { frameCount: frameUrls.length, projectId }
 		});
+		return json(responseBody);
 
 	} catch (error) {
 		console.error('Save project error:', error);
+		if (idempotencyKey && requestHash && locals.user?.uid) {
+			try {
+				await failIdempotentRequest({
+					uid: locals.user.uid,
+					routeKey: 'save-project',
+					idempotencyKey,
+					requestHash,
+					errorMessage: error.message
+				});
+			} catch {
+				// best effort
+			}
+		}
+		if (locals.user?.uid) {
+			await recordUsageEvent({
+				uid: locals.user.uid,
+				routeKey: 'save-project',
+				provider: 'firebase',
+				success: false,
+				statusCode: 500,
+				requestBytes: payloadBytes,
+				metadata: { error: String(error.message || 'unknown').slice(0, 200) }
+			});
+		}
 		return json({ error: error.message || 'Failed to save project' }, { status: 500 });
 	}
 }
