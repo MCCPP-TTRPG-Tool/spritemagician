@@ -5,6 +5,7 @@ const STORAGE_KEY = 'spritemagician.design.v2';
 const MAX_MESSAGES = 300;
 const MAX_MESSAGE_CHARS = 2000;
 const MAX_SAVED_CONVERSATIONS = 100;
+const MAX_PROMPT_HISTORY = 30;
 
 const defaultMessages = [
 	{
@@ -23,8 +24,48 @@ const defaultState = {
 	contentPreset: 'character',
 	stylePreset: 'default',
 	genesisModel: 'nano_banana',
-	savedConversations: []
+	savedConversations: [],
+	genesisControls: {
+		preflight: {
+			fullBodyInFrame: false,
+			flatBg: false,
+			transparentReady: false,
+			spriteSafeSilhouette: false
+		},
+		promptHistory: [],
+		negativePrompt: '',
+		seed: '',
+		lockSeed: false,
+		lastUsedSeed: ''
+	}
 };
+
+function normalizeGenesisControls(input) {
+	const rawHistory = Array.isArray(input?.promptHistory) ? input.promptHistory : [];
+	const promptHistory = rawHistory
+		.filter((item) => item && typeof item.prompt === 'string')
+		.map((item) => ({
+			id: typeof item.id === 'string' ? item.id : `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+			prompt: item.prompt.slice(0, 4000),
+			createdAt: item.createdAt || new Date().toISOString(),
+			starred: !!item.starred
+		}))
+		.slice(0, MAX_PROMPT_HISTORY);
+	const preflight = input?.preflight || {};
+	return {
+		preflight: {
+			fullBodyInFrame: !!preflight.fullBodyInFrame,
+			flatBg: !!preflight.flatBg,
+			transparentReady: !!preflight.transparentReady,
+			spriteSafeSilhouette: !!preflight.spriteSafeSilhouette
+		},
+		promptHistory,
+		negativePrompt: typeof input?.negativePrompt === 'string' ? input.negativePrompt.slice(0, 2000) : '',
+		seed: typeof input?.seed === 'string' ? input.seed.slice(0, 64) : '',
+		lockSeed: !!input?.lockSeed,
+		lastUsedSeed: typeof input?.lastUsedSeed === 'string' ? input.lastUsedSeed.slice(0, 64) : ''
+	};
+}
 
 function normalizeMessages(messages) {
 	if (!Array.isArray(messages) || messages.length === 0) return defaultMessages;
@@ -71,7 +112,8 @@ function readStoredState() {
 			...parsed,
 			generatedImage: null,
 			messages: normalizeMessages(parsed.messages),
-			savedConversations: normalizeSavedConversations(parsed.savedConversations)
+			savedConversations: normalizeSavedConversations(parsed.savedConversations),
+			genesisControls: normalizeGenesisControls(parsed.genesisControls)
 		};
 	} catch {
 		return null;
@@ -83,7 +125,8 @@ function toPersistedState(state) {
 		...state,
 		generatedImage: null,
 		messages: normalizeMessages(state.messages),
-		savedConversations: normalizeSavedConversations(state.savedConversations)
+		savedConversations: normalizeSavedConversations(state.savedConversations),
+		genesisControls: normalizeGenesisControls(state.genesisControls)
 	};
 }
 

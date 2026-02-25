@@ -47,6 +47,7 @@
 				if (Number.isFinite(parsed?.expandAmount)) expandAmount = parsed.expandAmount;
 				if (typeof parsed?.resultImage === 'string') resultImage = parsed.resultImage;
 				if (typeof parsed?.editContext === 'string') editContext = parsed.editContext;
+				if (typeof parsed?.selectedStyleFlavor === 'string') selectedStyleFlavor = parsed.selectedStyleFlavor;
 				if (typeof parsed?.selectedPresetId === 'string') selectedPresetId = parsed.selectedPresetId;
 				if (typeof parsed?.enforceUncropped === 'boolean') enforceUncropped = parsed.enforceUncropped;
 				if (typeof parsed?.removeBackgroundSetting === 'boolean') removeBackgroundSetting = parsed.removeBackgroundSetting;
@@ -117,7 +118,37 @@
 		]
 	};
 
+	const EDIT_STYLE_FLAVORS = [
+		{ id: 'none', label: 'Default (no style boost)', prompt: '' },
+		{
+			id: 'cinematic',
+			label: '🎬 Cinematic',
+			prompt: 'cinematic composition, controlled contrast, dramatic but clean lighting, premium concept-art finish'
+		},
+		{
+			id: 'painterly',
+			label: '🖌️ Painterly',
+			prompt: 'painterly brushwork, rich texture, organic strokes, handcrafted illustrative finish'
+		},
+		{
+			id: 'pixel',
+			label: '🧩 Pixel-art ready',
+			prompt: 'sprite-readability emphasis, simplified shape clusters, clean edges, controlled pixel-art friendly detailing'
+		},
+		{
+			id: 'anime',
+			label: '✨ Anime stylized',
+			prompt: 'anime-influenced stylization, clean line hierarchy, cel-friendly shading logic, crisp silhouette readability'
+		},
+		{
+			id: 'dark_fantasy',
+			label: '🌑 Dark fantasy',
+			prompt: 'dark fantasy mood, gritty material treatment, moody atmosphere, strong focal readability'
+		}
+	];
+
 	let editContext = $state('character');
+	let selectedStyleFlavor = $state('none');
 	let selectedPresetId = $state(null);
 	let enforceUncropped = $state(true);
 	let removeBackgroundSetting = $state(true);
@@ -225,6 +256,7 @@
 					expandAmount,
 					resultImage,
 					editContext,
+					selectedStyleFlavor,
 					selectedPresetId,
 					enforceUncropped,
 					removeBackgroundSetting,
@@ -392,6 +424,18 @@
 		return imgHeight;
 	});
 
+let generateDisabledReason = $derived.by(() => {
+	if (!sourceImage) return 'Add a source image to begin.';
+	if (generating) return mode === 'edit' ? 'Applying edit...' : 'Expanding image...';
+	if (mode === 'expand' && !editPrompt.trim()) return 'Describe what to generate in the expanded area.';
+	return '';
+});
+
+let sourceMetaText = $derived.by(() => {
+	if (imgWidth && imgHeight) return `${imgWidth}×${imgHeight}px`;
+	return sourceImage ? 'Source ready' : '';
+});
+
 	async function generate() {
 		if (!sourceImage) {
 			error = 'Upload an image first';
@@ -438,9 +482,12 @@
 			} else {
 				const effectiveInstruction = editPrompt.trim() || buildAutoEditInstruction();
 				const contextInstruction = `Context: ${editContext}.`;
+				const styleFlavorInstruction =
+					EDIT_STYLE_FLAVORS.find((item) => item.id === selectedStyleFlavor)?.prompt || '';
 				const guardrail = buildGlobalGuardrails();
 				const guardrailBlock = guardrail ? `\n\n${guardrail}` : '';
-				promptToSend = `Edit this image according to these instructions: ${effectiveInstruction}. ${contextInstruction}${guardrailBlock}
+				const styleBlock = styleFlavorInstruction ? ` Style Flavor: ${styleFlavorInstruction}.` : '';
+				promptToSend = `Edit this image according to these instructions: ${effectiveInstruction}. ${contextInstruction}${styleBlock}${guardrailBlock}
 
 Keep everything not explicitly mentioned unchanged. Maintain the same art style, lighting, and quality.`;
 			}
@@ -587,204 +634,195 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 	}
 </script>
 
-<div class="space-y-1.5">
-
-	<!-- Mode Toggle -->
-	<div class="flex gap-1 bg-gray-100 rounded-lg p-0.5">
-		<button
-			class="flex-1 px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'edit' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-600 hover:text-gray-800'}"
-			onclick={() => mode = 'edit'}
-		>
-			&#x270F;&#xFE0F; Edit
-		</button>
-		<button
-			class="flex-1 px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'expand' ? 'bg-white text-orange-600 shadow-sm' : 'text-gray-600 hover:text-gray-800'}"
-			onclick={() => mode = 'expand'}
-		>
-			&#x1F532; Expand
-		</button>
-	</div>
-
-	<!-- Upload Area -->
-	{#if !sourceImage}
-		<label
-			class="block border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors {isDragging ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}"
-			ondragover={(e) => { e.preventDefault(); isDragging = true; }}
-			ondragleave={() => isDragging = false}
-			ondrop={handleDrop}
-		>
-			<input type="file" accept="image/*" class="hidden" onchange={handleFileChange} />
-			<div class="text-2xl mb-1">{isDragging ? '&#x1F4E5;' : '&#x1F5BC;&#xFE0F;'}</div>
-			<p class="text-sm text-gray-600 font-medium">Drop an image or click to upload</p>
-			<p class="text-xs text-gray-400 mt-1">PNG, JPG, WebP supported</p>
-		</label>
-	{:else}
-		<!-- Source Image Preview -->
-		<div class="relative">
-			<button class="w-full bg-gray-300 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
-				<div class="w-full bg-gray-300 rounded flex items-center justify-center">
-					<img
-						src={sourceImage}
-						alt="Source"
-						class="w-full max-h-24 object-contain rounded"
-						style="image-rendering: pixelated; background-color: #808080;"
-					/>
-				</div>
+<div class="space-y-2">
+	<div class="rounded-lg border border-gray-200 bg-gray-50 p-0.5">
+		<div class="grid grid-cols-2 gap-1">
+			<button
+				class="px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'edit' ? 'bg-white text-blue-600 shadow-sm border border-blue-100' : 'text-gray-600 hover:text-gray-800'}"
+				onclick={() => mode = 'edit'}
+			>
+				&#x270F;&#xFE0F; Edit
 			</button>
 			<button
-				onclick={clearImage}
-				class="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full text-xs flex items-center justify-center hover:bg-red-600"
-				title="Remove image"
-			>✕</button>
-			<p class="text-xs text-gray-500 mt-1 text-center">{imgWidth}×{imgHeight}px</p>
+				class="px-2 py-1.5 text-xs font-medium rounded-md transition-colors {mode === 'expand' ? 'bg-white text-orange-600 shadow-sm border border-orange-100' : 'text-gray-600 hover:text-gray-800'}"
+				onclick={() => mode = 'expand'}
+			>
+				&#x1F532; Expand
+			</button>
 		</div>
-	{/if}
+	</div>
 
-	<!-- Expand Controls -->
+	<div class="rounded-lg border border-gray-200 bg-white p-2.5 space-y-1.5">
+		<div class="flex items-center justify-between">
+			<p class="text-sm font-semibold text-gray-800">&#x1F5BC;&#xFE0F; Source Image</p>
+			{#if sourceMetaText}
+				<p class="text-xs text-gray-500">{sourceMetaText}</p>
+			{/if}
+		</div>
+
+		{#if !sourceImage}
+			<label
+				class="block border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors {isDragging ? 'border-blue-400 bg-blue-50' : 'border-gray-300 hover:border-gray-400'}"
+				ondragover={(e) => { e.preventDefault(); isDragging = true; }}
+				ondragleave={() => isDragging = false}
+				ondrop={handleDrop}
+			>
+				<input type="file" accept="image/*" class="hidden" onchange={handleFileChange} />
+				<div class="text-2xl mb-1">{isDragging ? '&#x1F4E5;' : '&#x1F5BC;&#xFE0F;'}</div>
+				<p class="text-sm text-gray-600 font-medium">Drop an image or click to upload</p>
+				<p class="text-xs text-gray-400 mt-1">PNG, JPG, WebP supported</p>
+			</label>
+		{:else}
+			<div class="relative rounded-md border border-gray-200 bg-gray-300 p-0.5">
+				<button class="w-full cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
+					<div class="w-full rounded flex items-center justify-center">
+						<img
+							src={sourceImage}
+							alt="Source"
+							class="w-full max-h-24 object-contain rounded"
+							style="image-rendering: pixelated; background-color: #808080;"
+						/>
+					</div>
+				</button>
+				<button
+					onclick={clearImage}
+					class="absolute top-2 right-2 w-7 h-7 bg-red-500 text-white rounded-full text-sm flex items-center justify-center hover:bg-red-600"
+					title="Remove image"
+				>✕</button>
+			</div>
+		{/if}
+	</div>
+
 	{#if mode === 'expand' && sourceImage}
-		<div class="space-y-1.5 bg-orange-50 rounded-lg p-2">
-			<div class="grid grid-cols-2 gap-2">
+		<div class="rounded-lg border border-orange-200 bg-orange-50 p-2.5 space-y-2">
+			<p class="text-sm font-semibold text-orange-800">&#x1F532; Expand Setup</p>
+			<div class="grid grid-cols-2 gap-3">
 				<div>
-				<label for="expand-dir" class="block text-xs font-medium text-gray-700 mb-1">Direction</label>
-				<select
-					id="expand-dir"
-					bind:value={expandDirection}
-					class="w-full px-2 py-1 text-xs border rounded bg-white"
-				>
-					<option value="down">⬇️ Down</option>
-					<option value="up">⬆️ Up</option>
-					<option value="left">⬅️ Left</option>
-					<option value="right">➡️ Right</option>
-					<option value="all">↔️ All sides</option>
-				</select>
+					<label for="expand-dir" class="block text-xs font-medium text-gray-700 mb-1">Direction</label>
+					<select
+						id="expand-dir"
+						bind:value={expandDirection}
+						class="w-full px-2 py-1.5 text-xs border rounded bg-white"
+					>
+						<option value="down">⬇️ Down</option>
+						<option value="up">⬆️ Up</option>
+						<option value="left">⬅️ Left</option>
+						<option value="right">➡️ Right</option>
+						<option value="all">↔️ All sides</option>
+					</select>
 				</div>
 				<div>
-				<label for="expand-amount" class="block text-xs font-medium text-gray-700 mb-1">
-					Amount: {expandAmount}px
-				</label>
-				<input
-					id="expand-amount"
-					type="range"
-					min="64"
-					max="512"
-					step="64"
-					bind:value={expandAmount}
-					class="w-full"
-				/>
+					<label for="expand-amount" class="block text-xs font-medium text-gray-700 mb-1">
+						Amount: {expandAmount}px
+					</label>
+					<input
+						id="expand-amount"
+						type="range"
+						min="64"
+						max="512"
+						step="64"
+						bind:value={expandAmount}
+						class="w-full"
+					/>
 				</div>
 			</div>
 
 			{#if imgWidth && imgHeight}
-				<p class="text-xs text-orange-700">
-					{imgWidth}×{imgHeight} → {expandedWidth}×{expandedHeight}px
+				<p class="text-xs text-orange-700 bg-orange-100 border border-orange-200 rounded px-2 py-1">
+					New canvas: {imgWidth}×{imgHeight} -> {expandedWidth}×{expandedHeight}px
 				</p>
 			{/if}
 		</div>
 	{/if}
 
-	<!-- Prompt & Generate -->
 	{#if sourceImage}
-		<!-- Context + Presets -->
 		{#if mode === 'edit'}
-			<div class="space-y-1.5">
-				<div class="space-y-1.5 rounded border border-gray-200 bg-white p-2">
-					<div class="grid grid-cols-2 gap-2">
-						<div>
-							<label for="edit-context" class="block text-xs font-medium text-gray-700 mb-1">Edit Context</label>
-							<select
-								id="edit-context"
-								bind:value={editContext}
-								class="w-full px-2 py-1 text-xs border rounded bg-white"
-							>
-								{#each EDIT_CONTEXTS as ctx}
-									<option value={ctx.id}>{ctx.label}</option>
-								{/each}
-							</select>
-						</div>
-						<div class="flex items-end">
-							<div class="w-full px-2 py-1 text-[11px] text-blue-700 bg-blue-50 border border-blue-200 rounded">
-								&#x1F9CD; Keep Subject Uncropped {enforceUncropped ? 'ON' : 'OFF'}
-							</div>
-						</div>
-					</div>
-
-					<div class="grid grid-cols-2 gap-2">
-						<label class="flex items-center gap-1.5 text-[11px] border rounded px-2 py-1 bg-white">
-							<input type="checkbox" bind:checked={enforceUncropped} class="w-3.5 h-3.5" />
-							<span>&#x1F9CD; Keep Uncropped</span>
-						</label>
-						<label class="flex items-center gap-1.5 text-[11px] border rounded px-2 py-1 bg-white">
-							<input type="checkbox" bind:checked={removeBackgroundSetting} class="w-3.5 h-3.5" />
-							<span>&#x1F5D1;&#xFE0F; Remove Background</span>
-						</label>
-					</div>
-
-					<div class="grid grid-cols-[1fr_auto] gap-2 items-end">
-						<div>
-							<label for="edit-preset" class="block text-xs font-medium text-gray-700 mb-1">Pose / Context Preset</label>
-							<select
-								id="edit-preset"
-								bind:value={selectedPresetId}
-								class="w-full px-2 py-1 text-xs border rounded bg-white"
-							>
-								<option value="">Choose preset...</option>
-								{#each activePresets as preset}
-									<option value={preset.id}>{preset.label}</option>
-								{/each}
-							</select>
-						</div>
-						<button
-							class="px-2 py-1 text-xs rounded border bg-blue-50 text-blue-700 border-blue-300 hover:bg-blue-100 disabled:opacity-50"
-							onclick={applySelectedPreset}
-							disabled={!selectedPresetId}
+			<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-1.5">
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label for="edit-context" class="block text-xs font-medium text-gray-700 mb-1">Context Type</label>
+						<select
+							id="edit-context"
+							bind:value={editContext}
+							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
 						>
-							Apply
-						</button>
+							{#each EDIT_CONTEXTS as ctx}
+								<option value={ctx.id}>{ctx.label}</option>
+							{/each}
+						</select>
 					</div>
-
-					{#if isCharacterContext}
-						<div class="grid grid-cols-2 gap-2">
-							<button
-								class="w-full px-2 py-1 text-[11px] rounded border border-blue-300 bg-blue-50 text-blue-700 text-left hover:bg-blue-100"
-								onclick={() => {
-									const tPosePreset = activePresets.find((p) => p.id === 'tposefront');
-									if (tPosePreset) applyPreset(tPosePreset);
-								}}
-							>
-								&#x1F9CD; Quick: Front T-Pose
-							</button>
-							<button
-								class="w-full px-2 py-1 text-[11px] rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
-								onclick={applyFlatBackgroundPreset}
-							>
-								&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
-							</button>
-						</div>
-					{:else}
-						<button
-							class="w-full px-2 py-1 text-[11px] rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
-							onclick={applyFlatBackgroundPreset}
+					<div>
+						<label for="edit-style" class="block text-xs font-medium text-gray-700 mb-1">Style</label>
+						<select
+							id="edit-style"
+							bind:value={selectedStyleFlavor}
+							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
 						>
-							&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
-						</button>
-					{/if}
-
-					{#if enforceUncropped || removeBackgroundSetting}
-						<div class="text-[10px] text-blue-700 bg-blue-50 border border-blue-200 rounded px-2 py-1">
-							&#x1F4CF; Global guardrails active:
-							{enforceUncropped ? ' uncropped subject' : ''}
-							{enforceUncropped && removeBackgroundSetting ? ' + ' : ''}
-							{removeBackgroundSetting ? 'background removed' : ''}.
-						</div>
-					{/if}
+							{#each EDIT_STYLE_FLAVORS as styleItem}
+								<option value={styleItem.id}>{styleItem.label}</option>
+							{/each}
+						</select>
+					</div>
 				</div>
+
+				<div class="grid grid-cols-2 gap-3">
+					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1.5 bg-white">
+						<input type="checkbox" bind:checked={enforceUncropped} class="w-3.5 h-3.5" />
+						<span>&#x1F9CD; Keep Uncropped</span>
+					</label>
+					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1.5 bg-white">
+						<input type="checkbox" bind:checked={removeBackgroundSetting} class="w-3.5 h-3.5" />
+						<span>&#x1F5D1;&#xFE0F; Remove Background</span>
+					</label>
+				</div>
+
+				<div class="grid grid-cols-[1fr_auto] gap-2 items-end">
+					<div>
+						<label for="edit-preset" class="block text-xs font-medium text-gray-700 mb-1">Quick Direction</label>
+						<select
+							id="edit-preset"
+							bind:value={selectedPresetId}
+							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
+						>
+							<option value="">Choose preset...</option>
+							{#each activePresets as preset}
+								<option value={preset.id}>{preset.label}</option>
+							{/each}
+						</select>
+					</div>
+					<button
+						class="px-2.5 py-1.5 text-xs rounded border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400"
+						onclick={applySelectedPreset}
+						disabled={!selectedPresetId}
+					>
+						Apply Preset
+					</button>
+				</div>
+
+				<div class="grid grid-cols-2 gap-2">
+					{#if isCharacterContext}
+						<button
+							class="w-full px-2 py-1.5 text-xs rounded border border-blue-300 bg-blue-50 text-blue-700 text-left hover:bg-blue-100"
+							onclick={() => {
+								const tPosePreset = activePresets.find((p) => p.id === 'tposefront');
+								if (tPosePreset) applyPreset(tPosePreset);
+							}}
+						>
+							&#x1F9CD; Front T-Pose
+						</button>
+					{/if}
+					<button
+						class="w-full px-2 py-1.5 text-xs rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
+						onclick={applyFlatBackgroundPreset}
+					>
+						&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
+					</button>
+				</div>
+
 			</div>
 		{/if}
 
-		<div>
-			<label for="edit-prompt" class="block text-xs font-medium text-gray-700 mb-1">
-				{mode === 'edit' ? 'Edit Instructions' : 'What to generate in the expanded area'}
-			</label>
+		<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-1">
 			<textarea
 				id="edit-prompt"
 				bind:value={editPrompt}
@@ -792,103 +830,35 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 					? 'Optional: add extra instructions, or leave blank to use context + guardrails'
 					: 'e.g. "Show the full body with legs and feet on a stone floor"'}
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
-				rows="2"
+				rows="5"
 			></textarea>
 		</div>
 
-		<button
-			onclick={generate}
-			disabled={generating || (mode === 'expand' && !editPrompt.trim())}
-			class="w-full px-3 py-1.5 text-sm font-medium text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed {mode === 'edit' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-orange-500 hover:bg-orange-600'}"
-		>
-			{#if generating}
-				<span class="inline-flex items-center gap-1.5">
-					<span class="animate-spin">&#x23F3;</span> Generating...
-				</span>
-			{:else}
-				{mode === 'edit' ? '\u270F\uFE0F Apply Edit' : '\u{1F532} Expand Image'}
+		<div class="space-y-2">
+			<button
+				onclick={generate}
+				disabled={!!generateDisabledReason}
+				class="w-full px-3 py-1.5 text-sm font-semibold text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed {mode === 'edit' ? 'bg-blue-500 hover:bg-blue-600' : 'bg-orange-500 hover:bg-orange-600'}"
+			>
+				{#if generating}
+					<span class="inline-flex items-center gap-1.5">
+						<span class="animate-spin">&#x23F3;</span> {mode === 'edit' ? 'Applying edit...' : 'Expanding image...'}
+					</span>
+				{:else}
+					{mode === 'edit' ? '\u270F\uFE0F Apply Edit' : '\u{1F532} Expand Image'}
+				{/if}
+			</button>
+			{#if generateDisabledReason && !error}
+				<p class="text-xs text-gray-500 bg-gray-50 border border-gray-200 rounded px-2 py-1.5">
+					{generateDisabledReason}
+				</p>
 			{/if}
-		</button>
-		{#if resultImage}
-			<p class="text-[11px] text-center text-blue-600 bg-blue-50 border border-blue-200 rounded px-2 py-1">
-				&#x1F5BC;&#xFE0F; Result available in right preview panel.
-			</p>
-		{/if}
+		</div>
 	{/if}
 
 	<!-- Error -->
 	{#if error}
 		<p class="text-xs text-red-600 bg-red-50 rounded p-2">{error}</p>
-	{/if}
-
-	<!-- Result -->
-	{#if false && resultImage}
-		<div class="space-y-2">
-			<p class="text-xs font-medium text-green-700">✅ Result</p>
-			<button class="w-full bg-gray-300 rounded-lg p-1 cursor-zoom-in" onclick={() => lightboxSrc = resultImage}>
-				<div class="w-full bg-gray-300 rounded flex items-center justify-center">
-					<img
-						src={resultImage}
-						alt="Edited result"
-						class="w-full max-h-64 object-contain rounded"
-						style="image-rendering: pixelated; background-color: #808080;"
-					/>
-				</div>
-			</button>
-
-			<div class="space-y-2">
-				<!-- Save to folder selector -->
-				<div class="flex items-center gap-2 p-2 bg-gray-50 rounded-lg border border-gray-200">
-					<span class="text-[10px] text-gray-500 font-medium whitespace-nowrap">Save to:</span>
-					<button
-						class="flex-1 text-left px-2 py-1 text-[11px] rounded border transition-colors truncate
-							{saveFolderPath
-								? 'bg-white border-blue-300 text-blue-700 hover:bg-blue-50 font-medium'
-								: 'bg-white border-gray-300 text-gray-400 hover:bg-gray-100'}"
-						onclick={() => showFolderPicker = true}
-					>
-						{saveFolderPath || '📁 Choose folder…'}
-					</button>
-					{#if saveFolderPath}
-						<button
-							class="text-[10px] text-gray-400 hover:text-red-500"
-							onclick={() => { saveFolderId = null; saveFolderPath = null; }}
-							title="Clear"
-						>✕</button>
-					{/if}
-				</div>
-
-				<!-- Action buttons -->
-				<div class="grid grid-cols-2 gap-2">
-					<button
-						onclick={saveToFiles}
-						disabled={!resultImage}
-						class="px-2 py-1.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						💾 Save to Files
-					</button>
-					<button
-						onclick={moveToStyle}
-						disabled={!resultImage}
-						class="px-2 py-1.5 text-xs bg-purple-500 text-white rounded hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
-					>
-						✨ Move to Style
-					</button>
-					<button
-						onclick={downloadResult}
-						class="px-2 py-1.5 text-xs bg-green-500 text-white rounded hover:bg-green-600"
-					>
-						📥 Download
-					</button>
-					<button
-						onclick={useResultAsSource}
-						class="px-2 py-1.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600"
-					>
-						🔄 Edit Again
-					</button>
-				</div>
-			</div>
-		</div>
 	{/if}
 
 	<!-- Help Text -->

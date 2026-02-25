@@ -4,6 +4,7 @@
 	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
 	import AutoFitPanel from '$lib/components/AutoFitPanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
+	import DesignConversationsPanel from '$lib/components/DesignConversationsPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
 	import PreviewContextHeader from '$lib/components/PreviewContextHeader.svelte';
@@ -24,6 +25,7 @@
 	let appMode = $state('2d'); // '2d' | '3d'
 	let showUserMenu = $state(false);
 	let showBillingModal = $state(false);
+	let showDesignConversationsInCenter = $state(false);
 	let isSavingStill = $state(false);
 	let rightPanelNote = $state('');
 	let showUnifiedSaveDialog = $state(false);
@@ -190,6 +192,30 @@
 
 		window.addEventListener('open3DMode', onOpen3DMode);
 		return () => window.removeEventListener('open3DMode', onOpen3DMode);
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+
+		const onOpenDesignConversationsCenter = () => {
+			showDesignConversationsInCenter = true;
+		};
+		const onCloseDesignConversationsCenter = () => {
+			showDesignConversationsInCenter = false;
+		};
+
+		window.addEventListener('openDesignConversationsCenter', onOpenDesignConversationsCenter);
+		window.addEventListener('closeDesignConversationsCenter', onCloseDesignConversationsCenter);
+		return () => {
+			window.removeEventListener('openDesignConversationsCenter', onOpenDesignConversationsCenter);
+			window.removeEventListener('closeDesignConversationsCenter', onCloseDesignConversationsCenter);
+		};
+	});
+
+	$effect(() => {
+		if (appMode !== '2d' || activeTab !== 'design') {
+			showDesignConversationsInCenter = false;
+		}
 	});
 
 	let rightPreviewImage = $derived.by(() => {
@@ -695,19 +721,19 @@
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'design' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
 					onclick={() => activeTab = 'design'}
 				>
-					Design
+					🎨 Design
 				</button>
 				<button
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'edit' ? 'bg-teal-50 text-teal-600 border-b-2 border-teal-600' : 'text-gray-600 hover:bg-gray-50'}"
 					onclick={() => activeTab = 'edit'}
 				>
-					Edit
+					✏️ Edit
 				</button>
 				<button
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animate' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
 					onclick={() => activeTab = 'animate'}
 				>
-					Animate
+					🎬 Animate
 				</button>
 				</div>
 
@@ -734,7 +760,11 @@
 
 		<!-- Middle Column: File Tree / Jobs / Frames -->
 		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
-			<CenterPanel />
+			{#if showDesignConversationsInCenter}
+				<DesignConversationsPanel />
+			{:else}
+				<CenterPanel />
+			{/if}
 		</div>
 
 		<!-- Right Column: Preview / Export (tabbed) -->

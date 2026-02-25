@@ -10,10 +10,7 @@
 	import {
 		appendDesignMessage,
 		designStore,
-		deleteSavedConversation,
-		loadSavedConversation,
 		resetCurrentConversation,
-		saveCurrentConversation,
 		updateDesignState
 	} from '$lib/stores/design.js';
 
@@ -41,6 +38,7 @@
 		{ id: 'gpt4', label: '🧠 GPT-4 Image (OpenAI)' },
 		{ id: 'dalle', label: '🎨 DALL·E (OpenAI)' }
 	];
+	const MAX_PROMPT_HISTORY = 30;
 
 	let isChatting = $state(false);
 	let isGenerating = $state(false);
@@ -50,13 +48,10 @@
 	let generationError = $state(null);
 	let uiNote = $state(null);
 	let userInput = $state('');
-	let saveName = $state('');
-	let selectedConversationId = $state('');
 	let chatMessagesEl;
 	let referenceInputEl;
 	let showPreview = $state(false);
 	let showNewAssetModal = $state(false);
-	let showConversationModal = $state(false);
 	let newAssetName = $state('');
 	let newAssetType = $state('character');
 	let newAssetNotes = $state('');
@@ -180,11 +175,8 @@
 	}
 
 	function openConversationModal() {
-		showConversationModal = true;
-	}
-
-	function closeConversationModal() {
-		showConversationModal = false;
+		if (typeof window === 'undefined') return;
+		window.dispatchEvent(new CustomEvent('openDesignConversationsCenter'));
 	}
 
 	async function createAssetFromDesign() {
@@ -261,10 +253,153 @@
 		updateDesignState({ mode: 'genesis' });
 	}
 
-	function buildGenesisPrompt(basePrompt, contentPreset, stylePreset) {
+	function buildPreflightInstructions(preflight, chromaKeyHex) {
+		const rules = [];
+		if (preflight?.fullBodyInFrame) {
+			rules.push('Full body must be visible in frame from head to toe with safe margin, no crop.');
+		}
+		if (preflight?.flatBg) {
+			rules.push(`Background must be a perfectly flat solid ${chromaKeyHex} with no gradients or texture.`);
+		}
+		if (preflight?.transparentReady) {
+			rules.push('Subject edges must be clean and fully separated from background for easy transparency cutout.');
+		}
+		if (preflight?.spriteSafeSilhouette) {
+			rules.push('Use a clear, readable sprite-safe silhouette with strong shape separation and no ambiguous overlaps.');
+		}
+		if (!rules.length) return '';
+		return `PREFLIGHT REQUIREMENTS (MANDATORY):\n- ${rules.join('\n- ')}`;
+	}
+
+	function updatePreflightToggle(key, enabled) {
+		const currentControls = $designStore.genesisControls || {};
+		const currentPreflight = currentControls.preflight || {};
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				preflight: {
+					...currentPreflight,
+					[key]: !!enabled
+				}
+			}
+		});
+	}
+
+	function updateNegativePrompt(value) {
+		const currentControls = $designStore.genesisControls || {};
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				negativePrompt: String(value || '')
+			}
+		});
+	}
+
+	function sanitizeSeedValue(value) {
+		return String(value || '')
+			.replace(/[^a-zA-Z0-9_-]/g, '')
+			.slice(0, 64);
+	}
+
+	function makeSeed() {
+		return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+	}
+
+	function updateSeedValue(value) {
+		const currentControls = $designStore.genesisControls || {};
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				seed: sanitizeSeedValue(value)
+			}
+		});
+	}
+
+	function updateLockSeed(enabled) {
+		const currentControls = $designStore.genesisControls || {};
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				lockSeed: !!enabled
+			}
+		});
+	}
+
+	function addPromptToHistory(promptText) {
+		const trimmed = String(promptText || '').trim();
+		if (!trimmed) return;
+		const currentControls = $designStore.genesisControls || {};
+		const currentHistory = Array.isArray(currentControls.promptHistory) ? currentControls.promptHistory : [];
+		const withoutDuplicate = currentHistory.filter((item) => item?.prompt !== trimmed);
+		const nextHistory = [
+			{
+				id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+				prompt: trimmed,
+				createdAt: new Date().toISOString(),
+				starred: false
+			},
+			...withoutDuplicate
+		].slice(0, MAX_PROMPT_HISTORY);
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				promptHistory: nextHistory
+			}
+		});
+	}
+
+	function togglePromptHistoryStar(itemId) {
+		const currentControls = $designStore.genesisControls || {};
+		const currentHistory = Array.isArray(currentControls.promptHistory) ? currentControls.promptHistory : [];
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				promptHistory: currentHistory.map((item) =>
+					item.id === itemId ? { ...item, starred: !item.starred } : item
+				)
+			}
+		});
+	}
+
+	function reusePromptHistoryItem(promptText) {
+		updateDesignState({ draftPrompt: String(promptText || '') });
+		uiNote = '📋 Prompt restored from history.';
+	}
+
+	async function copyPromptHistoryItem(promptText) {
+		try {
+			await navigator.clipboard.writeText(String(promptText || ''));
+			uiNote = '📋 History prompt copied.';
+		} catch {
+			uiNote = '⚠️ Clipboard copy failed.';
+		}
+	}
+
+	function deletePromptHistoryItem(itemId) {
+		const currentControls = $designStore.genesisControls || {};
+		const currentHistory = Array.isArray(currentControls.promptHistory) ? currentControls.promptHistory : [];
+		updateDesignState({
+			genesisControls: {
+				...currentControls,
+				promptHistory: currentHistory.filter((item) => item.id !== itemId)
+			}
+		});
+	}
+
+	function saveCurrentPromptToHistory() {
+		const promptText = String($designStore.draftPrompt || '').trim();
+		if (!promptText) {
+			uiNote = '⚠️ No prompt to save yet.';
+			return;
+		}
+		addPromptToHistory(promptText);
+		uiNote = '💾 Prompt saved to history.';
+	}
+
+	function buildGenesisPrompt(basePrompt, contentPreset, stylePreset, preflightInstructions = '') {
 		const contentAddon = CONTENT_PRESETS[contentPreset] || '';
 		const styleAddon = STYLE_PRESETS[stylePreset] || '';
-		return [basePrompt?.trim(), contentAddon, styleAddon].filter(Boolean).join('\n\n');
+		return [basePrompt?.trim(), contentAddon, styleAddon, preflightInstructions].filter(Boolean).join('\n\n');
 	}
 
 	async function copyPrompt() {
@@ -394,12 +529,38 @@
 
 		try {
 			const referenceImage = state.chatReferenceImage || null;
-			const prompt = buildGenesisPrompt(state.draftPrompt, state.contentPreset, state.stylePreset);
-			const groundedPrompt = referenceImage
-				? `${prompt}\n\nREFERENCE LOCK (MANDATORY): Match the attached reference image's composition, silhouette, material rendering, and brush texture. Keep the same painting language and avoid generic AI-looking output.`
+			const activeChromaHex = $activeAssetStore?.chromaKeyHex || '#00FF00';
+			const preflightInstructions = buildPreflightInstructions(
+				state.genesisControls?.preflight || {},
+				activeChromaHex
+			);
+			const prompt = buildGenesisPrompt(
+				state.draftPrompt,
+				state.contentPreset,
+				state.stylePreset,
+				preflightInstructions
+			);
+			const negativePromptText = (state.genesisControls?.negativePrompt || '').trim();
+			const promptWithNegative = negativePromptText
+				? `${prompt}\n\nAVOID (NEGATIVE PROMPT): ${negativePromptText}`
 				: prompt;
+			addPromptToHistory(state.draftPrompt);
+			const groundedPrompt = referenceImage
+				? `${promptWithNegative}\n\nREFERENCE LOCK (MANDATORY): Match the attached reference image's composition, silhouette, material rendering, and brush texture. Keep the same painting language and avoid generic AI-looking output.`
+				: promptWithNegative;
 			const useMasterStyleAnchor = state.stylePreset === 'pixel_anchor';
-			const generationNonce = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+			const controls = state.genesisControls || {};
+			const lockedSeed = sanitizeSeedValue(controls.seed || '');
+			const shouldLockSeed = !!controls.lockSeed;
+			const generationSeed = shouldLockSeed ? (lockedSeed || makeSeed()) : makeSeed();
+			const generationNonce = generationSeed;
+			updateDesignState({
+				genesisControls: {
+					...controls,
+					seed: shouldLockSeed ? generationSeed : controls.seed || '',
+					lastUsedSeed: generationSeed
+				}
+			});
 			const response = await fetchWithTimeout(
 				`/api/generate-sprite?ts=${Date.now()}`,
 				{
@@ -442,34 +603,6 @@
 		}
 
 		isGenerating = false;
-	}
-
-	function saveConversation() {
-		clearTransientMessages();
-		const state = get(designStore);
-		if (!state.messages?.length && !state.draftPrompt?.trim()) {
-			uiNote = '\u26A0\uFE0F Nothing to save yet.';
-			return;
-		}
-		const fallback = `Conversation ${new Date().toLocaleString()}`;
-		saveCurrentConversation(saveName.trim() || fallback);
-		saveName = '';
-		uiNote = '\u{1F4BE} Conversation saved.';
-	}
-
-	function loadConversation() {
-		clearTransientMessages();
-		if (!selectedConversationId) return;
-		loadSavedConversation(selectedConversationId);
-		uiNote = '\u{1F4C2} Conversation loaded.';
-	}
-
-	function deleteConversation() {
-		clearTransientMessages();
-		if (!selectedConversationId) return;
-		deleteSavedConversation(selectedConversationId);
-		selectedConversationId = '';
-		uiNote = '\u{1F5D1}\uFE0F Conversation deleted.';
 	}
 
 	function startNewChat() {
@@ -591,16 +724,6 @@
 </script>
 
 <div class="h-full flex flex-col gap-1.5 text-sm">
-	<div class="flex items-center justify-between">
-		<h3 class="text-sm font-bold text-gray-800">&#x1F3A8; Design</h3>
-		<div class="flex items-center gap-2">
-			<button class="text-[10px] text-gray-500 hover:text-emerald-600" onclick={openNewAssetModal}>&#x1F4C1; New Asset</button>
-			<button class="text-[10px] text-gray-500 hover:text-blue-600" onclick={applyGenesisPreset}>&#x2728; Oil Painting Fantasy</button>
-			<button class="text-[10px] text-gray-500 hover:text-blue-600" onclick={applyPresetAddons}>&#x1F9E9; Add-ons</button>
-			<button class="text-[10px] text-gray-500 hover:text-red-600" onclick={startNewChat}>&#x1F195; New</button>
-		</div>
-	</div>
-
 	<div class="grid grid-cols-2 gap-2">
 		<div>
 			<p class="text-[10px] text-gray-500 mb-1">&#x1F3F7;&#xFE0F; Generate Type</p>
@@ -629,10 +752,6 @@
 		</div>
 	</div>
 
-	<button class="w-full px-3 py-1.5 rounded bg-gray-100 text-gray-700 text-xs border hover:bg-gray-200" onclick={openConversationModal}>
-		&#x1F4D2; Conversations
-	</button>
-
 	<div class="flex gap-1 rounded-lg border p-1 bg-gray-50">
 		<button
 			class="flex-1 rounded px-2 py-1 text-xs font-medium {$designStore.mode === 'chat' ? 'bg-white text-blue-600 shadow' : 'text-gray-600'}"
@@ -646,7 +765,24 @@
 		>
 			&#x26A1; Genesis
 		</button>
+		<button
+			class="flex-1 rounded px-2 py-1 text-xs font-medium {$designStore.mode === 'controls' ? 'bg-white text-blue-600 shadow' : 'text-gray-600'}"
+			onclick={() => setMode('controls')}
+		>
+			&#x1F39B;&#xFE0F; Controls
+		</button>
 	</div>
+
+	{#if $designStore.mode === 'chat'}
+		<div class="grid grid-cols-2 gap-2">
+			<button class="w-full px-3 py-1.5 rounded bg-gray-100 text-gray-700 text-xs border hover:bg-gray-200" onclick={openConversationModal}>
+				&#x1F4D2; Conversations
+			</button>
+			<button class="w-full px-3 py-1.5 rounded bg-gray-100 text-gray-700 text-xs border hover:bg-gray-200" onclick={startNewChat}>
+				&#x1F195; New Chat
+			</button>
+		</div>
+	{/if}
 
 	{#if uiNote}
 		<p class="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1">{uiNote}</p>
@@ -715,6 +851,7 @@
 			<div class="flex items-center justify-between">
 				<p class="text-xs font-medium text-gray-700">&#x1F9FE; Prompt Draft</p>
 				<div class="flex gap-2">
+					<button class="text-[10px] text-gray-500 hover:text-emerald-600" onclick={saveCurrentPromptToHistory}>&#x1F4BE; Save</button>
 					<button class="text-[10px] text-gray-500 hover:text-blue-600" onclick={copyPrompt}>&#x1F4CB; Copy</button>
 					<button class="text-[10px] text-gray-500 hover:text-red-600" onclick={clearPrompt}>&#x1F9F9; Clear</button>
 				</div>
@@ -730,7 +867,7 @@
 				&#x26A1; Use This Prompt in Genesis
 			</button>
 		</div>
-	{:else}
+	{:else if $designStore.mode === 'genesis'}
 		<div class="rounded-lg border p-2 space-y-2">
 			<div>
 				<p class="text-[10px] text-gray-500 mb-1">🧠 Genesis Model</p>
@@ -750,6 +887,20 @@
 				rows="4"
 				value={$designStore.draftPrompt}
 				oninput={(e) => updateDesignState({ draftPrompt: e.target.value })}
+			></textarea>
+			<button
+				class="w-full px-2 py-1.5 text-xs rounded border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+				onclick={saveCurrentPromptToHistory}
+			>
+				&#x1F4BE; Save Prompt
+			</button>
+			<p class="text-xs font-medium text-gray-700">🚫 Negative Prompt</p>
+			<textarea
+				class="w-full border rounded px-2 py-1 text-xs"
+				rows="2"
+				value={$designStore.genesisControls?.negativePrompt || ''}
+				oninput={(e) => updateNegativePrompt(e.target.value)}
+				placeholder="e.g. blurry, text artifacts, extra limbs, warped anatomy"
 			></textarea>
 			<div class="grid grid-cols-2 gap-2">
 				<button class="px-2 py-2 text-xs rounded bg-gray-100 text-gray-700" onclick={() => setMode('chat')}>&#x1F4AC; Back to Chat</button>
@@ -792,6 +943,139 @@
 				</div>
 			</div>
 		{/if}
+	{:else}
+		<div class="rounded-lg border p-2 space-y-2 bg-white">
+			<p class="text-xs font-semibold text-gray-800">&#x1F39B;&#xFE0F; Genesis Controls</p>
+			<p class="text-[11px] text-gray-600">
+				This tab is for generation controls that improve reliability and iteration quality.
+			</p>
+			<div class="rounded border border-emerald-200 bg-emerald-50/40 p-2 space-y-2">
+				<p class="text-[11px] font-semibold text-emerald-800">1) Preflight Asset Readiness Checklist</p>
+				<div class="grid grid-cols-2 gap-x-4 gap-y-1">
+					<label class="flex items-center gap-2 text-[11px] text-gray-800">
+						<input
+							type="checkbox"
+							checked={$designStore.genesisControls?.preflight?.fullBodyInFrame || false}
+							onchange={(e) => updatePreflightToggle('fullBodyInFrame', e.target.checked)}
+						/>
+						<span>Full body in frame</span>
+					</label>
+					<label class="flex items-center gap-2 text-[11px] text-gray-800">
+						<input
+							type="checkbox"
+							checked={$designStore.genesisControls?.preflight?.flatBg || false}
+							onchange={(e) => updatePreflightToggle('flatBg', e.target.checked)}
+						/>
+						<span>Flat BG</span>
+					</label>
+					<label class="flex items-center gap-2 text-[11px] text-gray-800">
+						<input
+							type="checkbox"
+							checked={$designStore.genesisControls?.preflight?.transparentReady || false}
+							onchange={(e) => updatePreflightToggle('transparentReady', e.target.checked)}
+						/>
+						<span>Transparent-ready</span>
+					</label>
+					<label class="flex items-center gap-2 text-[11px] text-gray-800">
+						<input
+							type="checkbox"
+							checked={$designStore.genesisControls?.preflight?.spriteSafeSilhouette || false}
+							onchange={(e) => updatePreflightToggle('spriteSafeSilhouette', e.target.checked)}
+						/>
+						<span>Sprite-safe silhouette</span>
+					</label>
+				</div>
+				<p class="text-[10px] text-emerald-700">
+					Checked items are appended as mandatory preflight requirements on Genesis generate.
+				</p>
+			</div>
+			<div class="rounded border border-gray-200 bg-gray-50 p-2 text-[11px] text-gray-700 space-y-1">
+				<div class="flex items-center justify-between">
+					<p class="font-semibold text-gray-800">2) Prompt History + Favorites</p>
+					<span class="text-[10px] text-gray-500">
+						{($designStore.genesisControls?.promptHistory || []).length}/{MAX_PROMPT_HISTORY}
+					</span>
+				</div>
+				{#if ($designStore.genesisControls?.promptHistory || []).length === 0}
+					<p class="text-[10px] text-gray-500">No prompt history yet. Generate once to start tracking prompts.</p>
+				{:else}
+					<div class="space-y-1.5 max-h-[7.25rem] overflow-y-auto pr-1">
+						{#each $designStore.genesisControls.promptHistory as item (item.id)}
+							<div class="rounded border border-gray-200 bg-white p-1.5 space-y-1">
+								<p class="text-[10px] text-gray-700 max-h-8 overflow-hidden">
+									{item.prompt}
+								</p>
+								<div class="flex items-center gap-1">
+									<button
+										class="px-1.5 py-0.5 rounded border text-[10px] {item.starred ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-gray-200 bg-gray-50 text-gray-600'}"
+										onclick={() => togglePromptHistoryStar(item.id)}
+									>
+										{item.starred ? '★' : '☆'}
+									</button>
+									<button class="px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 text-[10px]" onclick={() => reusePromptHistoryItem(item.prompt)}>
+										Reuse
+									</button>
+									<button class="px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-700 text-[10px]" onclick={() => copyPromptHistoryItem(item.prompt)}>
+										Copy
+									</button>
+									<button class="ml-auto px-1.5 py-0.5 rounded border border-red-200 bg-red-50 text-red-700 text-[10px]" onclick={() => deletePromptHistoryItem(item.id)}>
+										Delete
+									</button>
+								</div>
+							</div>
+						{/each}
+					</div>
+				{/if}
+				<div class="rounded border border-gray-200 bg-white p-2 space-y-1.5">
+					<p class="font-semibold text-gray-800">3) Seed + Reproducibility Controls</p>
+					<div class="grid grid-cols-[1fr_auto] gap-2 items-center">
+						<input
+							class="w-full border rounded px-2 py-1 text-[10px]"
+							placeholder="Seed (letters, numbers, _ or -)"
+							value={$designStore.genesisControls?.seed || ''}
+							oninput={(e) => updateSeedValue(e.target.value)}
+						/>
+						<label class="flex items-center gap-1 text-[10px] border rounded px-2 py-1 bg-gray-50">
+							<input
+								type="checkbox"
+								checked={$designStore.genesisControls?.lockSeed || false}
+								onchange={(e) => updateLockSeed(e.target.checked)}
+							/>
+							<span>Lock seed</span>
+						</label>
+					</div>
+					<div class="flex items-center justify-between gap-2">
+						<p class="text-[10px] text-gray-500 truncate">
+							Last used: {$designStore.genesisControls?.lastUsedSeed || 'none'}
+						</p>
+						<button
+							class="px-1.5 py-0.5 rounded border border-blue-200 bg-blue-50 text-blue-700 text-[10px] disabled:opacity-50"
+							disabled={!$designStore.genesisControls?.lastUsedSeed}
+							onclick={() => {
+								const currentControls = $designStore.genesisControls || {};
+								updateDesignState({
+									genesisControls: {
+										...currentControls,
+										seed: currentControls.lastUsedSeed || '',
+										lockSeed: true
+									}
+								});
+								uiNote = '🎲 Seed locked to last used. Run Generate again to reproduce.';
+							}}
+						>
+							Rerun with same seed
+						</button>
+					</div>
+					<p class="text-[10px] text-gray-500">
+						Provider behavior may vary; deterministic replay is best-effort.
+					</p>
+				</div>
+				<p>4) Negative Prompt Field</p>
+			</div>
+			<p class="text-[10px] text-gray-500">
+				Implementation sequence is documented and will be delivered one feature at a time.
+			</p>
+		</div>
 	{/if}
 </div>
 
@@ -873,34 +1157,3 @@
 	</div>
 {/if}
 
-{#if showConversationModal}
-	<div
-		class="fixed inset-0 z-40 bg-black/40 flex items-stretch justify-end"
-		onclick={closeConversationModal}
-		onkeydown={(e) => { if (e.key === 'Escape') closeConversationModal(); }}
-		tabindex="0"
-		role="dialog"
-		aria-modal="true"
-	>
-		<div class="w-full max-w-md h-full bg-white border-l p-3 space-y-2 overflow-y-auto" onclick={(e) => e.stopPropagation()}>
-			<div class="flex items-center justify-between">
-				<p class="text-sm font-semibold text-gray-800">&#x1F4D2; Conversations</p>
-				<button class="text-xs text-gray-500 hover:text-gray-700" onclick={closeConversationModal}>&#x2715; Close</button>
-			</div>
-			<div class="grid grid-cols-[1fr_auto] gap-2">
-				<input class="border rounded px-2 py-1 text-xs" placeholder="Save current conversation as..." bind:value={saveName} />
-				<button class="px-3 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={saveConversation}>&#x1F4BE; Save</button>
-			</div>
-			<div class="grid grid-cols-[1fr_auto_auto] gap-2">
-				<select class="border rounded px-2 py-1 text-xs bg-white" bind:value={selectedConversationId}>
-					<option value="">&#x1F4DA; Saved conversations</option>
-					{#each $designStore.savedConversations as convo}
-						<option value={convo.id}>{convo.name} Â· {new Date(convo.createdAt).toLocaleDateString()}</option>
-					{/each}
-				</select>
-				<button class="px-2 py-1 rounded bg-gray-100 text-gray-700 text-xs border" onclick={loadConversation} disabled={!selectedConversationId}>&#x1F4C2; Load</button>
-				<button class="px-2 py-1 rounded bg-gray-100 text-red-600 text-xs border" onclick={deleteConversation} disabled={!selectedConversationId}>&#x1F5D1;&#xFE0F; Delete</button>
-			</div>
-		</div>
-	</div>
-{/if}

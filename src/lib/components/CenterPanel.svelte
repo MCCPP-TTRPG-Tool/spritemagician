@@ -2,13 +2,14 @@
 	import FileTree from './FileTree.svelte';
 	import JobsPanel from './JobsPanel.svelte';
 	import FramesPanel from './FramesPanel.svelte';
+	import FolderPicker from './FolderPicker.svelte';
 	import { browser } from '$app/environment';
 import { userFiles } from '$lib/stores/userFiles.js';
 import { updateFolderChromaKey } from '$lib/firebase/firestore.js';
 import { jobQueue } from '$lib/stores/jobQueue.js';
 	import {
 		activeAssetStore,
-		clearActiveAssetContext,
+	setActiveAssetContext,
 	setActiveAssetAutoSave,
 	setActiveAssetChromaKeyHex
 	} from '$lib/stores/activeAsset.js';
@@ -16,6 +17,7 @@ import { jobQueue } from '$lib/stores/jobQueue.js';
 	let activeTab = $state('files'); // 'files' | 'jobs' | 'frames'
 let isSavingChroma = $state(false);
 let chromaUiNote = $state('');
+let showActiveAssetFolderPicker = $state(false);
 let queue = $state([]);
 
 jobQueue.subscribe((value) => {
@@ -96,47 +98,31 @@ let generationSummaryText = $derived.by(() => {
 			isSavingChroma = false;
 		}
 	}
+
+	function onActiveAssetFolderSelect(folderId, folderPath) {
+		if (!folderId) return;
+		const folderName = String(folderPath || '')
+			.split(' / ')
+			.filter(Boolean)
+			.pop() || 'Asset';
+		setActiveAssetContext({
+			folderId,
+			folderName,
+			folderPath,
+			chromaKeyHex: $activeAssetStore?.chromaKeyHex || '#00FF00'
+		});
+		showActiveAssetFolderPicker = false;
+	}
 </script>
 
 <div class="h-full flex flex-col relative">
-	{#if $activeAssetStore.folderId}
-		<div class="px-2 py-1.5 border-b bg-emerald-50 text-[11px] text-emerald-800 flex items-center justify-between gap-2">
-			<div class="min-w-0">
-				<p class="font-semibold truncate">🎯 Active Asset: {$activeAssetStore.folderName}</p>
-				<p class="text-emerald-700/80 truncate">{$activeAssetStore.folderPath}</p>
-			</div>
-			<div class="flex items-center gap-2 shrink-0">
-				<label class="flex items-center gap-1">
-					<input
-						type="checkbox"
-						checked={$activeAssetStore.autoSave}
-						onchange={(e) => setActiveAssetAutoSave(e.target.checked)}
-					/>
-					<span>Auto-save</span>
-				</label>
-				<label class="flex items-center gap-1">
-					<span>BG</span>
-					<input
-						type="color"
-						value={$activeAssetStore.chromaKeyHex || '#00FF00'}
-						class="w-7 h-6 p-0 border rounded cursor-pointer"
-						onchange={(e) => saveAssetChromaKey(e.target.value)}
-						title="Background chroma key color"
-					/>
-				</label>
-				{#if isSavingChroma}
-					<span class="text-[10px] text-emerald-700">Saving...</span>
-				{:else if chromaUiNote}
-					<span class="text-[10px] text-emerald-700">{chromaUiNote}</span>
-				{/if}
-				<button
-					class="px-2 py-1 rounded border border-emerald-300 bg-white hover:bg-emerald-100"
-					onclick={clearActiveAssetContext}
-				>
-					Clear
-				</button>
-			</div>
-		</div>
+	{#if showActiveAssetFolderPicker}
+		<FolderPicker
+			onSelect={onActiveAssetFolderSelect}
+			onClose={() => showActiveAssetFolderPicker = false}
+			startFolderId={$activeAssetStore.folderId}
+			startFolderName={$activeAssetStore.folderName || 'Asset'}
+		/>
 	{/if}
 
 	<!-- ═══ TAB BAR ═══ -->
@@ -169,6 +155,47 @@ let generationSummaryText = $derived.by(() => {
 			🎞️ Frames
 		</button>
 	</div>
+
+	{#if $activeAssetStore.folderId}
+		<div class="px-2 py-1.5 border-b bg-emerald-50 text-[11px] text-emerald-800 flex items-center justify-between gap-2">
+			<div class="min-w-0">
+				<p class="font-semibold truncate">🎯 Active Asset: {$activeAssetStore.folderName}</p>
+				<p class="text-[10px] text-emerald-700/80">Selection is by folder.</p>
+			</div>
+			<div class="flex items-center gap-2 shrink-0">
+				<button
+					class="px-2 py-1 rounded border border-emerald-300 bg-white hover:bg-emerald-100"
+					onclick={() => showActiveAssetFolderPicker = true}
+					title="Choose a different folder as active asset"
+				>
+					Change Folder
+				</button>
+				<label class="flex items-center gap-1">
+					<input
+						type="checkbox"
+						checked={$activeAssetStore.autoSave}
+						onchange={(e) => setActiveAssetAutoSave(e.target.checked)}
+					/>
+					<span>Auto-save</span>
+				</label>
+				<label class="flex items-center gap-1">
+					<span>BG</span>
+					<input
+						type="color"
+						value={$activeAssetStore.chromaKeyHex || '#00FF00'}
+						class="w-7 h-6 p-0 border rounded cursor-pointer"
+						onchange={(e) => saveAssetChromaKey(e.target.value)}
+						title="Background chroma key color"
+					/>
+				</label>
+				{#if isSavingChroma}
+					<span class="text-[10px] text-emerald-700">Saving...</span>
+				{:else if chromaUiNote}
+					<span class="text-[10px] text-emerald-700">{chromaUiNote}</span>
+				{/if}
+			</div>
+		</div>
+	{/if}
 
 	<!-- ═══ CONTENT ═══ -->
 	<div class="flex-1 overflow-hidden">

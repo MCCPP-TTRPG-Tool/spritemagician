@@ -1,4 +1,4 @@
-﻿# 03 CURRENT STATE AUDIT
+# 03 CURRENT STATE AUDIT
 
 Last Updated: 2026-02-25
 
@@ -15,6 +15,167 @@ Last Updated: 2026-02-25
 - Center file system panel remains unchanged across modes.
 
 ## Recent Significant Change
+- Added explicit prompt-save actions in both GPT Chat and Genesis:
+  - Updated `src/lib/components/DesignPanel.svelte` to add shared `saveCurrentPromptToHistory()` action.
+  - Added `💾 Save` action in GPT Chat `Prompt Draft` controls.
+  - Added `💾 Save Prompt` button in Genesis panel below main prompt box.
+  - Both actions save current `draftPrompt` into prompt history without requiring generation.
+  - Added session log `docs/session_logs/2026-02-25_session_157.md`.
+- Implemented Genesis Controls Step 3 (Seed + Reproducibility):
+  - Updated `src/lib/stores/design.js` with persisted `genesisControls` fields:
+    - `seed`
+    - `lockSeed`
+    - `lastUsedSeed`
+  - Updated `src/lib/components/DesignPanel.svelte` to add seed controls UI in `Controls` tab:
+    - seed input
+    - lock seed toggle
+    - last used seed display
+    - `Rerun with same seed` action
+  - Updated `generateGenesis()` to apply/reuse seed via generation nonce and persist last-used seed per run.
+  - Added deterministic replay caveat text in UI.
+  - Added session log `docs/session_logs/2026-02-25_session_156.md`.
+- Updated Edit context row with new style flavor control:
+  - Updated `src/lib/components/EditPanel.svelte` to remove the `Keep Subject Uncropped ON/OFF` status message block.
+  - Added new `Style` dropdown beside `Context Type` with preset style flavor options.
+  - Wired selected style flavor into edit prompt composition as `Style Flavor` guidance.
+  - Added local persistence for selected style flavor in Edit panel state.
+  - Added session log `docs/session_logs/2026-02-25_session_155.md`.
+- Swapped center panel header row order:
+  - Updated `src/lib/components/CenterPanel.svelte` to render tab bar (`File Tree / Jobs / Frames`) above active asset header row.
+  - Result: tabs now appear on top, active asset controls appear directly below.
+  - Added session log `docs/session_logs/2026-02-25_session_154.md`.
+- Re-routed Design `Conversations` into center column takeover:
+  - Added new component `src/lib/components/DesignConversationsPanel.svelte` for conversation Save/Load/Delete UI.
+  - Updated `src/routes/+page.svelte` middle column to conditionally render `DesignConversationsPanel` instead of `CenterPanel` when triggered.
+  - Added window events for open/close control:
+    - `openDesignConversationsCenter`
+    - `closeDesignConversationsCenter`
+  - Updated `src/lib/components/DesignPanel.svelte` conversations trigger to dispatch center-open event.
+  - Removed old right-side conversations modal from `DesignPanel`.
+  - Added session log `docs/session_logs/2026-02-25_session_153.md`.
+- Added Genesis negative prompt box below main prompt input:
+  - Updated `src/lib/components/DesignPanel.svelte` to render `Negative Prompt` textarea directly under `Genesis Prompt`.
+  - Updated generation composer to append `AVOID (NEGATIVE PROMPT)` text when provided.
+  - Updated `src/lib/stores/design.js` to persist `genesisControls.negativePrompt`.
+  - Added session log `docs/session_logs/2026-02-25_session_152.md`.
+- Removed in-panel Design header and moved identity emojis to workflow tabs:
+  - Updated `src/lib/components/DesignPanel.svelte` to remove redundant top header row (`🎨 Design`).
+  - Updated `src/routes/+page.svelte` left workflow tab labels to:
+    - `🎨 Design`
+    - `✏️ Edit`
+    - `🎬 Animate`
+  - Added session log `docs/session_logs/2026-02-25_session_151.md`.
+- Moved `New Chat` beside `Conversations` under Design mode tabs:
+  - Updated `src/lib/components/DesignPanel.svelte` to remove top-header `New` button.
+  - Added `New Chat` button next to `Conversations` in the chat-only utility row below `GPT Chat / Genesis / Controls`.
+  - Added session log `docs/session_logs/2026-02-25_session_150.md`.
+- Repositioned `Conversations` button below Design mode tabs:
+  - Updated `src/lib/components/DesignPanel.svelte` to move the chat-only `Conversations` button below the `GPT Chat / Genesis / Controls` segmented row.
+  - Visibility scope remains unchanged (`$designStore.mode === 'chat'`).
+  - Added session log `docs/session_logs/2026-02-25_session_149.md`.
+- Reduced Prompt History vertical footprint in Controls tab:
+  - Updated `src/lib/components/DesignPanel.svelte` prompt history container max height from `max-h-40` to `max-h-[7.25rem]`.
+  - Result: approximately two history entries are visible at once; additional entries are scrollable.
+  - Added session log `docs/session_logs/2026-02-25_session_148.md`.
+- Scoped Design `Conversations` button visibility to GPT mode:
+  - Updated `src/lib/components/DesignPanel.svelte` so `Conversations` renders only when `$designStore.mode === 'chat'`.
+  - Result: button is hidden when `Genesis` or `Controls` tab is active.
+  - Added session log `docs/session_logs/2026-02-25_session_147.md`.
+- Implemented Genesis Controls Step 2 (Prompt History + Favorites):
+  - Updated `src/lib/stores/design.js` to persist `genesisControls.promptHistory` with item shape:
+    - `id`, `prompt`, `createdAt`, `starred` (capped list).
+  - Updated `src/lib/components/DesignPanel.svelte` to:
+    - capture prompts into history on Genesis generate submit,
+    - render history in Controls tab,
+    - support `star`, `reuse`, `copy`, and `delete` actions.
+  - Added session log `docs/session_logs/2026-02-25_session_146.md`.
+- Compacted Controls preflight checklist to two-row layout:
+  - Updated `src/lib/components/DesignPanel.svelte` preflight checklist container to a 2-column grid.
+  - Result: the four checklist toggles now display in two rows (2x2) instead of a single vertical list.
+  - Added session log `docs/session_logs/2026-02-25_session_145.md`.
+- Implemented Genesis Controls Step 1 (Preflight checklist):
+  - Updated `src/lib/stores/design.js` to persist `genesisControls.preflight` toggles:
+    - `fullBodyInFrame`, `flatBg`, `transparentReady`, `spriteSafeSilhouette`.
+  - Updated `src/lib/components/DesignPanel.svelte` Controls tab with checkbox UI for those toggles.
+  - Added preflight prompt composer wiring so checked items are appended as mandatory requirements during Genesis generation.
+  - Preserved prior generation behavior when all preflight toggles are disabled.
+  - Added session log `docs/session_logs/2026-02-25_session_144.md`.
+- Added Design `Controls` tab scaffold and Genesis controls planning docs:
+  - Updated `src/lib/components/DesignPanel.svelte` to add third segmented tab `🎛️ Controls`.
+  - Added placeholder controls panel listing:
+    - Preflight Asset Readiness Checklist
+    - Prompt History + Favorites
+    - Seed + Reproducibility Controls
+    - Negative Prompt Field
+  - Added `docs/GENESIS_CONTROLS_TAB_DESIGN_SPEC.md`.
+  - Added `docs/GENESIS_CONTROLS_IMPLEMENTATION_GUIDE.md`.
+  - Added session log `docs/session_logs/2026-02-25_session_143.md`.
+- Increased Edit prompt input height:
+  - Updated `src/lib/components/EditPanel.svelte` to change prompt textarea from `rows="2"` to `rows="5"`.
+  - Result: larger prompt box for easier editing.
+  - Added session log `docs/session_logs/2026-02-25_session_142.md`.
+- Added direct active-asset folder selector in center header:
+  - Updated `src/lib/components/CenterPanel.svelte` to add a `Change Folder` button that opens `FolderPicker`.
+  - Added helper text in the header: `Selection is by folder.`
+  - Selected folder now immediately updates active asset context (id/name/path).
+  - Added session log `docs/session_logs/2026-02-25_session_141.md`.
+- Removed Edit bottom result preview section:
+  - Updated `src/lib/components/EditPanel.svelte` to remove the in-panel `Result Preview` block rendered below the main edit controls.
+  - Result: no bottom preview/action section in Edit; panel stays focused on editing controls.
+  - Added session log `docs/session_logs/2026-02-25_session_140.md`.
+- Made active asset context persistent from center header controls:
+  - Updated `src/lib/components/CenterPanel.svelte` to remove the header `Clear` control that reset active asset context.
+  - Result: active asset remains set unless changed via asset selection flow.
+  - Added session log `docs/session_logs/2026-02-25_session_139.md`.
+- Removed redundant active-asset sublabel in center header:
+  - Updated `src/lib/components/CenterPanel.svelte` to remove the secondary line under `🎯 Active Asset` that displayed `folderPath`.
+  - Result: only the primary active asset name is shown in that header region.
+  - Added session log `docs/session_logs/2026-02-25_session_138.md`.
+- Design header cleanup:
+  - Updated `src/lib/components/DesignPanel.svelte` to remove two low-value utility buttons:
+    - `✨ Oil Painting Fantasy`
+    - `🧩 Add-ons`
+  - Purpose: reduce top-row clutter and keep focus on core actions.
+  - Added session log `docs/session_logs/2026-02-25_session_137.md`.
+- Removed redundant Edit tab messaging to reclaim space:
+  - Updated `src/lib/components/EditPanel.svelte` to remove:
+    - right-preview sync status message below primary CTA
+    - "Global guardrails active..." inline message strip
+  - Purpose: reduce clutter and keep visible area focused on actionable controls/results.
+  - Added session log `docs/session_logs/2026-02-25_session_136.md`.
+- Edit tab redundancy cleanup for visibility:
+  - Updated `src/lib/components/EditPanel.svelte` to remove redundant heading blocks and extra helper copy.
+  - Tightened prompt/context section spacing to reduce vertical bloat.
+  - Goal: keep action controls visible with less scrolling.
+  - Added session log `docs/session_logs/2026-02-25_session_135.md`.
+- Corrected Edit tab UI pass toward denser, cleaner hierarchy:
+  - Updated `src/lib/components/EditPanel.svelte` to reduce oversized spacing/card weight introduced in prior pass.
+  - Compacted mode controls, source preview area, context/prompt sections, and primary CTA scale.
+  - Added state-aware source metadata display (`sourceMetaText`) for cleaner header signaling.
+  - Preserved behavior while improving professional density/readability.
+  - Added session log `docs/session_logs/2026-02-25_session_134.md`.
+- Restored Edit left-panel result preview parity with Design:
+  - Updated `src/lib/components/EditPanel.svelte` to show generated `resultImage` in-panel (left side) instead of only right-panel availability messaging.
+  - Kept existing post-result actions and right-panel sync behavior.
+  - Improved result section card styling to match current Edit consistency pass.
+  - Added session log `docs/session_logs/2026-02-25_session_133.md`.
+- Implemented Edit tab UI consistency pass (Step 1):
+  - Updated `src/lib/components/EditPanel.svelte` to improve hierarchy, spacing rhythm, and action clarity.
+  - Introduced clearer section structure:
+    - mode control
+    - source image card
+    - context/setup card
+    - prompt composer card
+    - primary action block
+  - Added explicit disabled-reason messaging for `Apply Edit` / `Expand Image` CTA via `generateDisabledReason`.
+  - Refined preset and context copy (`Quick Direction`) and improved readability without changing generation behavior.
+  - Added session log `docs/session_logs/2026-02-25_session_132.md`.
+- Added left-panel UI consistency redesign spec (Design/Edit/Animate):
+  - New doc: `docs/LEFT_TABS_UI_CONSISTENCY_REDESIGN_SPEC.md`.
+  - Defines shared left-tab layout contract, visual hierarchy standards, and state semantics.
+  - Prioritizes `Edit` redesign while preserving current `Design` and `Animate` strengths.
+  - Includes implementation-oriented rollout phases and QA acceptance checklist.
+  - Added session log `docs/session_logs/2026-02-25_session_131.md`.
 - Cleaned active-path legacy logic after deprecated panel removal:
   - Updated `src/lib/components/JobsPanel.svelte` to use kind-based image handling for save/download flows instead of sprite-only assumptions.
   - Updated default save fallback labels from `sprite` to `image`.
