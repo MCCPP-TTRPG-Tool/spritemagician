@@ -15,6 +15,124 @@ Last Updated: 2026-02-25
 - Center file system panel remains unchanged across modes.
 
 ## Recent Significant Change
+- Removed non-functional Edit context/style controls:
+  - Updated `src/lib/components/EditPanel.svelte` to remove `Context Type` and `Style` dropdowns from Edit mode UI.
+  - Removed context/style prompt-injection logic so these no longer silently influence generated edits.
+  - Reworked `Quick Direction` into one combined preset list spanning all prior context groups, with labeled entries for clarity.
+  - Simplified default auto-edit instruction to a context-agnostic baseline.
+  - Added session log `docs/session_logs/2026-02-25_session_174.md`.
+- Fixed Edit tab clipping and consolidated the layout further:
+  - Updated `src/routes/+page.svelte` so the left tab content uses `overflow-y-auto` and can scroll instead of clipping.
+  - Updated `src/lib/components/EditPanel.svelte` with denser spacing and tighter section gaps.
+  - Consolidated `Keep Uncropped`, `Flat Background`, and `Remove Background` into one responsive row.
+  - Reduced prompt textarea rows from 4 to 3 and compiled prompt preview max height from `max-h-40` to `max-h-32`.
+  - Added session log `docs/session_logs/2026-02-25_session_173.md`.
+- Consolidated Edit panel vertical layout to keep lower controls visible:
+  - Updated `src/lib/components/EditPanel.svelte` with denser spacing and reduced panel padding.
+  - Added source preview show/hide toggle and reduced default preview height to save vertical space.
+  - Moved negative prompt + compiled prompt debug UI into a collapsed `Advanced` section.
+  - Reduced primary edit prompt textarea height from 5 rows to 4.
+  - Added session log `docs/session_logs/2026-02-25_session_172.md`.
+- Removed redundant flat-background control in Edit panel:
+  - Updated `src/lib/components/EditPanel.svelte` to remove the second flat-background action button in the controls section.
+  - `Flat Background` is now controlled only by its checkbox toggle.
+  - Added session log `docs/session_logs/2026-02-25_session_171.md`.
+- Fixed oversized GPT reference image payloads in Design chat flow:
+  - Updated `src/lib/components/DesignPanel.svelte` to aggressively optimize reference images for chat requests using progressive downscale + JPEG recompression.
+  - Replaced previous simple resize-only behavior with a target-size optimization pass.
+  - Applied optimization to:
+    - reference upload
+    - "send generated image to chat"
+    - chat send path
+    - write-prompt path
+  - Result: generated images sent back to GPT as references are much less likely to trigger `Request payload too large`.
+  - Added session log `docs/session_logs/2026-02-25_session_170.md`.
+- Reflowed Edit control layout into two-row groups:
+  - Updated `src/lib/components/EditPanel.svelte` so the four dropdowns (`Edit Mode`, `Context Type`, `Style`, `Quick Direction`) render in a 2x2 grid.
+  - Moved control toggles/buttons into a second 2x2 grid directly below (`Keep Uncropped`, `Flat Background`, `Remove Background`, and flat background enable/disable action).
+  - Updated flat background action to toggle state both on and off.
+  - Added session log `docs/session_logs/2026-02-25_session_169.md`.
+- Reordered GPT utility buttons above GPT settings row:
+  - Updated `src/lib/components/DesignPanel.svelte` so `Conversations` and `New Chat` render above `Generate Type` and `Theme Style` in GPT mode.
+  - Existing GPT-only scoping for the settings row remains unchanged.
+  - Added session log `docs/session_logs/2026-02-25_session_168.md`.
+- Reordered Design panel header controls for clearer flow:
+  - Updated `src/lib/components/DesignPanel.svelte` so the `GPT Chat / Genesis / Controls` tabs render above `Generate Type` and `Theme Style`.
+  - `Generate Type` and `Theme Style` remain scoped to GPT Chat mode only.
+  - Added session log `docs/session_logs/2026-02-25_session_167.md`.
+- Scoped top Design settings to GPT Chat mode only:
+  - Updated `src/lib/components/DesignPanel.svelte` so `Generate Type` and `Theme Style` controls render only when `$designStore.mode === 'chat'`.
+  - Result: those settings are hidden in `Genesis` and `Controls` sub-tabs to reduce UI clutter and match tab intent.
+  - Added session log `docs/session_logs/2026-02-25_session_166.md`.
+- Implemented canonical Edit prompt compiler for stronger control adherence:
+  - Updated `src/lib/components/EditPanel.svelte` so Edit requests now compile into strict ordered sections:
+    1) `CONTROL RULES (HIGHEST PRIORITY)`
+    2) `EDIT SCOPE`
+    3) `TASK`
+    4) `AVOID (MANDATORY)`
+    5) `OUTPUT REQUIREMENTS`
+    6) explicit conflict-resolution priority rule
+  - Added edit strategy selector with explicit behavior:
+    - `Fresh Transform`
+    - `Surgical Edit`
+    - `Consistency`
+  - Added merged negative constraints path:
+    - built-in anti-artifact defaults (blur, extra limbs, watermark/text artifacts, etc.)
+    - plus user-provided negative prompt lines
+  - Added Edit-mode `Negative Prompt` textarea and `Show Compiled Prompt` preview panel.
+  - Changed flat-background helper from freeform prompt append to structured control (`enforceFlatBackground`) to avoid instruction collisions.
+  - Persisted new Edit state fields in local storage:
+    - `editStrategy`
+    - `enforceFlatBackground`
+    - `negativePrompt`
+  - Added session log `docs/session_logs/2026-02-25_session_165.md`.
+- Added verified Nano Banana prompting guide from official Gemini docs:
+  - Added `docs/NANO_BANANA_PROMPTING_GUIDE.md` consolidating concrete guidance from:
+    - `https://ai.google.dev/gemini-api/docs/image-generation`
+    - `https://ai.google.dev/gemini-api/docs/prompting-strategies`
+    - `https://ai.google.dev/gemini-api/docs/models`
+  - Captured documented behaviors for multi-turn image editing, reference image usage, semantic masking pattern, consistency workflow, and prompt-structure best practices.
+  - Added reusable templates tailored to SpriteMagician control precedence and fresh-shot edits.
+  - Added session log `docs/session_logs/2026-02-25_session_164.md`.
+- Strengthened Edit control precedence for fresh-shot behavior:
+  - Updated `src/lib/components/EditPanel.svelte` prompt composer with explicit priority:
+    1) control rules (context/style/quick direction)
+    2) freeform instruction text
+  - Added explicit conflict handling so control rules win.
+  - Added `FRESH-SHOT RULE` to reduce style/momentum carryover from source vibe.
+  - Updated style wording so selected non-default style is authoritative.
+  - Added session log `docs/session_logs/2026-02-25_session_163.md`.
+- Fixed Edit control application reliability (Context/Style/Quick Direction):
+  - Updated `src/lib/components/EditPanel.svelte` prompt composition to inject a mandatory `CONTROL RULES` block each generation run.
+  - Block now explicitly includes selected context type, style flavor (if non-default), and quick direction preset text (if selected).
+  - Quick Direction dropdown no longer appends repeated text directly into freeform prompt, reducing stale/conflicting instructions.
+  - Adjusted style-preservation wording to avoid overriding selected style flavor.
+  - Added session log `docs/session_logs/2026-02-25_session_162.md`.
+- Fixed Jobs history loss for Design/Edit completions:
+  - Root cause: completed image jobs from `DesignPanel` and `EditPanel` were not persisted to `completedJobs` (IndexedDB-backed), only marked in in-memory `jobQueue`.
+  - Updated `src/lib/components/DesignPanel.svelte` and `src/lib/components/EditPanel.svelte` to call `completedJobs.addSprite(...)` on successful generation/edit completion.
+  - Result: completed Design/Edit jobs now show in Jobs completed history and persist across refresh.
+  - Added session log `docs/session_logs/2026-02-25_session_161.md`.
+- Reorganized Edit controls into requested two-column grouping:
+  - Updated `src/lib/components/EditPanel.svelte` so left column stacks dropdowns:
+    - `Context Type`
+    - `Style`
+    - `Quick Direction`
+  - Right column now stacks:
+    - `Keep Uncropped`
+    - `Background Color`
+    - `Remove Background`
+  - Removed separate shortcut chip row (`Front T-Pose` / `Flat BG`) to keep Quick Direction as the primary preset surface.
+  - Added session log `docs/session_logs/2026-02-25_session_160.md`.
+- Made Edit Quick Direction fully automatic:
+  - Updated `src/lib/components/EditPanel.svelte` so Quick Direction preset selection auto-applies on dropdown change.
+  - Removed extra `Apply Preset` button from Quick Direction row.
+  - Context Type and Style remain automatic prompt contributors at generate time.
+  - Added session log `docs/session_logs/2026-02-25_session_159.md`.
+- Increased GPT chat and prompt draft heights in Design chat mode:
+  - Updated `src/lib/components/DesignPanel.svelte` chat message viewport from `h-32` to `h-36`.
+  - Updated chat `Prompt Draft` textarea from `rows="3"` to `rows="4"`.
+  - Added session log `docs/session_logs/2026-02-25_session_158.md`.
 - Added explicit prompt-save actions in both GPT Chat and Genesis:
   - Updated `src/lib/components/DesignPanel.svelte` to add shared `saveCurrentPromptToHistory()` action.
   - Added `💾 Save` action in GPT Chat `Prompt Draft` controls.

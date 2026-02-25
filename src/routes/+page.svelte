@@ -737,7 +737,7 @@
 				</button>
 				</div>
 
-				<div class="p-2 flex-1 overflow-hidden">
+				<div class="p-2 flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
 					{#if activeTab === 'design'}
 						<DesignPanel />
 					{:else if activeTab === 'edit'}

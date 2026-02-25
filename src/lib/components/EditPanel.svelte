@@ -2,6 +2,7 @@
 	import { browser } from '$app/environment';
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -22,6 +23,7 @@
 	let imgHeight = $state(0);
 	let lightboxSrc = $state(null);
 	let queueJobId = $state(null);
+	let showSourcePreview = $state(true);
 	
 	// Save to folder
 	let showFolderPicker = $state(false);
@@ -46,11 +48,12 @@
 				if (typeof parsed?.expandDirection === 'string') expandDirection = parsed.expandDirection;
 				if (Number.isFinite(parsed?.expandAmount)) expandAmount = parsed.expandAmount;
 				if (typeof parsed?.resultImage === 'string') resultImage = parsed.resultImage;
-				if (typeof parsed?.editContext === 'string') editContext = parsed.editContext;
-				if (typeof parsed?.selectedStyleFlavor === 'string') selectedStyleFlavor = parsed.selectedStyleFlavor;
 				if (typeof parsed?.selectedPresetId === 'string') selectedPresetId = parsed.selectedPresetId;
+				if (typeof parsed?.editStrategy === 'string') editStrategy = parsed.editStrategy;
 				if (typeof parsed?.enforceUncropped === 'boolean') enforceUncropped = parsed.enforceUncropped;
+				if (typeof parsed?.enforceFlatBackground === 'boolean') enforceFlatBackground = parsed.enforceFlatBackground;
 				if (typeof parsed?.removeBackgroundSetting === 'boolean') removeBackgroundSetting = parsed.removeBackgroundSetting;
+				if (typeof parsed?.negativePrompt === 'string') negativePrompt = parsed.negativePrompt;
 				if (Number.isFinite(parsed?.imgWidth)) imgWidth = parsed.imgWidth;
 				if (Number.isFinite(parsed?.imgHeight)) imgHeight = parsed.imgHeight;
 			}
@@ -118,50 +121,34 @@
 		]
 	};
 
-	const EDIT_STYLE_FLAVORS = [
-		{ id: 'none', label: 'Default (no style boost)', prompt: '' },
-		{
-			id: 'cinematic',
-			label: '🎬 Cinematic',
-			prompt: 'cinematic composition, controlled contrast, dramatic but clean lighting, premium concept-art finish'
-		},
-		{
-			id: 'painterly',
-			label: '🖌️ Painterly',
-			prompt: 'painterly brushwork, rich texture, organic strokes, handcrafted illustrative finish'
-		},
-		{
-			id: 'pixel',
-			label: '🧩 Pixel-art ready',
-			prompt: 'sprite-readability emphasis, simplified shape clusters, clean edges, controlled pixel-art friendly detailing'
-		},
-		{
-			id: 'anime',
-			label: '✨ Anime stylized',
-			prompt: 'anime-influenced stylization, clean line hierarchy, cel-friendly shading logic, crisp silhouette readability'
-		},
-		{
-			id: 'dark_fantasy',
-			label: '🌑 Dark fantasy',
-			prompt: 'dark fantasy mood, gritty material treatment, moody atmosphere, strong focal readability'
-		}
+	let selectedPresetId = $state(null);
+	let editStrategy = $state('fresh_transform');
+	let enforceUncropped = $state(true);
+	let enforceFlatBackground = $state(false);
+	let removeBackgroundSetting = $state(true);
+	let negativePrompt = $state('');
+	let showCompiledPrompt = $state(false);
+
+	const DEFAULT_NEGATIVE_CONSTRAINTS = [
+		'blurry output',
+		'low-resolution details',
+		'extra limbs or extra fingers',
+		'cropped body parts',
+		'deformed anatomy',
+		'watermarks or signatures',
+		'unwanted text artifacts',
+		'noisy background clutter'
 	];
 
-	let editContext = $state('character');
-	let selectedStyleFlavor = $state('none');
-	let selectedPresetId = $state(null);
-	let enforceUncropped = $state(true);
-	let removeBackgroundSetting = $state(true);
-
-	let activePresets = $derived(CONTEXT_PRESETS[editContext] || []);
-	let isCharacterContext = $derived(editContext === 'character');
-
-	$effect(() => {
-		selectedPresetId = null;
-		if (editContext !== 'character' && mode === 'edit' && editPrompt.trim() === '') {
-			// Keep prompt empty unless user applies a preset
-		}
-	});
+	let quickDirectionOptions = $derived.by(() =>
+		EDIT_CONTEXTS.flatMap((ctx) =>
+			(CONTEXT_PRESETS[ctx.id] || []).map((preset) => ({
+				id: `${ctx.id}::${preset.id}`,
+				label: `${ctx.label} - ${preset.label}`,
+				prompt: preset.prompt
+			}))
+		)
+	);
 
 	function handleFileChange(e) {
 		const file = e.target.files?.[0];
@@ -217,30 +204,8 @@
 		onChange?.(null);
 	}
 
-	function appendPromptInstruction(instruction) {
-		const next = (instruction || '').trim();
-		if (!next) return;
-		const current = (editPrompt || '').trim();
-		if (!current) {
-			editPrompt = next;
-			return;
-		}
-		const currentLower = current.toLowerCase();
-		const nextLower = next.toLowerCase();
-		if (currentLower.includes(nextLower)) return;
-		editPrompt = `${current}\n${next}`;
-	}
-
-
-	function applyPreset(preset) {
-		if (!preset?.prompt) return;
-		selectedPresetId = preset.id;
-		appendPromptInstruction(preset.prompt);
-	}
-
-	function applySelectedPreset() {
-		const preset = activePresets.find((p) => p.id === selectedPresetId);
-		if (preset) applyPreset(preset);
+	function onQuickDirectionChange(nextId) {
+		selectedPresetId = nextId;
 	}
 
 	$effect(() => {
@@ -255,11 +220,12 @@
 					expandDirection,
 					expandAmount,
 					resultImage,
-					editContext,
-					selectedStyleFlavor,
 					selectedPresetId,
+					editStrategy,
 					enforceUncropped,
+					enforceFlatBackground,
 					removeBackgroundSetting,
+					negativePrompt,
 					imgWidth,
 					imgHeight
 				})
@@ -273,62 +239,95 @@
 		return $activeAssetStore?.chromaKeyHex || '#00FF00';
 	}
 
-	function applyFlatBackgroundPreset() {
-		const hex = getActiveChromaKeyHex();
-		appendPromptInstruction(`set the background to a perfectly flat solid color (${hex}), keep subject edges clean and fully separated`);
-	}
-
-	function buildGlobalGuardrails() {
-		const rules = [];
-
-		if (enforceUncropped) {
-			rules.push(`CRITICAL FRAMING RULES (MANDATORY):
-- Entire subject must be fully visible and uncropped.
-- Keep margin around the subject silhouette.
-- Do not cut off any key parts of the subject.
-- If any instruction implies close-up or crop, ignore that and keep full-subject framing.`);
-		}
-
-		if (isCharacterContext && enforceUncropped) {
-			rules.push(`CHARACTER-SPECIFIC FRAMING RULES:
-- Show full body from head to toe, including hands and feet.
-- Do not cut off limbs, weapons, hair, tails, wings, or accessories.
-- Maintain character identity, outfit, anatomy, and proportions.`);
-		}
-
-		if (removeBackgroundSetting) {
-			const chromaHex = getActiveChromaKeyHex();
-			rules.push(`BACKGROUND RULE (MANDATORY):
-- Remove background and environmental clutter.
-- Keep only the isolated subject.
-- Output should have a solid chroma key background (${chromaHex}).
-- Reserve ${chromaHex} for background only; do not use that exact color on the subject.`);
-		}
-
-		return rules.join('\n\n');
-	}
-
 	function buildAutoEditInstruction() {
-		if (editContext === 'character') {
-			return 'isolate the character as the main subject and keep pose readability high';
-		}
-		if (editContext === 'building') {
-			return 'isolate the building structure as the main subject and preserve architectural readability';
-		}
-		if (editContext === 'item') {
-			return 'isolate the item as the main subject and improve shape/material readability';
-		}
-		if (editContext === 'asset') {
-			return 'isolate the asset as the main subject and preserve form clarity';
-		}
-		if (editContext === 'scenery') {
-			return 'isolate the primary scenery subject and preserve composition readability';
-		}
-		if (editContext === 'effects') {
-			return 'isolate the effect subject and keep effect shape and intensity readable';
-		}
-		return 'isolate the subject and keep it fully readable';
+		return 'isolate the primary subject and keep output readable.';
 	}
+
+	function getQuickDirectionPrompt() {
+		return quickDirectionOptions.find((preset) => preset.id === selectedPresetId)?.prompt || '';
+	}
+
+	function buildControlRulesBlock() {
+		const quickDirectionInstruction = getQuickDirectionPrompt();
+		const chromaHex = getActiveChromaKeyHex();
+		const lines = [
+			`- Edit Strategy (MANDATORY): ${editStrategy}.`,
+			quickDirectionInstruction
+				? `- Quick Direction (MANDATORY): ${quickDirectionInstruction}.`
+				: '- Quick Direction: none selected.',
+			enforceUncropped
+				? '- Framing (MANDATORY): subject must be fully visible and uncropped with margin around silhouette.'
+				: '- Framing: cropping allowed only if required by explicit user task.',
+			enforceFlatBackground
+				? `- Background (MANDATORY): use a perfectly flat solid chroma background (${chromaHex}), clean edges, no gradients.`
+				: '- Background: no forced flat background.',
+			removeBackgroundSetting
+				? `- Subject Isolation (MANDATORY): isolate subject and remove environment/background clutter; reserve ${chromaHex} for background only.`
+				: '- Subject Isolation: keep or modify existing background as needed.'
+		];
+		return `CONTROL RULES (HIGHEST PRIORITY):\n${lines.join('\n')}`;
+	}
+
+	function buildEditScopeBlock() {
+		if (editStrategy === 'surgical_edit') {
+			return `EDIT SCOPE:
+- Change only what is explicitly requested.
+- Keep all non-targeted areas exactly the same (composition, lighting, unaffected details).`;
+		}
+		if (editStrategy === 'consistency') {
+			return `EDIT SCOPE:
+- Preserve subject identity and key silhouette consistency.
+- Apply requested changes while minimizing unrelated drift.`;
+		}
+		return `EDIT SCOPE:
+- Treat this as a fresh-shot transform.
+- Do not preserve unintended style momentum from previous edits unless explicitly requested.`;
+	}
+
+	function buildAvoidBlock() {
+		const userAvoids = (negativePrompt || '')
+			.split('\n')
+			.map((item) => item.trim())
+			.filter(Boolean);
+		const merged = [...DEFAULT_NEGATIVE_CONSTRAINTS, ...userAvoids];
+		const unique = [...new Set(merged.map((item) => item.toLowerCase()))];
+		return `AVOID (MANDATORY):\n- ${unique.join('\n- ')}`;
+	}
+
+	function buildOutputRequirementsBlock() {
+		const chromaHex = getActiveChromaKeyHex();
+		const lines = [
+			'- Keep subject identity and silhouette readability unless explicitly changed.',
+			'- Output must be production-ready and artifact-free.',
+			enforceUncropped
+				? '- Full-subject framing required: do not cut off key body/asset parts.'
+				: '- Framing can vary based on task.',
+			enforceFlatBackground
+				? `- Use flat ${chromaHex} background only; keep separation clean for extraction.`
+				: '- Background style follows requested task.',
+			removeBackgroundSetting
+				? '- Subject extraction quality should be clean and unambiguous.'
+				: '- Maintain coherent background quality.'
+		];
+		return `OUTPUT REQUIREMENTS:\n${lines.join('\n')}`;
+	}
+
+	function buildCompiledEditPrompt() {
+		const taskInstruction = (editPrompt || '').trim() || buildAutoEditInstruction();
+		return [
+			buildControlRulesBlock(),
+			buildEditScopeBlock(),
+			`TASK:\n${taskInstruction}`,
+			buildAvoidBlock(),
+			buildOutputRequirementsBlock(),
+			`PRIORITY RULE:\nIf any instruction conflicts, obey CONTROL RULES first, then EDIT SCOPE, then TASK.`
+		].join('\n\n');
+	}
+
+	let compiledEditPrompt = $derived.by(() => {
+		if (mode !== 'edit') return '';
+		return buildCompiledEditPrompt();
+	});
 
 	async function buildExpandedImage() {
 		// If source image is a URL (not data URL), proxy it through our API to avoid CORS
@@ -453,7 +452,7 @@ let sourceMetaText = $derived.by(() => {
 			type: mode === 'edit' ? 'Edit' : 'Expand',
 			kind: 'image',
 			origin: 'edit',
-			name: editContext || 'image',
+			name: 'image',
 			status: 'processing',
 			progress: 10,
 			message: mode === 'edit' ? 'Applying edit...' : 'Preparing expansion...'
@@ -480,16 +479,7 @@ let sourceMetaText = $derived.by(() => {
 				}
 				promptToSend = `OUTPAINTING: The provided image has gray (#C0C0C0) border areas where the canvas was expanded. The original artwork is intact in its position. Generate new content ONLY in the gray areas to seamlessly extend the scene. Keep the original pixels untouched. Expansion direction: ${expandDirection}. What to generate in the new space: ${editPrompt}`;
 			} else {
-				const effectiveInstruction = editPrompt.trim() || buildAutoEditInstruction();
-				const contextInstruction = `Context: ${editContext}.`;
-				const styleFlavorInstruction =
-					EDIT_STYLE_FLAVORS.find((item) => item.id === selectedStyleFlavor)?.prompt || '';
-				const guardrail = buildGlobalGuardrails();
-				const guardrailBlock = guardrail ? `\n\n${guardrail}` : '';
-				const styleBlock = styleFlavorInstruction ? ` Style Flavor: ${styleFlavorInstruction}.` : '';
-				promptToSend = `Edit this image according to these instructions: ${effectiveInstruction}. ${contextInstruction}${styleBlock}${guardrailBlock}
-
-Keep everything not explicitly mentioned unchanged. Maintain the same art style, lighting, and quality.`;
+				promptToSend = compiledEditPrompt;
 			}
 
 			const res = await fetch('/api/edit-image', {
@@ -509,6 +499,11 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 				jobQueue.updateJob(queueJobId, { progress: 90, message: 'Finalizing image...' });
 			}
 			resultImage = data.image;
+			await completedJobs.addSprite({
+				name: mode === 'edit' ? 'Edit Result' : 'Expand Result',
+				image: data.image,
+				description: (editPrompt || '').slice(0, 240)
+			});
 			onChange?.(data.image);
 			if ($activeAssetStore?.autoSave && $activeAssetStore?.folderId) {
 				try {
@@ -634,7 +629,7 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 	}
 </script>
 
-<div class="space-y-2">
+<div class="space-y-1">
 	<div class="rounded-lg border border-gray-200 bg-gray-50 p-0.5">
 		<div class="grid grid-cols-2 gap-1">
 			<button
@@ -652,12 +647,22 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 		</div>
 	</div>
 
-	<div class="rounded-lg border border-gray-200 bg-white p-2.5 space-y-1.5">
+	<div class="rounded-lg border border-gray-200 bg-white p-1.5 space-y-1">
 		<div class="flex items-center justify-between">
 			<p class="text-sm font-semibold text-gray-800">&#x1F5BC;&#xFE0F; Source Image</p>
-			{#if sourceMetaText}
-				<p class="text-xs text-gray-500">{sourceMetaText}</p>
-			{/if}
+			<div class="flex items-center gap-2">
+				{#if sourceMetaText}
+					<p class="text-xs text-gray-500">{sourceMetaText}</p>
+				{/if}
+				{#if sourceImage}
+					<button
+						class="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100"
+						onclick={() => (showSourcePreview = !showSourcePreview)}
+					>
+						{showSourcePreview ? 'Hide' : 'Show'}
+					</button>
+				{/if}
+			</div>
 		</div>
 
 		{#if !sourceImage}
@@ -672,7 +677,7 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 				<p class="text-sm text-gray-600 font-medium">Drop an image or click to upload</p>
 				<p class="text-xs text-gray-400 mt-1">PNG, JPG, WebP supported</p>
 			</label>
-		{:else}
+		{:else if showSourcePreview}
 			<div class="relative rounded-md border border-gray-200 bg-gray-300 p-0.5">
 				<button class="w-full cursor-zoom-in" onclick={() => lightboxSrc = sourceImage}>
 					<div class="w-full rounded flex items-center justify-center">
@@ -689,6 +694,10 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 					class="absolute top-2 right-2 w-7 h-7 bg-red-500 text-white rounded-full text-sm flex items-center justify-center hover:bg-red-600"
 					title="Remove image"
 				>✕</button>
+			</div>
+		{:else}
+			<div class="rounded border border-gray-200 bg-gray-50 px-2 py-1.5 text-[11px] text-gray-600">
+				Source preview hidden.
 			</div>
 		{/if}
 	</div>
@@ -737,101 +746,89 @@ Keep everything not explicitly mentioned unchanged. Maintain the same art style,
 
 	{#if sourceImage}
 		{#if mode === 'edit'}
-			<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-1.5">
-				<div class="grid grid-cols-2 gap-3">
+			<div class="rounded-lg border border-gray-200 bg-white p-1.5 space-y-1">
+				<div class="grid grid-cols-2 gap-1.5">
 					<div>
-						<label for="edit-context" class="block text-xs font-medium text-gray-700 mb-1">Context Type</label>
+						<label for="edit-strategy" class="block text-[11px] font-medium text-gray-700 mb-0.5">Edit Mode</label>
 						<select
-							id="edit-context"
-							bind:value={editContext}
+							id="edit-strategy"
+							bind:value={editStrategy}
 							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
 						>
-							{#each EDIT_CONTEXTS as ctx}
-								<option value={ctx.id}>{ctx.label}</option>
-							{/each}
+							<option value="fresh_transform">Fresh Transform</option>
+							<option value="surgical_edit">Surgical Edit (change only target)</option>
+							<option value="consistency">Consistency (preserve identity)</option>
 						</select>
 					</div>
 					<div>
-						<label for="edit-style" class="block text-xs font-medium text-gray-700 mb-1">Style</label>
+						<label for="edit-preset" class="block text-[11px] font-medium text-gray-700 mb-0.5">Quick Direction</label>
 						<select
-							id="edit-style"
-							bind:value={selectedStyleFlavor}
+							id="edit-preset"
+							bind:value={selectedPresetId}
 							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
+							onchange={(e) => onQuickDirectionChange(e.target.value)}
 						>
-							{#each EDIT_STYLE_FLAVORS as styleItem}
-								<option value={styleItem.id}>{styleItem.label}</option>
+							<option value="">Choose preset...</option>
+							{#each quickDirectionOptions as preset}
+								<option value={preset.id}>{preset.label}</option>
 							{/each}
 						</select>
 					</div>
 				</div>
 
-				<div class="grid grid-cols-2 gap-3">
-					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1.5 bg-white">
+				<div class="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1 bg-white">
 						<input type="checkbox" bind:checked={enforceUncropped} class="w-3.5 h-3.5" />
 						<span>&#x1F9CD; Keep Uncropped</span>
 					</label>
-					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1.5 bg-white">
+					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1 bg-white">
+						<input type="checkbox" bind:checked={enforceFlatBackground} class="w-3.5 h-3.5" />
+						<span>&#x1F7E9; Flat Background ({getActiveChromaKeyHex()})</span>
+					</label>
+					<label class="flex items-center gap-1.5 text-xs border rounded px-2 py-1 bg-white">
 						<input type="checkbox" bind:checked={removeBackgroundSetting} class="w-3.5 h-3.5" />
 						<span>&#x1F5D1;&#xFE0F; Remove Background</span>
 					</label>
 				</div>
 
-				<div class="grid grid-cols-[1fr_auto] gap-2 items-end">
-					<div>
-						<label for="edit-preset" class="block text-xs font-medium text-gray-700 mb-1">Quick Direction</label>
-						<select
-							id="edit-preset"
-							bind:value={selectedPresetId}
-							class="w-full px-2 py-1.5 text-xs border rounded bg-white"
-						>
-							<option value="">Choose preset...</option>
-							{#each activePresets as preset}
-								<option value={preset.id}>{preset.label}</option>
-							{/each}
-						</select>
-					</div>
-					<button
-						class="px-2.5 py-1.5 text-xs rounded border border-blue-300 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:border-gray-200 disabled:bg-gray-100 disabled:text-gray-400"
-						onclick={applySelectedPreset}
-						disabled={!selectedPresetId}
-					>
-						Apply Preset
-					</button>
-				</div>
-
-				<div class="grid grid-cols-2 gap-2">
-					{#if isCharacterContext}
-						<button
-							class="w-full px-2 py-1.5 text-xs rounded border border-blue-300 bg-blue-50 text-blue-700 text-left hover:bg-blue-100"
-							onclick={() => {
-								const tPosePreset = activePresets.find((p) => p.id === 'tposefront');
-								if (tPosePreset) applyPreset(tPosePreset);
-							}}
-						>
-							&#x1F9CD; Front T-Pose
-						</button>
-					{/if}
-					<button
-						class="w-full px-2 py-1.5 text-xs rounded border border-emerald-300 bg-emerald-50 text-emerald-700 text-left hover:bg-emerald-100"
-						onclick={applyFlatBackgroundPreset}
-					>
-						&#x1F7E9; Flat BG ({getActiveChromaKeyHex()})
-					</button>
-				</div>
-
 			</div>
 		{/if}
 
-		<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-1">
+		<div class="rounded-lg border border-gray-200 bg-white p-1.5 space-y-1">
 			<textarea
 				id="edit-prompt"
 				bind:value={editPrompt}
 				placeholder={mode === 'edit'
-					? 'Optional: add extra instructions, or leave blank to use context + guardrails'
+					? 'Describe target result. Controls above stay authoritative.'
 					: 'e.g. "Show the full body with legs and feet on a stone floor"'}
 				class="w-full px-2 py-1.5 text-xs border rounded resize-none"
-				rows="5"
+				rows="3"
 			></textarea>
+			{#if mode === 'edit'}
+				<details class="rounded border border-gray-200 bg-gray-50 p-1">
+					<summary class="cursor-pointer text-[11px] text-gray-700 select-none">
+						Advanced (negative prompt + compiled prompt)
+					</summary>
+					<div class="mt-1 space-y-1">
+						<textarea
+							id="edit-negative-prompt"
+							bind:value={negativePrompt}
+							placeholder="Avoid (optional): e.g. blurry, extra limbs, watermark text, noisy background"
+							class="w-full px-2 py-1 text-xs border rounded resize-none"
+							rows="2"
+						></textarea>
+						<button
+							class="w-full px-2 py-1 text-xs border rounded bg-white hover:bg-gray-100 text-gray-700"
+							onclick={() => showCompiledPrompt = !showCompiledPrompt}
+						>
+							{showCompiledPrompt ? 'Hide' : 'Show'} Compiled Prompt
+						</button>
+						{#if showCompiledPrompt}
+							<pre class="max-h-32 overflow-y-auto whitespace-pre-wrap break-words rounded border border-gray-200 bg-white p-2 text-[11px] text-gray-700">{compiledEditPrompt}</pre>
+						{/if}
+					</div>
+				</details>
+			{/if}
 		</div>
 
 		<div class="space-y-2">

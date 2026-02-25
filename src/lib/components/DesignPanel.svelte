@@ -1,8 +1,9 @@
-﻿<script>
+<script>
 	import { tick } from 'svelte';
 	import { get } from 'svelte/store';
 	import { projectStore } from '$lib/stores/project.js';
 	import { jobQueue } from '$lib/stores/jobQueue.js';
+	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { setActiveAssetContext } from '$lib/stores/activeAsset.js';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
@@ -93,20 +94,54 @@
 		});
 	}
 
-	async function resizeReferenceImage(dataUrl, maxEdge = 1024, quality = 0.88) {
+	function estimateDataUrlBytes(dataUrl) {
+		if (typeof dataUrl !== 'string') return 0;
+		const comma = dataUrl.indexOf(',');
+		if (comma === -1) return 0;
+		const base64 = dataUrl.slice(comma + 1);
+		return Math.floor((base64.length * 3) / 4);
+	}
+
+	async function optimizeReferenceImage(dataUrl, options = {}) {
+		const {
+			maxEdges = [1024, 896, 768, 640, 512],
+			qualities = [0.86, 0.78, 0.7, 0.62, 0.55],
+			targetBytes = 850 * 1024
+		} = options;
+		if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return dataUrl;
 		const img = await loadImageElement(dataUrl);
-		const width = img.naturalWidth || img.width;
-		const height = img.naturalHeight || img.height;
-		if (!width || !height) return dataUrl;
-		const scale = Math.min(1, maxEdge / Math.max(width, height));
-		if (scale >= 1) return dataUrl;
-		const canvas = document.createElement('canvas');
-		canvas.width = Math.round(width * scale);
-		canvas.height = Math.round(height * scale);
-		const ctx = canvas.getContext('2d');
-		if (!ctx) return dataUrl;
-		ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-		return canvas.toDataURL('image/jpeg', quality);
+		const sourceWidth = img.naturalWidth || img.width;
+		const sourceHeight = img.naturalHeight || img.height;
+		if (!sourceWidth || !sourceHeight) return dataUrl;
+
+		let bestCandidate = dataUrl;
+		let bestBytes = estimateDataUrlBytes(dataUrl);
+
+		for (const edge of maxEdges) {
+			const scale = Math.min(1, edge / Math.max(sourceWidth, sourceHeight));
+			const width = Math.max(1, Math.round(sourceWidth * scale));
+			const height = Math.max(1, Math.round(sourceHeight * scale));
+			const canvas = document.createElement('canvas');
+			canvas.width = width;
+			canvas.height = height;
+			const ctx = canvas.getContext('2d');
+			if (!ctx) continue;
+			ctx.drawImage(img, 0, 0, width, height);
+
+			for (const quality of qualities) {
+				const candidate = canvas.toDataURL('image/jpeg', quality);
+				const bytes = estimateDataUrlBytes(candidate);
+				if (bytes < bestBytes) {
+					bestCandidate = candidate;
+					bestBytes = bytes;
+				}
+				if (bytes <= targetBytes) {
+					return candidate;
+				}
+			}
+		}
+
+		return bestCandidate;
 	}
 
 	async function handleChatReferenceUpload(event) {
@@ -118,7 +153,7 @@
 				throw new Error('Please select an image file.');
 			}
 			const dataUrl = await fileToDataUrl(file);
-			const optimized = await resizeReferenceImage(dataUrl);
+			const optimized = await optimizeReferenceImage(dataUrl);
 			updateDesignState({ chatReferenceImage: optimized });
 			uiNote = '\u{1F5BC}\uFE0F GPT reference image attached.';
 		} catch (err) {
@@ -424,13 +459,22 @@
 
 	async function sendChat() {
 		const typedText = userInput.trim();
-		const referenceImage = $designStore.chatReferenceImage;
+		let referenceImage = $designStore.chatReferenceImage;
 		if ((!typedText && !referenceImage) || isChatting || isWritingPrompt) return;
 		const text = typedText || 'Use this attached reference image for the direction we want to achieve.';
 
 		clearTransientMessages();
 		isChatting = true;
 		userInput = '';
+		if (referenceImage) {
+			try {
+				const optimizedReference = await optimizeReferenceImage(referenceImage);
+				referenceImage = optimizedReference;
+				updateDesignState({ chatReferenceImage: optimizedReference });
+			} catch {
+				// keep original if optimization fails
+			}
+		}
 
 		const before = get(designStore);
 		appendDesignMessage({ role: 'user', content: text, image: referenceImage || null });
@@ -472,6 +516,16 @@
 
 		clearTransientMessages();
 		isWritingPrompt = true;
+		let referenceImage = state.chatReferenceImage;
+		if (referenceImage) {
+			try {
+				const optimizedReference = await optimizeReferenceImage(referenceImage);
+				referenceImage = optimizedReference;
+				updateDesignState({ chatReferenceImage: optimizedReference });
+			} catch {
+				// keep original if optimization fails
+			}
+		}
 
 		try {
 			const response = await fetchWithTimeout(
@@ -483,7 +537,7 @@
 						mode: 'draft_prompt',
 						messages: state.messages,
 						userMessage: '',
-						referenceImage: state.chatReferenceImage,
+						referenceImage,
 						finalPrompt: state.draftPrompt,
 						contentPreset: state.contentPreset,
 						stylePreset: state.stylePreset
@@ -585,6 +639,11 @@
 			const data = await response.json();
 			if (!response.ok) throw new Error(data.error || 'Genesis generation failed');
 			updateDesignState({ generatedImage: data.image });
+			await completedJobs.addSprite({
+				name: `Genesis ${state.contentPreset || 'Image'}`,
+				image: data.image,
+				description: (state.draftPrompt || '').slice(0, 240)
+			});
 			uiNote = '\u{1F389} Genesis image generated.';
 			if (queueJobId) {
 				jobQueue.updateJob(queueJobId, {
@@ -680,7 +739,18 @@
 	async function sendGeneratedToChat() {
 		const state = get(designStore);
 		if (!state.generatedImage || isChatting || isWritingPrompt) return;
-		const referenceImage = state.generatedImage;
+		let referenceImage = state.generatedImage;
+		try {
+			const optimizedReference = await optimizeReferenceImage(state.generatedImage);
+			const beforeBytes = estimateDataUrlBytes(state.generatedImage);
+			const afterBytes = estimateDataUrlBytes(optimizedReference);
+			referenceImage = optimizedReference;
+			if (afterBytes < beforeBytes) {
+				uiNote = `🗜️ Optimized reference image for chat (${Math.round(afterBytes / 1024)} KB).`;
+			}
+		} catch {
+			// fall back to original generated image if optimization fails
+		}
 
 		const text = state.draftPrompt?.trim()
 			? `Help me refine this prompt based on the latest generated image:\n\n${state.draftPrompt}\n\nAsk targeted questions and propose stronger revised prompt options.`
@@ -724,34 +794,6 @@
 </script>
 
 <div class="h-full flex flex-col gap-1.5 text-sm">
-	<div class="grid grid-cols-2 gap-2">
-		<div>
-			<p class="text-[10px] text-gray-500 mb-1">&#x1F3F7;&#xFE0F; Generate Type</p>
-			<select
-				class="w-full border rounded px-2 py-1 text-xs bg-white"
-				value={$designStore.contentPreset}
-				onchange={(e) => updateDesignState({ contentPreset: e.target.value })}
-			>
-				<option value="character">&#x1F9D9; Character</option>
-				<option value="building">&#x1F3F0; Building</option>
-				<option value="item">&#x1F5E1;&#xFE0F; Item</option>
-				<option value="asset">&#x1F9F1; Asset</option>
-				<option value="scenery">&#x1F332; Scenery</option>
-				<option value="effects">&#x2728; Special Effects</option>
-			</select>
-		</div>
-		<div>
-			<p class="text-[10px] text-gray-500 mb-1">&#x1F9F5; Theme Style</p>
-			<select
-				class="w-full border rounded px-2 py-1 text-xs bg-white"
-				value={$designStore.stylePreset}
-				onchange={(e) => updateDesignState({ stylePreset: e.target.value })}
-			>
-				<option value="oil_painting_fantasy">&#x1F5BC;&#xFE0F; Oil Painting Fantasy</option>
-			</select>
-		</div>
-	</div>
-
 	<div class="flex gap-1 rounded-lg border p-1 bg-gray-50">
 		<button
 			class="flex-1 rounded px-2 py-1 text-xs font-medium {$designStore.mode === 'chat' ? 'bg-white text-blue-600 shadow' : 'text-gray-600'}"
@@ -784,13 +826,43 @@
 		</div>
 	{/if}
 
+	{#if $designStore.mode === 'chat'}
+		<div class="grid grid-cols-2 gap-2">
+			<div>
+				<p class="text-[10px] text-gray-500 mb-1">&#x1F3F7;&#xFE0F; Generate Type</p>
+				<select
+					class="w-full border rounded px-2 py-1 text-xs bg-white"
+					value={$designStore.contentPreset}
+					onchange={(e) => updateDesignState({ contentPreset: e.target.value })}
+				>
+					<option value="character">&#x1F9D9; Character</option>
+					<option value="building">&#x1F3F0; Building</option>
+					<option value="item">&#x1F5E1;&#xFE0F; Item</option>
+					<option value="asset">&#x1F9F1; Asset</option>
+					<option value="scenery">&#x1F332; Scenery</option>
+					<option value="effects">&#x2728; Special Effects</option>
+				</select>
+			</div>
+			<div>
+				<p class="text-[10px] text-gray-500 mb-1">&#x1F9F5; Theme Style</p>
+				<select
+					class="w-full border rounded px-2 py-1 text-xs bg-white"
+					value={$designStore.stylePreset}
+					onchange={(e) => updateDesignState({ stylePreset: e.target.value })}
+				>
+					<option value="oil_painting_fantasy">&#x1F5BC;&#xFE0F; Oil Painting Fantasy</option>
+				</select>
+			</div>
+		</div>
+	{/if}
+
 	{#if uiNote}
 		<p class="text-[11px] text-blue-700 bg-blue-50 border border-blue-100 rounded px-2 py-1">{uiNote}</p>
 	{/if}
 
 	{#if $designStore.mode === 'chat'}
 		<div class="rounded-lg border bg-white p-2 space-y-1.5">
-			<div class="h-32 overflow-y-auto space-y-1.5 pr-1" bind:this={chatMessagesEl}>
+			<div class="h-36 overflow-y-auto space-y-1.5 pr-1" bind:this={chatMessagesEl}>
 				{#each $designStore.messages as m}
 					<div class="rounded px-2 py-1 text-xs border {m.role === 'assistant' ? 'bg-blue-50 border-blue-100 text-blue-900' : 'bg-gray-50 border-gray-200 text-gray-800'}">
 						<strong>{m.role === 'assistant' ? '\u{1F916} GPT' : '\u{1F9D1} You'}:</strong> {m.content}
@@ -858,7 +930,7 @@
 			</div>
 			<textarea
 				class="w-full border rounded px-2 py-1 text-xs"
-				rows="3"
+				rows="4"
 				value={$designStore.draftPrompt}
 				oninput={(e) => updateDesignState({ draftPrompt: e.target.value })}
 				placeholder="Click Write Prompt to generate from chat"
