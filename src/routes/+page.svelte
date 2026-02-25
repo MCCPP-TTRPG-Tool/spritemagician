@@ -1,9 +1,8 @@
-<script>
-	import AssetWizard from '$lib/components/AssetWizard.svelte';
+﻿<script>
+	import DesignPanel from '$lib/components/DesignPanel.svelte';
 	import EditPanel from '$lib/components/EditPanel.svelte';
 	import CharacterWizard from '$lib/components/CharacterWizard.svelte';
 	import GenerationPanel from '$lib/components/GenerationPanel.svelte';
-	import KeyframePanel from '$lib/components/KeyframePanel.svelte';
 	import CenterPanel from '$lib/components/CenterPanel.svelte';
 	import AnimationPreview from '$lib/components/AnimationPreview.svelte';
 	import ExportPanel from '$lib/components/ExportPanel.svelte';
@@ -12,11 +11,11 @@
 	import { projectStore } from '$lib/stores/project.js';
 	import { goto } from '$app/navigation';
 	
-	let activeTab = $state('wizard'); // 'wizard' | 'edit' | 'style' | 'animate' | 'keyframes'
+	let activeTab = $state('design'); // 'design' | 'edit' | 'style' | 'animate'
 	let rightTab = $state('preview'); // 'preview' | 'export'
 	let showUserMenu = $state(false);
 
-	// Images passed from FileTree → store → here → component props
+	// Images passed from FileTree -> store -> here -> component props
 	let editImage = $state(null);
 	let styleImage = $state(null);
 
@@ -67,7 +66,7 @@
 		prevLastFrame = frame;
 	});
 
-	// React to animation being loaded from FileTree → auto-switch to Preview tab
+	// React to animation being loaded from FileTree -> auto-switch to Preview tab
 	$effect(() => {
 		if ($projectStore._animationLoaded) {
 			rightTab = 'preview';
@@ -75,9 +74,25 @@
 		}
 	});
 
+	// React to Design panel handoff buttons (Use in Edit/Style/Animate)
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+
+		const onDesignNavigate = (event) => {
+			const tab = event?.detail?.tab;
+			if (tab === 'edit' || tab === 'style' || tab === 'animate') {
+				activeTab = tab;
+			}
+		};
+
+		window.addEventListener('designNavigate', onDesignNavigate);
+		return () => window.removeEventListener('designNavigate', onDesignNavigate);
+	});
+
+
 	async function logout() {
 		try {
-			// Sign out client-side Firebase (clears onAuthStateChanged → userFiles store)
+			// Sign out client-side Firebase (clears onAuthStateChanged -> userFiles store)
 			await auth.signOut();
 			// Clear server-side session cookie
 			await fetch('/api/session', { method: 'DELETE' });
@@ -136,73 +151,65 @@
 		</div>
 	</header>
 
-	<div class="flex-1 grid grid-cols-3 gap-2 p-2 overflow-hidden">
+	<div class="mobile-panels flex-1 flex md:grid md:grid-cols-3 gap-2 p-2 overflow-x-auto overflow-y-hidden md:overflow-hidden snap-x snap-mandatory md:snap-none">
 		<!-- Left Column: Create / Animate -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
 			<div class="flex border-b">
 			<button
-				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'wizard' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
-				onclick={() => activeTab = 'wizard'}
+				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'design' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
+				onclick={() => activeTab = 'design'}
 			>
-				🪄 Wizard
+				Design
 			</button>
 			<button
 				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'edit' ? 'bg-teal-50 text-teal-600 border-b-2 border-teal-600' : 'text-gray-600 hover:bg-gray-50'}"
 				onclick={() => activeTab = 'edit'}
 			>
-				✏️ Edit
+				Edit
 			</button>
 			<button
 				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'style' ? 'bg-purple-50 text-purple-600 border-b-2 border-purple-600' : 'text-gray-600 hover:bg-gray-50'}"
 				onclick={() => activeTab = 'style'}
 			>
-				✨ Style
+				Style
 			</button>
 			<button
 				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'animate' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
 				onclick={() => activeTab = 'animate'}
 			>
-				🎬 Animate
-			</button>
-			<button
-				class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'keyframes' ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600 hover:bg-gray-50'}"
-				onclick={() => activeTab = 'keyframes'}
-			>
-				🦾 Keyframes
+				Animate
 			</button>
 			</div>
 			
 			<div class="p-3 flex-1 overflow-y-auto">
-		{#if activeTab === 'wizard'}
-			<AssetWizard />
+		{#if activeTab === 'design'}
+			<DesignPanel />
 		{:else if activeTab === 'edit'}
 			<EditPanel initialImage={editImage} />
 		{:else if activeTab === 'style'}
 			<CharacterWizard initialReferenceImage={styleImage} />
 		{:else if activeTab === 'animate'}
 			<GenerationPanel />
-		{:else if activeTab === 'keyframes'}
-			<KeyframePanel />
 		{/if}
 		</div>
 		</div>
 
 		<!-- Middle Column: File Tree / Jobs / Frames -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
 			<CenterPanel />
 		</div>
 
 		<!-- Right Column: Preview / Export (tabbed) -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0">
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
 			<div class="flex border-b flex-shrink-0">
 				<button
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {rightTab === 'preview' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
 					onclick={() => rightTab = 'preview'}
-				>🎬 Preview</button>
+				>&#x1F3AC; Preview</button>
 				<button
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {rightTab === 'export' ? 'bg-green-50 text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-50'}"
 					onclick={() => rightTab = 'export'}
-				>📦 Export</button>
+				>&#x1F4E6; Export</button>
 			</div>
 			<div class="flex-1 min-h-0 overflow-hidden">
 				{#if rightTab === 'preview'}
@@ -217,3 +224,20 @@
 
 	</div>
 </div>
+
+<style>
+	.mobile-panels {
+		-webkit-overflow-scrolling: touch;
+	}
+
+	@media (max-width: 767px) {
+		.mobile-panels {
+			scrollbar-width: none;
+		}
+
+		.mobile-panels::-webkit-scrollbar {
+			display: none;
+		}
+	}
+</style>
+

@@ -16,8 +16,8 @@ import shutil
 from array import array
 
 import bpy
-from bpy.props import BoolProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
-from bpy.types import Operator, Panel, PropertyGroup
+from bpy.props import BoolProperty, CollectionProperty, EnumProperty, FloatProperty, IntProperty, PointerProperty, StringProperty
+from bpy.types import Operator, Panel, PropertyGroup, UIList
 from mathutils import Matrix, Vector
 
 
@@ -208,18 +208,35 @@ def find_selected_armature_only(context):
     return None
 
 
+def selected_armatures(context):
+    return [obj for obj in context.selected_objects if obj.type == "ARMATURE"]
+
+
+def scene_armatures_with_active_actions(context):
+    out = []
+    for obj in context.scene.objects:
+        if obj.type != "ARMATURE":
+            continue
+        if obj.animation_data and obj.animation_data.action:
+            out.append(obj)
+    return out
+
+
+def _collect_descendants(root_obj):
+    out = []
+    stack = list(root_obj.children)
+    while stack:
+        child = stack.pop()
+        out.append(child)
+        stack.extend(child.children)
+    return out
+
+
 def iter_character_objects(armature_obj):
+    # Strict isolation: armature + its hierarchy only.
+    # Avoid pulling unrelated meshes that happen to reference the same armature.
     objects = [armature_obj]
-    for obj in bpy.data.objects:
-        if obj == armature_obj:
-            continue
-        if obj.parent == armature_obj:
-            objects.append(obj)
-            continue
-        for mod in obj.modifiers:
-            if mod.type == "ARMATURE" and mod.object == armature_obj:
-                objects.append(obj)
-                break
+    objects.extend(_collect_descendants(armature_obj))
     return objects
 
 
@@ -445,9 +462,16 @@ def action_options_for_armature(armature_obj):
     if not anim_data:
         return []
 
+    has_nla_strips = any(len(track.strips) > 0 for track in anim_data.nla_tracks)
+
     if anim_data.action:
         action = anim_data.action
-        options[action.name] = clean_action_display_name(action.name)
+        # If this armature is used as a single clip object (Idle/Walk),
+        # use the armature object name as friendly display label.
+        if has_nla_strips:
+            options[action.name] = clean_action_display_name(action.name)
+        else:
+            options[action.name] = clean_action_display_name(armature_obj.name)
 
     for track in anim_data.nla_tracks:
         if track.mute:
@@ -671,9 +695,33 @@ def pack_sheet_pages(
     return pages
 
 
+class SpriteGenBatchItem(PropertyGroup):
+    include: BoolProperty(name="Include", default=True)
+    display_name: StringProperty(name="Display Name", default="")
+    output_name: StringProperty(name="Output Name", default="")
+    action_name: StringProperty(name="Action Name", default="")
+    source_type: StringProperty(name="Source Type", default="ACTION")
+    source_name: StringProperty(name="Source Name", default="")
+    frames_per_direction: IntProperty(name="Frames Per Direction", default=6, min=1, max=256)
+    trim_end_frames: IntProperty(name="Trim End Frames", default=0, min=0, max=24)
+
+
+class SPRITEGEN_UL_batch_items(UIList):
+    def draw_item(self, _context, layout, _data, item, _icon, _active_data, _active_propname, _index):
+        row = layout.row(align=True)
+        row.prop(item, "include", text="")
+        row.label(text=item.display_name if item.display_name else item.action_name)
+        row.prop(item, "output_name", text="")
+
+
 class SpriteGenProps(PropertyGroup):
     unit_name: StringProperty(name="Unit Name", default="unit")
     output_dir: StringProperty(name="Output Folder", subtype="DIR_PATH")
+    batch_output_dir: StringProperty(
+        name="Batch Output Folder",
+        description="Optional dedicated output folder for Generate All batch exports",
+        subtype="DIR_PATH",
+    )
     selected_action: EnumProperty(name="Action", items=action_items)
     start_direction: EnumProperty(name="Start Facing", items=DIRECTION_ENUM_ITEMS, default="n")
     rotation_direction: EnumProperty(
@@ -778,9 +826,16 @@ class SpriteGenProps(PropertyGroup):
         min=0.0,
         max=50.0,
     )
+    auto_fit_per_action: BoolProperty(
+        name="Per-Action Auto Fit",
+        description="Refit camera to each action bounds (can cause size mismatch between animations)",
+        default=False,
+    )
     use_export_target_height: BoolProperty(name="Use Target Height (Export-Only)", default=False)
     target_height_feet: FloatProperty(name="Target Height (ft)", default=6.0, min=0.1, max=30.0)
     measured_height_feet: FloatProperty(name="Measured Height (ft)", default=0.0, min=0.0, max=100.0)
+    batch_items: CollectionProperty(type=SpriteGenBatchItem)
+    batch_index: IntProperty(name="Batch Index", default=0, min=0)
     show_advanced: BoolProperty(name="Show Advanced", default=False)
     progress_text: StringProperty(name="Progress", default="Idle")
 
@@ -851,6 +906,54 @@ class SPRITEGEN_OT_refresh_actions(Operator):
         return {"FINISHED"}
 
 
+class SPRITEGEN_OT_refresh_batch(Operator):
+    bl_idname = "spritegen.refresh_batch"
+    bl_label = "Refresh Batch List"
+    bl_description = "Build batch checklist from selected armatures (or current armature actions)"
+
+    def execute(self, context):
+        props = context.scene.spritegen_props
+        props.batch_items.clear()
+
+        arms = scene_armatures_with_active_actions(context)
+        if len(arms) > 0:
+            for arm in arms:
+                action_name = ""
+                if arm.animation_data and arm.animation_data.action:
+                    action_name = arm.animation_data.action.name
+                if not action_name:
+                    continue
+
+                item = props.batch_items.add()
+                item.include = True
+                item.source_type = "ARMATURE"
+                item.source_name = arm.name
+                item.action_name = action_name
+                item.display_name = clean_action_display_name(arm.name)
+                item.output_name = sanitize_token(item.display_name)
+                item.frames_per_direction = int(props.frames_per_angle)
+                item.trim_end_frames = int(props.trim_end_frames)
+        else:
+            actions = action_items(None, context)
+            for action_id, display_name, _desc in actions:
+                item = props.batch_items.add()
+                item.include = True
+                item.source_type = "ACTION"
+                item.source_name = ""
+                item.action_name = action_id
+                item.display_name = display_name
+                item.output_name = sanitize_token(display_name)
+                item.frames_per_direction = int(props.frames_per_angle)
+                item.trim_end_frames = int(props.trim_end_frames)
+
+        props.batch_index = 0
+        if len(props.batch_items) == 0:
+            self.report({"WARNING"}, "No batch items found. Make sure armatures have active actions.")
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Batch list ready: {len(props.batch_items)} item(s).")
+        return {"FINISHED"}
+
+
 class SPRITEGEN_OT_apply_safe_preset(Operator):
     bl_idname = "spritegen.apply_safe_preset"
     bl_label = "Apply Safe Preset"
@@ -870,6 +973,7 @@ class SPRITEGEN_OT_apply_safe_preset(Operator):
         props.max_sheet_dimension = 2048
         props.max_total_renders = 192
         props.camera_margin_percent = 2.0
+        props.auto_fit_per_action = False
         props.fps = 12
         self.report({"INFO"}, "Safe preset applied.")
         return {"FINISHED"}
@@ -981,16 +1085,17 @@ class SPRITEGEN_OT_generate_selected(Operator):
                     arm.scale = previous_scale * applied_scale_factor
                     context.view_layer.update()
 
-            props.progress_text = "Analyzing bounds..."
-            fit_camera_to_bounds_for_action(
-                scene,
-                arm,
-                action,
-                sampled_frames,
-                margin_ratio=(float(props.camera_margin_percent) / 100.0),
-                dir_specs=dir_specs,
-            )
-            context.view_layer.update()
+            if props.auto_fit_per_action:
+                props.progress_text = "Analyzing bounds..."
+                fit_camera_to_bounds_for_action(
+                    scene,
+                    arm,
+                    action,
+                    sampled_frames,
+                    margin_ratio=(float(props.camera_margin_percent) / 100.0),
+                    dir_specs=dir_specs,
+                )
+                context.view_layer.update()
 
             for spec in dir_specs:
                 dir_label = spec["label"]
@@ -1119,30 +1224,68 @@ class SPRITEGEN_OT_generate_all(Operator):
 
     def execute(self, context):
         props = context.scene.spritegen_props
-        actions = action_items(None, context)
-        if not actions:
-            self.report({"ERROR"}, "No actions found for current armature.")
+        batch_output = bpy.path.abspath(props.batch_output_dir) if props.batch_output_dir else bpy.path.abspath(props.output_dir)
+        if not batch_output:
+            self.report({"ERROR"}, "Choose Batch Output Folder (or Output Folder) first.")
+            return {"CANCELLED"}
+
+        batch_items = [item for item in props.batch_items if item.include]
+        if not batch_items:
+            self.report({"ERROR"}, "No checked batch items. Click Refresh Batch List and tick animations to export.")
             return {"CANCELLED"}
 
         previous_selected = props.selected_action
         previous_output_name = props.output_action_name
+        previous_output_dir = props.output_dir
+        previous_layout = props.output_layout
+        previous_frames = props.frames_per_angle
+        previous_trim = props.trim_end_frames
+        previous_active = context.view_layer.objects.active
+        previously_selected = [obj for obj in context.selected_objects]
         succeeded = []
         failed = []
 
-        for item in actions:
-            action_name = item[0]
-            action_display = item[1]
-            props.selected_action = action_name
-            props.output_action_name = sanitize_token(action_display)
-            result = bpy.ops.spritegen.generate_selected()
-            if "FINISHED" in result:
-                succeeded.append(action_name)
-            else:
-                failed.append(action_name)
-            bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        props.output_dir = batch_output
+        # Batch always writes all action artifacts into one chosen folder.
+        props.output_layout = "FLAT"
+
+        try:
+            for item in batch_items:
+                if item.source_type == "ARMATURE":
+                    arm = bpy.data.objects.get(item.source_name)
+                    if not arm or arm.type != "ARMATURE":
+                        failed.append(item.display_name or item.source_name)
+                        continue
+                    for obj in context.selected_objects:
+                        obj.select_set(False)
+                    arm.select_set(True)
+                    context.view_layer.objects.active = arm
+
+                props.selected_action = item.action_name
+                props.output_action_name = sanitize_token(item.output_name or item.display_name or item.action_name)
+                props.frames_per_angle = int(item.frames_per_direction)
+                props.trim_end_frames = int(item.trim_end_frames)
+
+                result = bpy.ops.spritegen.generate_selected()
+                if "FINISHED" in result:
+                    succeeded.append(item.display_name or item.action_name)
+                else:
+                    failed.append(item.display_name or item.action_name)
+                bpy.ops.wm.redraw_timer(type="DRAW_WIN_SWAP", iterations=1)
+        finally:
+            for obj in context.selected_objects:
+                obj.select_set(False)
+            for obj in previously_selected:
+                obj.select_set(True)
+            if previous_active:
+                context.view_layer.objects.active = previous_active
 
         props.selected_action = previous_selected
         props.output_action_name = previous_output_name
+        props.output_dir = previous_output_dir
+        props.output_layout = previous_layout
+        props.frames_per_angle = previous_frames
+        props.trim_end_frames = previous_trim
 
         if failed and not succeeded:
             self.report({"ERROR"}, f"Batch failed for all actions: {', '.join(failed)}")
@@ -1205,7 +1348,6 @@ class SPRITEGEN_PT_main(Panel):
         step4 = layout.box()
         step4.label(text="Step 4: Generate", icon="RENDER_STILL")
         step4.operator("spritegen.generate_selected", icon="RENDER_STILL", text="Generate Sprite Sheet")
-        step4.operator("spritegen.generate_all", icon="RENDER_ANIMATION", text="Generate All Animations (Batch)")
         step4.label(text=f"Progress: {props.progress_text}")
 
         box = layout.box()
@@ -1224,17 +1366,60 @@ class SPRITEGEN_PT_main(Panel):
             col.prop(props, "sheet_page_mode")
             col.prop(props, "max_sheet_dimension")
             col.prop(props, "max_total_renders")
+            col.prop(props, "auto_fit_per_action")
+
+
+class SPRITEGEN_PT_batch(Panel):
+    bl_label = "SpriteBatch"
+    bl_idname = "SPRITEGEN_PT_batch"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "SpriteBatch"
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.spritegen_props
+
+        layout.label(text="Batch Export", icon="RENDER_ANIMATION")
+        layout.prop(props, "batch_output_dir", text="Batch Output Folder")
+        row = layout.row(align=True)
+        row.operator("spritegen.refresh_batch", icon="FILE_REFRESH", text="Refresh Batch List")
+        row.operator("spritegen.generate_all", icon="RENDER_ANIMATION", text="Export Checked")
+
+        layout.template_list(
+            "SPRITEGEN_UL_batch_items",
+            "",
+            props,
+            "batch_items",
+            props,
+            "batch_index",
+            rows=7,
+        )
+
+        if len(props.batch_items) > 0 and props.batch_index < len(props.batch_items):
+            item = props.batch_items[props.batch_index]
+            box = layout.box()
+            box.prop(item, "include")
+            box.label(text=f"Source: {item.source_type} {item.source_name}".strip())
+            box.prop(item, "display_name", text="Display Name")
+            box.prop(item, "output_name", text="Export Name")
+            box.prop(item, "frames_per_direction")
+            box.prop(item, "trim_end_frames")
 
 
 CLASSES = (
+    SpriteGenBatchItem,
+    SPRITEGEN_UL_batch_items,
     SpriteGenProps,
     SPRITEGEN_OT_apply_projection_preset,
     SPRITEGEN_OT_setup_scene,
     SPRITEGEN_OT_refresh_actions,
+    SPRITEGEN_OT_refresh_batch,
     SPRITEGEN_OT_apply_safe_preset,
     SPRITEGEN_OT_generate_selected,
     SPRITEGEN_OT_generate_all,
     SPRITEGEN_PT_main,
+    SPRITEGEN_PT_batch,
 )
 
 
