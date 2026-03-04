@@ -14,11 +14,7 @@
 	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
-	import {
-		activeAssetStore,
-		setActiveAssetContext,
-		clearActiveAssetContext
-	} from '$lib/stores/activeAsset.js';
+	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 
 	// ── reactive state ──────────────────────────────────────
 	let fs = $state({
@@ -41,12 +37,44 @@
 	let isSelectionMode = $derived(selectedItemIds.size > 0);
 	let showMoveFolderPicker = $state(false);
 	let movingItemIds = $state(null);
+	let listSortKey = $state('name'); // 'name' | 'type' | 'modified' | 'size'
+	let listSortDir = $state('asc'); // 'asc' | 'desc'
 	
 	// Background removal progress
 	let bgRemovalProgress = $state(null); // { status: string, message: string, progress?: number }
+	let expandedInfoIds = $state(new Set());
+	let editHistoryCountByFile = $state({});
 
 	const folders = $derived(fs.items.filter(i => i.isFolder));
 	const files   = $derived(fs.items.filter(i => !i.isFolder));
+	const sortedListItems = $derived.by(() => {
+		const dir = listSortDir === 'desc' ? -1 : 1;
+		const items = [...fs.items];
+		return items.sort((a, b) => {
+			if (a.isFolder && !b.isFolder) return -1;
+			if (!a.isFolder && b.isFolder) return 1;
+			let cmp = 0;
+			if (listSortKey === 'type') {
+				const aType = a.isFolder ? 'folder' : String(a.fileType || 'file');
+				const bType = b.isFolder ? 'folder' : String(b.fileType || 'file');
+				cmp = aType.localeCompare(bType);
+			} else if (listSortKey === 'modified') {
+				const aTime = getTimestampValue(a.updatedAt || a.createdAt);
+				const bTime = getTimestampValue(b.updatedAt || b.createdAt);
+				cmp = aTime - bTime;
+			} else if (listSortKey === 'size') {
+				const aSize = a.isFolder ? -1 : Number(a.size || 0);
+				const bSize = b.isFolder ? -1 : Number(b.size || 0);
+				cmp = aSize - bSize;
+			} else {
+				cmp = String(a.name || '').localeCompare(String(b.name || ''));
+			}
+			if (cmp === 0) {
+				cmp = String(a.name || '').localeCompare(String(b.name || ''));
+			}
+			return cmp * dir;
+		});
+	});
 
 	// ── actions ─────────────────────────────────────────────
 
@@ -87,29 +115,6 @@
 		return res.json();
 	}
 
-	async function createAssetWorkspace() {
-		const raw = prompt('New asset workspace name:');
-		const name = raw?.trim();
-		if (!name) return;
-		try {
-			const result = await createFolderViaApi(name, fs.currentFolderId || null, {
-				source: 'file_tree',
-				chromaKeyHex: $activeAssetStore?.chromaKeyHex || '#00FF00'
-			});
-			const prefix = fs.breadcrumbs.map((b) => b.name).join(' / ');
-			const folderPath = prefix ? `${prefix} / ${result.name}` : result.name;
-			setActiveAssetContext({
-				folderId: result.id,
-				folderName: result.name,
-				folderPath,
-				chromaKeyHex: result?.metadata?.chromaKeyHex
-			});
-			userFiles.openFolder(result.id, result.name);
-		} catch (e) {
-			alert('Failed to create workspace: ' + (e.message || String(e)));
-		}
-	}
-
 	async function freshStartFileTree() {
 		if (!fs.uid) return;
 		const first = confirm(
@@ -128,7 +133,6 @@
 					await deleteItem(fs.uid, item.id);
 				}
 			}
-			clearActiveAssetContext();
 			userFiles.goToRoot();
 			alert('Fresh start complete. File tree is now empty.');
 		} catch (e) {
@@ -146,7 +150,36 @@
 			userFiles.openFolder(item.id, item.name);
 		} else {
 			selectedId = selectedId === item.id ? null : item.id;
+			previewFileInRightPanel(item);
 		}
+	}
+
+	function isImagePreviewCandidate(item) {
+		if (!item || item.isFolder || !item.url) return false;
+		if (item.fileType === 'video') return false;
+		if (item.fileType === 'image') return true;
+		const lowerName = String(item.name || '').toLowerCase();
+		return (
+			lowerName.endsWith('.png') ||
+			lowerName.endsWith('.jpg') ||
+			lowerName.endsWith('.jpeg') ||
+			lowerName.endsWith('.webp') ||
+			lowerName.endsWith('.gif')
+		);
+	}
+
+	function previewFileInRightPanel(item) {
+		if (typeof window === 'undefined') return;
+		if (!isImagePreviewCandidate(item)) return;
+		window.dispatchEvent(
+			new CustomEvent('jobsPreviewSelected', {
+				detail: {
+					image: item.url,
+					label: item.name || 'File Preview',
+					jobId: item.id || null
+				}
+			})
+		);
 	}
 	
 	function toggleSelect(itemId, e) {
@@ -250,12 +283,6 @@
 		deselectAll();
 	}
 
-	function dblClickItem(item) {
-		if (!item.isFolder) {
-			previewItem = item;
-		}
-	}
-
 	async function doRename(item) {
 		if (!fs.uid) return;
 		const n = prompt('Rename:', item.name);
@@ -329,7 +356,7 @@
 
 	function loadIntoEdit(item) {
 		if (!item.url) return;
-		projectStore.update(p => ({ ...p, editImage: item.url }));
+		projectStore.update(p => ({ ...p, editImage: item.url, editFileId: item.id || null }));
 		menuItemId = null;
 	}
 
@@ -431,6 +458,16 @@
 		e.stopPropagation();
 		menuItemId = menuItemId === itemId ? null : itemId;
 	}
+
+	function toggleItemInfo(itemId, e) {
+		e?.stopPropagation?.();
+		if (expandedInfoIds.has(itemId)) {
+			expandedInfoIds.delete(itemId);
+		} else {
+			expandedInfoIds.add(itemId);
+		}
+		expandedInfoIds = new Set(expandedInfoIds);
+	}
 	
 	async function removeBackgroundFromFile(item) {
 		if (!item.url || item.isFolder) return;
@@ -530,6 +567,27 @@
 			default:          return '🖼️';
 		}
 	}
+
+	function getTimestampValue(ts) {
+		if (!ts) return 0;
+		if (typeof ts?.toMillis === 'function') return ts.toMillis();
+		const value = new Date(ts).getTime();
+		return Number.isFinite(value) ? value : 0;
+	}
+
+	function setListSort(nextKey) {
+		if (listSortKey === nextKey) {
+			listSortDir = listSortDir === 'asc' ? 'desc' : 'asc';
+			return;
+		}
+		listSortKey = nextKey;
+		listSortDir = nextKey === 'modified' || nextKey === 'size' ? 'desc' : 'asc';
+	}
+
+	function sortIndicator(key) {
+		if (listSortKey !== key) return '';
+		return listSortDir === 'asc' ? '▲' : '▼';
+	}
 	
 	function getFileTypeLabel(item) {
 		if (item.isFolder) return null;
@@ -551,18 +609,46 @@
 		return `${(bytes / 1048576).toFixed(1)} MB`;
 	}
 
-	function setFolderAsActiveAsset(folderItem) {
-		if (!folderItem?.isFolder) return;
-		const prefix = fs.breadcrumbs.map((b) => b.name).join(' / ');
-		const folderPath = prefix ? `${prefix} / ${folderItem.name}` : folderItem.name;
-		setActiveAssetContext({
-			folderId: folderItem.id,
-			folderName: folderItem.name,
-			folderPath,
-			chromaKeyHex: folderItem?.metadata?.chromaKeyHex
-		});
-		menuItemId = null;
+	function getEditHistoryCount(item) {
+		if (!item || item.isFolder) return 0;
+		const localCount = Number(editHistoryCountByFile[item.id] || 0);
+		const metadataCount = Number(item?.metadata?.editCount || 0);
+		return Number.isFinite(localCount) && localCount > 0 ? localCount : metadataCount;
 	}
+
+	function loadEditHistoryCountMap() {
+		if (typeof window === 'undefined') return;
+		try {
+			const raw = localStorage.getItem('spritemagician.editHistory.byFile.v1');
+			if (!raw) {
+				editHistoryCountByFile = {};
+				return;
+			}
+			const parsed = JSON.parse(raw);
+			const next = {};
+			for (const [fileId, entry] of Object.entries(parsed || {})) {
+				const count = Array.isArray(entry?.nodes) ? entry.nodes.length : 0;
+				if (count > 0) next[fileId] = count;
+			}
+			editHistoryCountByFile = next;
+		} catch {
+			editHistoryCountByFile = {};
+		}
+	}
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		loadEditHistoryCountMap();
+		const onEditHistoryUpdated = (event) => {
+			const fileId = event?.detail?.fileId;
+			const count = Number(event?.detail?.count || 0);
+			if (!fileId) return;
+			editHistoryCountByFile = { ...editHistoryCountByFile, [fileId]: Math.max(0, count) };
+		};
+		window.addEventListener('fileEditHistoryUpdated', onEditHistoryUpdated);
+		return () => window.removeEventListener('fileEditHistoryUpdated', onEditHistoryUpdated);
+	});
+
 </script>
 
 <!-- Close dropdown when clicking anywhere -->
@@ -634,10 +720,6 @@
 			onclick={() => { showNewFolder = true; newFolderName = ''; }}>
 			📁 New
 		</button>
-		<button class="px-2 py-1 rounded bg-emerald-50 text-emerald-700 hover:bg-emerald-100 font-medium"
-			onclick={createAssetWorkspace}>
-			🎯 New Asset
-		</button>
 		<button class="px-2 py-1 rounded bg-green-50 text-green-700 hover:bg-green-100 font-medium {uploading ? 'opacity-50 pointer-events-none' : ''}"
 			onclick={triggerUpload}>
 			{uploading ? '⏳…' : '⬆ Upload'}
@@ -702,13 +784,11 @@
 			<div class="grid grid-cols-4 gap-2">
 				{#each fs.items as item (item.id)}
 					{@const isSelected = selectedItemIds.has(item.id)}
-					{@const isActiveAssetFolder = item.isFolder && $activeAssetStore.folderId === item.id}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all
-							{isSelected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : selectedId === item.id ? 'border-blue-500 bg-blue-50' : isActiveAssetFolder ? 'border-emerald-400 bg-emerald-50/30' : 'border-transparent hover:border-gray-300 bg-white'}"
+							{isSelected ? 'border-blue-500 bg-blue-50 ring-2 ring-blue-300' : selectedId === item.id ? 'border-blue-500 bg-blue-50' : 'border-transparent hover:border-gray-300 bg-white'}"
 						onclick={() => clickItem(item)}
-						ondblclick={() => dblClickItem(item)}
 					>
 						<!-- Selection checkbox -->
 						<button
@@ -799,13 +879,6 @@
 									</button>
 									<div class="border-t my-0.5"></div>
 								{/if}
-								{#if item.isFolder}
-									<button class="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
-										onclick={() => setFolderAsActiveAsset(item)}>
-										🎯 <span>Set Active Asset</span>
-									</button>
-									<div class="border-t my-0.5"></div>
-								{/if}
 								<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
 									onclick={() => { doRename(item); menuItemId = null; }}>
 									📝 <span>Rename</span>
@@ -829,25 +902,46 @@
 			<table class="w-full text-[11px]">
 				<thead>
 					<tr class="text-left text-gray-500 border-b">
-						<th class="py-1 px-2 font-medium">Name</th>
-						<th class="py-1 px-2 font-medium w-20">Type</th>
-						<th class="py-1 px-2 font-medium w-20">Date</th>
-						<th class="py-1 px-2 font-medium w-16 text-right">Size</th>
+						<th class="py-1 px-2 font-medium">
+							<button class="inline-flex items-center gap-1 hover:text-blue-600" onclick={() => setListSort('name')}>
+								<span>Name</span><span class="text-[9px] w-2 inline-block">{sortIndicator('name')}</span>
+							</button>
+						</th>
+						<th class="py-1 px-2 font-medium w-20">
+							<button class="inline-flex items-center gap-1 hover:text-blue-600" onclick={() => setListSort('type')}>
+								<span>Type</span><span class="text-[9px] w-2 inline-block">{sortIndicator('type')}</span>
+							</button>
+						</th>
+						<th class="py-1 px-2 font-medium w-24">
+							<button class="inline-flex items-center gap-1 hover:text-blue-600" onclick={() => setListSort('modified')}>
+								<span>Modified</span><span class="text-[9px] w-2 inline-block">{sortIndicator('modified')}</span>
+							</button>
+						</th>
+						<th class="py-1 px-2 font-medium w-16 text-right">
+							<button class="inline-flex items-center gap-1 hover:text-blue-600" onclick={() => setListSort('size')}>
+								<span>Size</span><span class="text-[9px] w-2 inline-block">{sortIndicator('size')}</span>
+							</button>
+						</th>
 						<th class="py-1 px-2 font-medium w-8"></th>
 					</tr>
 				</thead>
 				<tbody>
-					{#each fs.items as item (item.id)}
+					{#each sortedListItems as item (item.id)}
 						{@const isSelected = selectedItemIds.has(item.id)}
-						{@const isActiveAssetFolder = item.isFolder && $activeAssetStore.folderId === item.id}
 						<!-- svelte-ignore a11y_no_static_element_interactions -->
 						<tr
 							class="border-b border-gray-100 cursor-pointer transition-colors relative group
-								{isSelected ? 'bg-blue-50 ring-1 ring-blue-300' : selectedId === item.id ? 'bg-blue-50' : isActiveAssetFolder ? 'bg-emerald-50/40' : 'hover:bg-gray-50'}"
+								{isSelected ? 'bg-blue-50 ring-1 ring-blue-300' : selectedId === item.id ? 'bg-blue-50' : 'hover:bg-gray-50'}"
 							onclick={() => clickItem(item)}
-							ondblclick={() => dblClickItem(item)}
 						>
 							<td class="py-1.5 px-2 flex items-center gap-2">
+								<button
+									class="w-4 h-4 rounded border border-gray-300 bg-white text-[9px] text-gray-600 flex items-center justify-center hover:bg-gray-100"
+									onclick={(e) => toggleItemInfo(item.id, e)}
+									title={expandedInfoIds.has(item.id) ? 'Hide details' : 'Show details'}
+								>
+									{expandedInfoIds.has(item.id) ? '▾' : '▸'}
+								</button>
 								<!-- Selection checkbox -->
 								<button
 									class="w-4 h-4 rounded border-2 flex items-center justify-center transition-all flex-shrink-0
@@ -861,14 +955,9 @@
 								</button>
 								<span class="text-sm">{icon(item)}</span>
 								<span class="truncate font-medium">{item.name}</span>
-								{#if !item.isFolder && getFileTypeLabel(item)}
-									<span class="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-200 text-gray-700">
-										{getFileTypeLabel(item)}
-									</span>
-								{/if}
 							</td>
 							<td class="py-1.5 px-2 text-gray-500">{item.isFolder ? 'Folder' : (item.fileType || 'File')}</td>
-							<td class="py-1.5 px-2 text-gray-500">{fmtDate(item.createdAt)}</td>
+							<td class="py-1.5 px-2 text-gray-500">{fmtDate(item.updatedAt || item.createdAt)}</td>
 							<td class="py-1.5 px-2 text-gray-500 text-right">{item.isFolder ? '—' : fmtSize(item.size)}</td>
 							<td class="py-1.5 px-2 relative">
 								<button
@@ -881,7 +970,7 @@
 								{#if menuItemId === item.id}
 									<!-- svelte-ignore a11y_no_static_element_interactions -->
 									<div
-										class="absolute top-full left-0 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
+										class="absolute top-full right-0 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
 										onclick={(e) => e.stopPropagation()}
 									>
 										{#if isAnimFile(item)}
@@ -924,13 +1013,6 @@
 									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
 										onclick={() => useAsEndFrame(item)}>
 										⏹ <span>End Frame</span>
-									</button>
-									<div class="border-t my-0.5"></div>
-										{/if}
-										{#if item.isFolder}
-											<button class="w-full text-left px-3 py-1.5 hover:bg-emerald-50 text-emerald-700 flex items-center gap-2"
-												onclick={() => setFolderAsActiveAsset(item)}>
-												🎯 <span>Set Active Asset</span>
 											</button>
 											<div class="border-t my-0.5"></div>
 										{/if}
@@ -946,6 +1028,21 @@
 								{/if}
 							</td>
 						</tr>
+						{#if expandedInfoIds.has(item.id)}
+							<tr class="border-b border-gray-100 bg-gray-50/80">
+								<td class="px-2 py-2 text-[10px] text-gray-600" colspan="5">
+									<div class="grid grid-cols-2 gap-2">
+										<div><span class="text-gray-500">Name:</span> {item.name}</div>
+										<div><span class="text-gray-500">Type:</span> {item.isFolder ? 'Folder' : (item.fileType || 'File')}</div>
+										<div><span class="text-gray-500">Created:</span> {fmtDate(item.createdAt) || '—'}</div>
+										<div><span class="text-gray-500">Modified:</span> {fmtDate(item.updatedAt) || '—'}</div>
+										<div><span class="text-gray-500">Size:</span> {item.isFolder ? '—' : fmtSize(item.size)}</div>
+										<div><span class="text-gray-500">ID:</span> <span class="font-mono">{item.id}</span></div>
+											<div><span class="text-gray-500">Edits:</span> {getEditHistoryCount(item)}</div>
+									</div>
+								</td>
+							</tr>
+						{/if}
 					{/each}
 				</tbody>
 			</table>

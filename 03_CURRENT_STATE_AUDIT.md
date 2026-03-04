@@ -1,11 +1,12 @@
 # 03 CURRENT STATE AUDIT
 
-Last Updated: 2026-02-25
+Last Updated: 2026-03-03
 
 ## Product State
 - Main app remains a three-panel workspace on desktop.
 - Mobile supports horizontal swiping between the same three sections.
 - Top header now includes a center mode toggle:
+  - `Home`
   - `2D`
   - `3D`
 - `2D` mode left workflow tabs:
@@ -15,6 +16,876 @@ Last Updated: 2026-02-25
 - Center file system panel remains unchanged across modes.
 
 ## Recent Significant Change
+- GPT two-pass polish now targets clean/smooth finish instead of gritty over-texturing:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - rewrote second-pass polish prompt to emphasize:
+      - smooth surface transitions
+      - polished materials
+      - controlled detail density
+      - low-noise rendering
+      - restrained weathering only at contact edges
+    - added explicit avoid list for grit/rust/noise artifacts.
+  - Result:
+    - GPT two-pass outputs should retain detail while reducing dirty/gritty texture bias.
+  - Added session log `docs/session_logs/2026-03-03_session_263.md`.
+- Genesis GPT now uses backend prompt-refine + two-pass detail generation:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - reverted OpenAI GPT size to `1024x1024`.
+    - added prompt refinement prepass using OpenAI chat completions (`gpt-4.1-mini`) before image generation.
+    - GPT Image 1.5 path now runs two-pass generation:
+      - pass 1 generate/edit from refined prompt
+      - pass 2 detail-polish edit using pass-1 output as reference
+    - if pass 2 fails, route returns pass-1 image (fail-safe).
+  - Result:
+    - Genesis GPT path now enforces stronger prompt fidelity and detail density without requiring manual second-run polishing.
+  - Added session log `docs/session_logs/2026-03-03_session_262.md`.
+- Genesis GPT image size increased for higher detail density:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - added `OPENAI_GPT_IMAGE_SIZE = '1024x1536'`.
+    - OpenAI `images/generations` and `images/edits` now both use this larger size instead of `1024x1024`.
+  - Result:
+    - GPT Image 1.5 runs now render on a larger canvas, improving per-image detail.
+  - Added session log `docs/session_logs/2026-03-03_session_261.md`.
+- OpenAI GPT image model upgraded to GPT Image 1.5:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - switched model id in GPT generation branch from `gpt-image-1` to `gpt-image-1.5`.
+    - retained current quality/size and reference-edit handling behavior.
+  - Result:
+    - Genesis GPT path now uses the newer OpenAI image model id.
+  - Added session log `docs/session_logs/2026-03-03_session_260.md`.
+- OpenAI no-reference prompt path no longer includes variation nonce text:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - nonce suffix (`Variation nonce: ...`) is now appended only for `nano_banana`.
+    - OpenAI image paths now receive clean prompt text without nonce pollution.
+  - Result:
+    - GPT image generations without reference are no longer influenced by synthetic nonce tokens in the prompt body.
+  - Added session log `docs/session_logs/2026-03-03_session_259.md`.
+- GPT-4 Image path now supports reference-image conditioning:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - removed GPT reference-image hard block.
+    - when `gpt-image-1` has a reference image, calls OpenAI `images/edits` endpoint with multipart payload.
+    - when no reference image is provided, continues using OpenAI `images/generations`.
+    - preserved `quality: 'high'` on `gpt-image-1`.
+    - retained `dall-e-3` behavior and reference restriction.
+  - Result:
+    - GPT generations can now condition directly on uploaded reference images instead of failing or running ungrounded.
+  - Added session log `docs/session_logs/2026-03-03_session_258.md`.
+- GPT image generation now requests high quality on `gpt-image-1`:
+  - Updated `src/routes/api/generate-sprite/+server.js`:
+    - `gpt4` branch now calls OpenAI images API with `quality: 'high'` and `size: '1024x1024'`.
+    - OpenAI helper now accepts optional `quality` and only includes it when provided.
+  - Result:
+    - GPT image runs now use OpenAI high-quality setting for the `gpt-image-1` path.
+  - Added session log `docs/session_logs/2026-03-03_session_257.md`.
+- Genesis tab now supports direct reference-image upload for generation:
+  - Updated `src/lib/components/DesignPanel.svelte`:
+    - added Genesis reference upload/remove handlers.
+    - added reference upload row in Genesis UI (`Upload Ref`, preview, `Remove`).
+    - attached reference is included in Genesis generation flow from the Genesis tab.
+  - Result:
+    - users can run Genesis with a reference image without using the GPT Chat upload flow.
+  - Added session log `docs/session_logs/2026-03-03_session_256.md`.
+- Design panel `Generate Type` now supports `None`:
+  - Updated `src/lib/components/DesignPanel.svelte`:
+    - added `🚫 None` option (`value=""`) to the `Generate Type` dropdown.
+  - Result:
+    - users can generate with no content preset add-on (parallel to Theme Style `None` behavior).
+  - Added session log `docs/session_logs/2026-03-03_session_255.md`.
+- Design panel Theme Style now supports `None` and updated Oil Painting Fantasy preset prompt:
+  - Updated `src/lib/components/DesignPanel.svelte`:
+    - added Theme Style dropdown option `🚫 None` (`stylePreset: default`).
+    - removed effect that forcibly reset style to `oil_painting_fantasy`, allowing GPT conceptualization and Genesis usage without a style preset.
+    - replaced Oil Painting Fantasy style text with:
+      - `Whimsical, surreal, vibrant, spec art 1980s fantasy oil painting, unified shadow masses, midtone-dominant value structure, soft form transitions, restrained highlights, matte surface rendering, simplified detail grouping, painterly background mass, selective high-chroma accents only on magical elements`
+    - `STYLE_PRESETS.oil_painting_fantasy` now uses the full preset text directly so Genesis appends it as the style add-on.
+  - Result:
+    - users can run GPT/Genesis with no style preset selected, or select Oil Painting Fantasy to append the new full style directive to the generation prompt.
+  - Added session log `docs/session_logs/2026-03-03_session_254.md`.
+- Preview save modal now executes save when folder is confirmed:
+  - Updated `src/lib/components/UnifiedSaveDialog.svelte`:
+    - added `autoSubmitOnFolderSelect` option.
+    - when enabled, folder selection in `FolderPicker` immediately submits save payload (if filename exists).
+  - Updated `src/routes/+page.svelte`:
+    - enabled `autoSubmitOnFolderSelect={true}` for Preview still-image save flow.
+  - Result:
+    - clicking `Save to: <folder>` in Preview save picker now performs the save instead of only selecting destination.
+  - Added session log `docs/session_logs/2026-03-03_session_253.md`.
+- Reverted to full rembg BG removal behavior:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - set `USE_HYBRID_BG_REMOVAL = false` to restore full rembg processing.
+    - progress/status messaging now reflects rembg cleanup in rollback mode.
+  - Updated `src/lib/components/AnimationPreview.svelte`:
+    - set `USE_HYBRID_BG_REMOVAL = false` to restore full rembg processing for Preview actions.
+    - progress/status messaging now reflects rembg cleanup in rollback mode.
+  - Result:
+    - background removal again runs rembg on all selected frames instead of selective fallback.
+  - Added session log `docs/session_logs/2026-03-03_session_252.md`.
+- Preview tab now supports saving the entire animation frame set to folder storage:
+  - Updated `src/lib/components/AnimationPreview.svelte`:
+    - added new `💾 Save All` toolbar button.
+    - save dialog now supports `single` and `all` modes.
+    - all-mode uploads each frame and creates folder file records with sequence naming:
+      - `base_frame_001.png`, `base_frame_002.png`, ...
+  - Result:
+    - users can persist full edited animation frame sequences directly from Preview without manual per-frame saves.
+  - Added session log `docs/session_logs/2026-03-03_session_251.md`.
+- Post-animation Preview BG tools now use hybrid cleanup with rembg fallback:
+  - Updated `src/lib/components/AnimationPreview.svelte`:
+    - both toolbar actions now run hybrid flow:
+      - `✨ BG` (current frame)
+      - `✨ All` (all frames)
+    - flow:
+      1. chroma-only cleanup
+      2. green artifact detection
+      3. rembg fallback only on flagged frames
+    - added rollback switch `USE_HYBRID_BG_REMOVAL` for immediate return to full-rembg behavior.
+  - Result:
+    - post-animation cleanup in Preview now matches generation-time cost-saving logic and remains reversible.
+  - Added session log `docs/session_logs/2026-03-03_session_250.md`.
+- Animation BG removal now detects green artifacts and only runs rembg fallback on flagged frames:
+  - Updated `src/lib/utils/backgroundCleanup.js`:
+    - added `detectGreenArtifacts(imageDataUrl, options)` returning:
+      - `edgeSpillRatio`
+      - `opaqueGreenRatio`
+      - `isArtifact`
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - `removeBackgroundWithRembg(...)` now runs hybrid pipeline:
+      1. chroma-only cleanup on all frames (`cleanupBackgrounds`, cheap local pass)
+      2. artifact scan using `detectGreenArtifacts`
+      3. rembg API fallback only for flagged frames
+    - added rollback switch `USE_HYBRID_BG_REMOVAL` for immediate return to legacy full-rembg mode.
+    - progress text now separates `Chroma cleanup` and `rembg fallback` phases.
+  - Result:
+    - reduced rembg calls/cost on clean runs while preserving fallback quality when green spill remains.
+  - Added session log `docs/session_logs/2026-03-03_session_249.md`.
+- Jobs listing is now interruption-resilient with Firebase-backed logging:
+  - Updated `src/lib/stores/jobQueue.js`:
+    - queue is now persisted locally and hydrated on load (`spritemagician_job_queue_v1`).
+    - stale in-flight jobs from interrupted sessions are retained and normalized to failed interrupted entries (so they remain visible in Jobs).
+    - added offline retry log queue for Firebase job logs (`spritemagician_job_log_ops_v1`).
+  - Updated `src/lib/stores/completedJobs.js`:
+    - completed jobs now enqueue Firebase job-log sync operations on load/add/rename/remove/clear.
+    - added offline retry log queue (`spritemagician_completed_job_log_ops_v1`).
+  - Updated `src/lib/firebase/firestore.js`:
+    - added deterministic job-log helpers:
+      - `upsertJobLog(uid, jobId, payload)`
+      - `deleteJobLog(uid, jobId)`
+  - Result:
+    - jobs remain represented in the Jobs tab through refreshes and interruptions via local persistence,
+      while Firebase logging retries automatically once auth/network returns.
+  - Added session log `docs/session_logs/2026-03-03_session_248.md`.
+- Jobs thumbnails now distinguish output type with a bottom-left chip:
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - added tiny per-card type chip based on canonical kind:
+      - `IMG` for still image jobs
+      - `ANIM` for animation jobs
+      - `VID` for video-only jobs
+    - chip is rendered in the thumbnail bottom-left and coexists with status and edit-group badges.
+  - Result:
+    - users can quickly differentiate images vs animations in the Jobs grid without opening cards.
+  - Added session log `docs/session_logs/2026-03-03_session_247.md`.
+- Animation completion now auto-routes Frames + Export even when Jobs tab is not open:
+  - Root cause:
+    - completion lifecycle events were emitted from `JobsPanel.svelte`, which is only mounted while the Jobs tab is active.
+    - when animation finished while viewing File Tree/Frames, completion routing events did not fire.
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - after successful animation completion and completed-job persistence, now dispatches:
+      - `animationCompleted`
+      - `jobsAnimationSelected` with completed animation context.
+  - Result:
+    - on animation completion, right column switches to `Frames` and center panel routes to `Export` reliably.
+  - Added session log `docs/session_logs/2026-03-03_session_246.md`.
+- Quick edit preset prompts refactored to objective-first wording:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - rewrote all quick direction preset prompt text across contexts (character/building/item/asset/scenery/effects).
+    - each preset now starts with explicit `Objective:` phrasing for clearer intent.
+    - compiled prompt line now says `Quick direction objective:` for stronger instruction clarity.
+  - Result:
+    - quick edit instructions are clearer and more explicit about intended transformation outcome.
+  - Added session log `docs/session_logs/2026-03-03_session_245.md`.
+- Animation job-card click now opens Frames + Export views with loaded animation:
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - animation card click flow now dispatches `jobsAnimationSelected` event after loading selected frames into project state.
+  - Updated `src/routes/+page.svelte`:
+    - added `jobsAnimationSelected` listener to switch:
+      - left workflow tab to `Animate`
+      - middle panel tab to `Export`
+    - clears still-image Jobs preview override when animation is selected.
+  - Updated `src/lib/components/CenterPanel.svelte`:
+    - added `jobsAnimationSelected` listener to switch right-column tab to `Frames`.
+  - Result:
+    - clicking an animation job now opens the intended animation workflow context immediately:
+      - right: Frames tab
+      - middle: Export tab
+      - selected animation already loaded.
+  - Added session log `docs/session_logs/2026-03-03_session_244.md`.
+- Edit carousel now follows Jobs cluster lineage rules:
+  - New behavior target:
+    - new upload/drag-drop starts a new cluster
+    - subsequent edits remain in same cluster
+    - branching from earlier step starts new cluster
+    - loading a Jobs card loads the full cluster sequence in order
+    - Jobs menu supports explicit fresh fork from any sprite result
+  - Updated `src/lib/stores/project.js`:
+    - added persisted edit handoff fields:
+      - `editFileId`
+      - `editClusterId`
+      - `editForceNewCluster`
+  - Updated `src/routes/+page.svelte`:
+    - handoff into Edit now includes cluster and fork flags.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - added cluster-aware history hydration from Jobs store.
+    - loading from Jobs now restores full cluster order in carousel.
+    - upload/drag-drop creates new cluster.
+    - branch edits (editing from non-latest step) create new cluster.
+    - saved completed edit jobs now include `editClusterId`.
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - groups now key primarily by `editClusterId` (legacy fallback `editRootHistoryId`).
+    - load-in-edit passes cluster id through store handoff.
+    - added `Start New Fork` menu action (treat as fresh upload cluster).
+  - Updated `src/lib/stores/completedJobs.js`:
+    - sprite jobs now persist `editClusterId`.
+    - removed source-file dedupe replacement behavior so edits no longer collapse into single card.
+    - each edit result is stored as a distinct completed job entry.
+  - Updated `src/lib/firebase/firestore.js`:
+    - added `saveEditClusterJob(uid, clusterId, job)` for Firebase persistence of cluster snapshots:
+      - `users/{uid}/edit_clusters/{clusterId}`
+      - `users/{uid}/edit_clusters/{clusterId}/jobs/{jobId}`
+  - Result:
+    - Jobs groups are now the intended source for carousel lineage, and cluster data is additionally synced to Firebase for durability.
+  - Added session log `docs/session_logs/2026-03-03_session_243.md`.
+- Edit now supports explicit direction presets + per-job JSON prompt inspection:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - added new `Direction` selector under edit presets:
+      - Front, Back, Left Profile, Right Profile, Isometric, 3/4 Angle
+    - each direction carries detailed descriptive rules and is injected into compiled prompt text.
+    - direction state is persisted in edit local state and sent as part of `promptSpec`.
+    - completed edit jobs now store returned `promptJson`.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - extended prompt spec sanitization with direction fields.
+    - deterministic JSON prompt now includes direction metadata in:
+      - `scene.composition.camera_direction`
+      - `edit_controls.direction_label`
+      - `edit_controls.direction_description`
+    - compiler instructions now enforce strict direction behavior when provided.
+    - route now returns `promptJson` alongside generated `image`.
+  - Updated `src/lib/stores/completedJobs.js`:
+    - completed sprite records now persist `promptJson`.
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - added `View JSON Prompt` action to each card menu when prompt JSON exists.
+    - added modal viewer to inspect formatted JSON prompt per job card.
+  - Result:
+    - users can set explicit camera-facing direction constraints in Edit and inspect the exact generated JSON prompt from Jobs.
+  - Added session log `docs/session_logs/2026-03-03_session_242.md`.
+- Edit Quick Direction now enforces a major visible pose/action transform:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - when a quick direction preset is selected, compiled prompt now includes explicit mandatory transform language:
+      - pose/action change must be clear and visible (not subtle)
+      - while preserving identity, camera angle, framing, style, and scale
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - deterministic JSON prompt now sets `edit_controls.pose_transform_required` when quick direction is present.
+    - JSON compiler instruction now explicitly requires a major visible pose/action change if quick direction exists.
+    - final Nano Banana instruction reiterates quick-direction as mandatory full-body transform behavior.
+  - Result:
+    - pose presets like `Mid Sprint` should no longer resolve to only tiny movement tweaks.
+  - Added session log `docs/session_logs/2026-03-03_session_241.md`.
+- Editor edit generation now compiles strict JSON prompts with backend control mapping:
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - added JSON prompt compiler for Nano Banana edit flow with fallback chain:
+      - OpenAI (`gpt-4.1-mini`) when API key exists
+      - Gemini text (`gemini-2.5-flash`)
+      - deterministic local JSON builder
+    - compiler consumes Edit control payload (`promptSpec`) and encodes strict lock requirements for:
+      - camera angle/framing/perspective
+      - subject scale/composition
+      - style and identity fidelity
+    - output aspect ratio is now derived from source dimensions (no longer hardcoded `1:1`).
+    - idempotency hash payload now includes sanitized `promptSpec`.
+    - removed obsolete route-level source image base64 pre-conversion block no longer used in generation path.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - edit requests now include `promptSpec` with context/strategy/preset/toggles/chroma/negative prompt + compiled prompt.
+  - Result:
+    - edit pipeline now sends structured JSON task instructions with stronger visual-lock behavior and source aspect-ratio preservation.
+  - Added session log `docs/session_logs/2026-03-03_session_240.md`.
+- Jobs card click now updates both Edit source and right Preview panel:
+  - Follow-up behavior update in `src/lib/components/JobsPanel.svelte`.
+  - On image-card click (including subcards), flow now does both:
+    - load image into Edit (`projectStore.editImage`)
+    - publish same image to right preview (`jobsPreviewSelected` via existing `previewInRightPanel(...)` call)
+  - Result:
+    - clicked Jobs card appears in Preview panel while also loading into Edit.
+  - Added session log `docs/session_logs/2026-03-03_session_239.md`.
+- Jobs card click now loads still-image jobs directly into Edit (including subcards):
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - added `loadIntoEditFromJob(job)` helper for sprite/image jobs.
+    - `onJobCardClick(entry)` now routes image-card clicks to Edit via `projectStore.editImage`.
+    - child edit cards (subcards) now follow the same click-to-edit behavior.
+    - animation/non-image jobs keep existing preview/project behavior.
+  - Result:
+    - clicking any still image card in Jobs immediately opens it in Edit, including child edit history cards.
+  - Added session log `docs/session_logs/2026-03-03_session_238.md`.
+- Adjusted Nano Banana edit resolution cap from 600 to 640 max edge:
+  - User requested slightly larger cap while keeping low-cost behavior.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - Nano Banana input downscale cap changed from `600` to `640`.
+    - Nano Banana output downscale cap changed from `600` to `640`.
+  - Updated `src/routes/api/edit-image/+server.js` telemetry metadata:
+    - `outputMaxEdge` changed from `600` to `640`.
+  - Result:
+    - low-cost mode retained with a modestly larger output ceiling.
+  - Added session log `docs/session_logs/2026-03-03_session_237.md`.
+- Adjusted Nano Banana edit resolution cap to 600px max edge:
+  - User requirement: no need for images larger than `600x600`.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - low-cost Nano Banana input downscale cap changed from `256` to `600`.
+    - low-cost Nano Banana output downscale cap changed from `256` to `600`.
+  - Updated `src/routes/api/edit-image/+server.js` telemetry metadata:
+    - `outputMaxEdge` changed from `256` to `600`.
+  - Result:
+    - Edit output remains cost-controlled while allowing up to 600px max edge for better readability.
+  - Added session log `docs/session_logs/2026-03-03_session_236.md`.
+- Edit pipeline reverted to Nano Banana with cost-minimized output and single in-flight generation:
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - edit model normalization now resolves to `nano_banana`.
+    - edit generation now uses Gemini Nano Banana (`gemini-2.5-flash-image`) path for image editing.
+    - added per-user in-memory concurrency guard for edit route:
+      - if user already has an active edit generation, route returns `429` with single-in-flight message.
+    - usage tracking provider for edit route now records `gemini`.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - Edit Model selector now only exposes `Nano Banana (Low Cost)`.
+    - edit request image is downscaled client-side to max edge `256` before submit (cost-minimizing input).
+    - returned image is downscaled client-side to max edge `256` before preview/history/save (minimal output resolution).
+    - persisted edit model value now expects `nano_banana`.
+  - Result:
+    - Edit uses Nano Banana only.
+    - output resolution is intentionally minimal for lowest-cost operation.
+    - only one edit generation per user is allowed at a time.
+  - Added session log `docs/session_logs/2026-03-03_session_235.md`.
+- Added tiny-input safeguard for Kontext edit dimensions:
+  - Observed issue: preserving source dimensions caused unusable tiny outputs when Edit source was a small thumbnail (e.g. `64x64`).
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - in `buildRunpodInput(...)`, when model is Kontext and requested dimensions are below `256` on either axis:
+      - auto-upscale to a sane working size (min edge target `768`, rounded to 64-step grid, clamped to `<= 2048`).
+  - Result:
+    - prevents postage-stamp Kontext outputs from accidental low-res source handoffs.
+  - Added session log `docs/session_logs/2026-03-03_session_234.md`.
+- Reduced Kontext over-editing and preserved source framing:
+  - User-observed regression: Kontext output looked heavily repainted vs source.
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - edit request now includes source image dimensions:
+      - `imgWidth`
+      - `imgHeight`
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - `buildRunpodInput(...)` now accepts `width`/`height` and applies bounded source dimensions (64..2048), instead of always forcing `1024x1024`.
+    - `buildRunpodInput(...)` now applies model-aware strength defaults:
+      - Kontext: `0.22` (or `0.15` when `preferDetailFidelity`)
+      - Qwen: unchanged baseline behavior (`0.45` / `0.35` fidelity mode)
+    - request body now reads `imgWidth`/`imgHeight` and forwards them to RunPod input.
+  - Result:
+    - less destructive Kontext edits and better preservation of original composition/detail.
+  - Added session log `docs/session_logs/2026-03-03_session_233.md`.
+- Fixed Kontext image decode failure (`PIL.UnidentifiedImageError`) by normalizing non-URL image payload fields to raw base64:
+  - Runtime log showed worker behavior:
+    - `Base64 input saved to .../input_image.jpg` followed by
+    - `PIL.UnidentifiedImageError: cannot identify image file`.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - `buildRunpodInput(...)` now accepts selected model (`qwen` | `kontext`).
+    - For Kontext data/base64 uploads:
+      - sends `image`, `image_path`, `source_image`, `input_image`, and `image_base64` as normalized raw base64 (no data-URL prefix).
+      - still sends `image_data_url` for compatibility.
+    - Existing Qwen path remains unchanged (continues to use data URL + base64 helper field).
+  - Result:
+    - avoids passing data-URL text into fields the Kontext worker appears to decode as base64 bytes.
+  - Added session log `docs/session_logs/2026-03-03_session_232.md`.
+- Added required image size fields for RunPod edit handlers:
+  - New runtime error indicated missing schema key:
+    - `KeyError: 'width'` in handler (`job_input["width"]` expected).
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - `buildRunpodInput(...)` now includes:
+      - `width: 1024`
+      - `height: 1024`
+  - Result:
+    - payload now includes size fields alongside previously added required controls/keys.
+  - Added session log `docs/session_logs/2026-03-03_session_231.md`.
+- Stabilized RunPod edit payload for both Qwen and Kontext handlers:
+  - Runtime errors showed missing handler-required keys (`guidance`) and intermittent upstream 400 responses.
+  - Updated `src/routes/api/edit-image/+server.js` payload defaults in `buildRunpodInput(...)`:
+    - added `guidance`
+    - added `guidance_scale`
+    - added `steps`
+    - added `num_inference_steps`
+    - added `strength`
+    - (existing `seed` and `image_path` support retained)
+  - Result:
+    - both model paths now receive a fuller, handler-compatible control set to reduce schema-related failures.
+  - Added session log `docs/session_logs/2026-03-03_session_230.md`.
+- Fixed second Kontext payload mismatch (`seed` requirement):
+  - Runtime log showed RunPod worker failure:
+    - `KeyError: 'seed'` (`job_input["seed"]` expected by Kontext handler).
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - `buildRunpodInput(...)` now always includes an integer `seed` value.
+  - Result:
+    - Kontext handler now receives both required keys observed so far:
+      - `image_path`
+      - `seed`
+  - Added session log `docs/session_logs/2026-03-03_session_229.md`.
+- Fixed Kontext edit 500 error in RunPod payload mapping:
+  - Root cause observed in server logs:
+    - RunPod worker error `KeyError: 'image_path'` from Kontext handler.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - data-URL edit inputs now also populate `input.image_path` (in addition to `image`, `source_image`, and `image_base64`).
+  - Result:
+    - Kontext endpoint receives the required `image_path` field for non-URL uploads, resolving immediate request failure.
+  - Added session log `docs/session_logs/2026-03-03_session_228.md`.
+- Jobs top action menu redesigned into cleaner two-row layout:
+  - Updated `src/lib/components/JobsPanel.svelte` toolbar presentation:
+    - row 1: selection summary + `Select All` + `Cancel` (+ `Back` when in focused view),
+    - row 2: action buttons (`Use`, `Save`, `Rename`, `Download`, `Delete`) in a consistent 5-column grid.
+  - Preserved existing enabled/disabled behavior for selection-dependent actions.
+  - Result:
+    - reduced horizontal crowding,
+    - cleaner spacing and visual grouping in compact panel widths.
+  - Added session log `docs/session_logs/2026-03-03_session_227.md`.
+- Edit model switching added between Qwen and Kontext (RunPod):
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - added `Edit Model` selector in Edit mode with options:
+      - `Qwen`
+      - `Kontext`
+    - persists selected edit model in local edit state.
+    - sends `editModel` in `/api/edit-image` request payload.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - added `editModel` request handling and normalization (`qwen` | `kontext`).
+    - endpoint selection now routes by model:
+      - Qwen endpoint from existing `RUNPOD_QWEN_IMAGE_ENDPOINT_ID` / `RUNPOD_IMAGE_EDIT_ENDPOINT_ID`.
+      - Kontext endpoint from `RUNPOD_KONTEXT_IMAGE_ENDPOINT_ID`, with fallback default endpoint id `07t9vff9f2ek8u`.
+    - usage telemetry now includes selected model in metadata.
+    - missing-config error now names selected model.
+  - Result:
+    - Edit path remains RunPod-only but now supports model switching between Qwen and Kontext.
+  - Added session log `docs/session_logs/2026-03-03_session_226.md`.
+- Jobs panel now uses focused edit-group drilldown instead of inline expansion:
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - clicking a parent job with edit variants now opens a focused view showing only that job + its edits.
+    - added `Back` button in top jobs toolbar to return to full jobs list.
+    - removed inline expand/collapse behavior that expanded edits within the global list.
+    - `Select All` now scopes to currently rendered jobs (respects focused view).
+    - selection is cleared on drilldown/back transitions to avoid stale cross-view selection.
+  - Result:
+    - selecting a job no longer expands everything in place,
+    - users can isolate one job’s edit history and navigate back cleanly.
+  - Added session log `docs/session_logs/2026-03-03_session_225.md`.
+- Nano/Gemini fully removed from Edit flow:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - removed edit-engine selector UI (no Nano/Gemini option in Edit).
+    - removed local edit state fields related to backend selection.
+    - edit requests no longer send backend-selection override.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - removed Gemini edit path and all Gemini fallback logic.
+    - endpoint now runs Qwen via RunPod only.
+    - if RunPod Qwen config is missing, endpoint returns explicit configuration error.
+    - usage tracking provider for edit route now consistently reports `runpod`.
+  - Result:
+    - Edit no longer uses Nano Banana/Gemini under any condition.
+  - Added session log `docs/session_logs/2026-03-03_session_224.md`.
+- Edit engine control added + Qwen isolation command reinforcement:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - added `Edit Engine` selector in Edit mode:
+      - `Auto (fidelity guard for Remove BG)`
+      - `Qwen (RunPod)`
+      - `Nano/Gemini (detail-first)`
+    - persisted engine preference in local edit-state storage.
+    - `/api/edit-image` payload now includes `editBackendPreference`.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - added normalized backend preference handling (`auto` | `qwen` | `gemini`).
+    - backend routing rules:
+      - `qwen` forces RunPod path (if configured),
+      - `gemini` forces Gemini path,
+      - `auto` keeps fidelity guard behavior (skip RunPod when detail-fidelity flag is active).
+    - for RunPod edit prompts that look like background-isolation tasks, wraps prompt with strict subject-preservation rules to reduce repaint/smoothing artifacts.
+  - Added session log `docs/session_logs/2026-03-03_session_223.md`.
+- Detail-fidelity fix for background-isolation edits (muddiness regression mitigation):
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - when `Remove Background` is enabled in Edit mode, request now includes `preferDetailFidelity: true`.
+    - strengthened compiled prompt with strict detail-lock constraints:
+      - preserve identity/material/micro-texture/silhouette,
+      - do not repaint/smooth/blur/restylize foreground subject,
+      - only change background separation.
+  - Updated `src/routes/api/edit-image/+server.js`:
+    - added `preferDetailFidelity` request flag handling.
+    - when true, bypass RunPod/Qwen path and route edit through Gemini cascade path for higher-detail consistency.
+  - Result:
+    - remove-background edits now prioritize fidelity-consistent outputs over Qwen endpoint routing.
+  - Added session log `docs/session_logs/2026-03-03_session_222.md`.
+- Task 7 completed for file-system refactor mission (single-click behavior standardization in File Tree):
+  - Updated `src/lib/components/FileTree.svelte` to remove double-click handlers in both grid and list rows.
+  - Removed unused `dblClickItem()` helper.
+  - Result:
+    - folders open via single click,
+    - files route via single click behavior only,
+    - no double-click dependency remains in File Tree row interactions.
+  - Added session log `docs/session_logs/2026-03-03_session_221.md`.
+- Task 5 completed for file-system refactor mission (list-mode sortable columns with folders-first ordering):
+  - Updated `src/lib/components/FileTree.svelte` list mode:
+    - added sortable column headers:
+      - `Name`
+      - `Type`
+      - `Modified`
+      - `Size`
+    - added sort direction indicators (`▲` / `▼`) in header.
+    - added interactive sort-state behavior:
+      - clicking same column toggles asc/desc,
+      - switching columns applies sensible default direction (`modified`/`size` default desc).
+    - list rendering now uses sorted derived dataset while preserving required folders-first ordering.
+    - within folder/file groups, sorting applies to selected column and direction.
+  - Grid mode behavior unchanged.
+  - Added session log `docs/session_logs/2026-03-03_session_220.md`.
+- Jobs action toolbar now stays visible with persistent controls:
+  - Updated `src/lib/components/JobsPanel.svelte` selection toolbar behavior:
+    - toolbar is always visible (not only after selection),
+    - added dedicated `☑ Select All` button,
+    - `Use`, `Save`, `Rename`, `Download`, `Delete`, and `Cancel` remain visible but are disabled/faded when no jobs are selected.
+  - Removed redundant `Select all` link from jobs status bar.
+  - Added session log `docs/session_logs/2026-03-03_session_219.md`.
+- Jobs actions expanded: rename, delete, and save-to-specific-folder workflow polished:
+  - Updated `src/lib/stores/completedJobs.js`:
+    - added `renameJob(id, nextName)` with IndexedDB persistence and resorting.
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - added single-job rename action in card menu (`✏️ Rename`),
+    - added batch rename in selection toolbar (`✏ Rename`) using base name + numbering,
+    - retained batch delete and batch save-to-folder actions,
+    - action menu now available for non-active jobs (completed + failed),
+    - `Save to Folder` menu action remains gated to completed/saved jobs.
+  - Result:
+    - jobs can now be renamed individually or in batch,
+    - jobs can still be deleted individually or in batch,
+    - jobs can be saved to a specific folder (single + batch).
+  - Added session log `docs/session_logs/2026-03-03_session_218.md`.
+- Jobs behavior adjusted toward one-card-per-edited-file workflow:
+  - Updated `src/lib/stores/completedJobs.js`:
+    - `addSprite()` now upserts by `sourceFileId` (for edit outputs) instead of always appending a new card.
+    - existing edited-file job card is updated in place with latest image/metadata while retaining stable job id.
+    - completed jobs now persist explicit `status: completed` and `updatedAt` for reliable sorting/status display.
+  - Updated `src/lib/components/JobsPanel.svelte`:
+    - clicking a job card with `{ image, sourceFileId }` now opens Edit directly (`designNavigate -> edit`) and passes:
+      - `editImage`
+      - `editFileId`
+    - fallback behavior remains preview for non-edit-linked jobs.
+    - canonical status now treats legacy completed entries without explicit status as `completed` when they contain output payloads.
+  - Result:
+    - edit jobs now converge to one card per edited source file (for new writes),
+    - card click opens editor flow where that file’s carousel history can load.
+  - Added session log `docs/session_logs/2026-03-03_session_217.md`.
+- Jobs panel now supports folder-like edit groups for image edit chains:
+  - Updated `src/lib/components/EditPanel.svelte` to attach edit lineage metadata when writing completed edit jobs:
+    - `editHistoryId`
+    - `editParentHistoryId`
+    - `editRootHistoryId`
+    - `sourceFileId`
+  - Updated `src/lib/stores/completedJobs.js` `addSprite()` to persist the above fields in completed-job records.
+  - Updated `src/lib/components/JobsPanel.svelte` to group completed sprite jobs by `editRootHistoryId`:
+    - top card acts as expandable parent ("folder-like"),
+    - click parent to open/close child edits,
+    - child edit cards are selectable and actionable like other jobs.
+  - Parent cards now show edit-child count badge (`📂 N`) and open/collapse hint.
+  - Added session log `docs/session_logs/2026-03-03_session_216.md`.
+- Added per-file Edit history persistence and list-mode edit counts:
+  - Updated `src/lib/components/EditPanel.svelte`:
+    - added `sourceFileId` prop support,
+    - persists history carousel state per file in localStorage key `spritemagician.editHistory.byFile.v1`,
+    - loads stored history when a file is selected for editing,
+    - keeps active history node synchronized when navigating carousel.
+  - Updated `src/lib/components/FileTree.svelte`:
+    - when loading a file into Edit, now passes selected file id through project store (`editFileId`),
+    - list expanded info now shows `Edits` count per file,
+    - listens for edit-history updates and refreshes count display.
+  - Updated `src/routes/+page.svelte`:
+    - captures `editFileId` from file-tree handoff and passes `sourceFileId` into `EditPanel`.
+  - Result:
+    - selecting a previously edited file restores its carousel history,
+    - list expanded info shows how many edits are recorded for that file.
+  - Added session log `docs/session_logs/2026-03-03_session_215.md`.
+- Further compacted right preview action controls to reduce vertical space:
+  - Updated `src/routes/+page.svelte` action button group from 2-column mixed-span layout to dense 3-column grid (2 rows).
+  - Reduced button vertical padding and font size (`text-[10px]`, tighter spacing).
+  - Removed full-width rows for `Save To...` and `Quick Save`, placing them inline with other actions.
+  - Added session log `docs/session_logs/2026-03-03_session_214.md`.
+- Tightened right preview panel layout for better space usage:
+  - Updated `src/routes/+page.svelte`:
+    - removed top preview context bar (`PreviewContextHeader`) from preview panel,
+    - removed redundant result label text above preview image (`Edit Result` / similar),
+    - reduced preview section padding and spacing,
+    - compacted bottom action buttons (`Set Start`, `Set End`, `Load in Edit`, `Use in GPT Chat`, `Save To...`, `Quick Save`) with smaller vertical padding and font size.
+  - Added session log `docs/session_logs/2026-03-03_session_213.md`.
+- Added right-panel preview quick-save action to current File Tree folder:
+  - Updated `src/routes/+page.svelte` to add `⚡ Quick Save (Current Folder)` button under preview actions.
+  - Quick Save writes directly to current File Tree folder (`userFiles.currentFolderId`) using existing save pipeline.
+  - Button is disabled when no folder is currently open/selected in File Tree.
+  - Added user-facing guard note when quick-save target folder context is missing.
+  - Added session log `docs/session_logs/2026-03-03_session_212.md`.
+- Fixed File Tree single-click preview handoff regression:
+  - Updated `src/lib/components/FileTree.svelte` so single-clicking a file now dispatches preview handoff event (`jobsPreviewSelected`) for previewable image-type files.
+  - Added file-type guard helper to avoid sending unsupported types to image preview (`video` excluded; common image extensions and `fileType === image` supported).
+  - Result: image files and sprite-sheet image files selected in File Tree now appear in right preview panel on single click.
+  - Added session log `docs/session_logs/2026-03-03_session_211.md`.
+- File Tree list-mode usability polish after UX feedback:
+  - Updated `src/lib/components/FileTree.svelte` list rows to remove duplicate type signaling:
+    - removed inline `IMG` badge from Name column (Type column remains source of truth).
+  - Fixed list row actions menu placement:
+    - dropdown now anchors to `right-0` so it opens inward and avoids clipping off-screen near right boundary.
+  - Added explicit per-row details toggle control in list mode:
+    - new left-side expand/collapse button (`▸`/`▾`) in each row,
+    - expandable details panel now shows metadata summary (name, type, created, modified, size, id).
+  - Added session log `docs/session_logs/2026-03-03_session_210.md`.
+- Task 4 completed for file-system refactor mission (save destination modal enforcement):
+  - Updated `src/lib/components/UnifiedSaveDialog.svelte` to support explicit folder-enforcement mode:
+    - new prop: `forceFolderPick`,
+    - auto-opens folder picker when modal opens without a selected folder,
+    - disables Save button until destination folder is selected when enforcement is enabled,
+    - shows inline destination-required hint.
+  - Updated `src/routes/+page.svelte` preview save dialog usage to enforce explicit folder pick:
+    - `forceFolderPick={true}`
+    - start context remains root (`startFolderId={null}`, `startFolderName={'Root'}`).
+  - Result: preview save cannot proceed until a folder is explicitly selected in the modal.
+  - Added session log `docs/session_logs/2026-03-03_session_209.md`.
+- Task 3 completed for file-system refactor mission (file-system command cleanup):
+  - Updated `src/lib/components/FileTree.svelte`:
+    - removed `🎯 New Asset` toolbar action,
+    - removed folder action `Set Active Asset` from grid/list row menus,
+    - removed active-asset highlight styling in grid/list rows,
+    - removed file-tree asset-workspace creation helper and active-asset context reset call on fresh start.
+  - Updated `src/lib/components/CenterPanel.svelte` file-system command labels to neutral folder language:
+    - `Select Asset Folder` -> `Select Folder`
+    - `Use asset folder` -> `Use folder`
+    - `Active Asset` -> `Current Folder`
+    - `Select Asset` -> `Select Folder`
+  - File/folder core commands (`New`, `Upload`, `Fresh Start`, rename/delete/move) remain functional.
+  - Added session log `docs/session_logs/2026-03-03_session_208.md`.
+- Task 2 completed for file-system refactor mission (hard legacy cleanup migration):
+  - Added migration script: `scripts/migrate-remove-asset-fields.mjs`.
+  - Script removes legacy asset-oriented Firestore fields from user/file docs:
+    - `metadata.assetType`
+    - `metadata.chromaKeyHex`
+    - `assetType`
+    - `chromaKeyHex`
+    - `activeAsset`
+    - `activeAssetId`
+    - `activeAssetFolderId`
+    - `activeAssetFolderPath`
+  - Executed migration in both modes:
+    - dry-run: `node scripts/migrate-remove-asset-fields.mjs --dry-run`
+    - apply: `node scripts/migrate-remove-asset-fields.mjs --apply`
+  - Migration result:
+    - users visited: 1
+    - file docs visited: 86
+    - file docs touched: 7
+    - writes executed: 7
+  - Added session log `docs/session_logs/2026-03-03_session_207.md`.
+- Task 1 completed for file-system refactor mission (data-model cutover):
+  - Updated `src/routes/+page.svelte` preview save flow to remove runtime dependency on active-asset context:
+    - save dialog no longer preloads active asset folder,
+    - save guard no longer checks active asset state,
+    - save now requires explicit destination selection in modal.
+  - Updated `src/routes/api/create-folder/+server.js` to stop writing asset-specific metadata on new folder writes:
+    - removed `metadata.assetType`,
+    - removed `metadata.chromaKeyHex`.
+  - Added session log `docs/session_logs/2026-03-03_session_206.md`.
+- Added file-system refactor mission document for asset-model removal rollout:
+  - Created `docs/FILE_SYSTEM_REFACTOR_MISSION.md`.
+  - Locked implementation rules:
+    - one task at a time,
+    - report after each task,
+    - wait for explicit user `next`.
+  - Documented phased tasks for:
+    - asset removal (UI + data),
+    - hard migration,
+    - preview save destination modal enforcement,
+    - list mode/table view with sorting and row details/actions,
+    - per-project view preference persistence in Firestore,
+    - preset metadata (`presetId`) forward compatibility.
+  - Added session log `docs/session_logs/2026-03-03_session_205.md`.
+- Added sign-in entry points and first-login onboarding wizard:
+  - Updated `src/routes/+page.svelte` to expose sign-in CTA for logged-out users in the header and Home login block.
+  - Updated `src/routes/login/+page.svelte` to route newly created or unfinished accounts to setup flow after session creation.
+  - Updated `src/routes/api/session/+server.js` to return `isNewUser` and `needsOnboarding`, and initialize onboarding state on new user docs.
+  - Added `src/routes/setup/+page.server.js` and `src/routes/setup/+page.svelte` for authenticated account setup wizard.
+  - Added `src/routes/api/onboarding/+server.js` to complete onboarding with either:
+    - API key submission, or
+    - explicit skip.
+  - Added server-side key encryption helper `src/lib/server/secretVault.js` (AES-256-GCM) for stored API keys.
+  - Added session log `docs/session_logs/2026-03-03_session_204.md`.
+- Removed global login requirement for site access:
+  - Updated `src/routes/+layout.server.js` to stop redirecting logged-out users to `/login`.
+  - Logged-out users can now browse the full website UI.
+  - Existing logged-in redirect away from `/login` is preserved.
+  - Auth-based feature restrictions remain deferred for a later phase.
+  - Added session log `docs/session_logs/2026-03-03_session_203.md`.
+- Added Home mode scaffold in main workspace shell with placeholder-driven content:
+  - Updated `src/routes/+page.svelte` to add `Home` as default initial mode and include `Home` button in top nav next to `2D` / `3D`.
+  - Kept the same 3-panel layout for Home mode:
+    - Left panel tabs: `📚 Docs` and `🎓 Tutorials` placeholders.
+    - Center panel tabs: `🏠 Home` and `⚙️ Settings` (settings placeholder).
+    - Right panel: subscription plans placeholder + wallet placeholder with `Balance`.
+  - Home center content behavior:
+    - Logged-out users see login information and brief site description.
+    - Logged-in users see six project thumbnails (including `Create New Project`) and a placeholder project list below.
+  - Added `Create New Project` modal scaffold (placeholder content only).
+  - Mobile behavior for Home now focuses the center panel on initial load.
+  - Added session log `docs/session_logs/2026-03-03_session_202.md`.
+- Restructured Edit panel top controls to side-by-side source + dropdown column:
+  - Updated `src/lib/components/EditPanel.svelte` so source image block occupies left half and `Edit Mode` / `Context` / `Quick Direction` dropdowns are stacked in a right column (`md:grid-cols-2` layout).
+  - Reduced source preview vertical footprint and moved checkbox toggles into a separate full-width row below.
+  - Keeps expand setup in right column when Expand mode is selected.
+  - Added session log `docs/session_logs/2026-03-03_session_200.md`.
+- Swapped center and right panel content in main 2D workspace layout:
+  - Updated `src/routes/+page.svelte` so center column now hosts `Preview / Export`.
+  - Right column now hosts `CenterPanel` (`File Tree / Jobs / Frames`).
+  - Existing panel internals and behavior unchanged; only placement/order changed.
+  - Added session log `docs/session_logs/2026-03-03_session_199.md`.
+- Fixed disappearing edit-history carousel entries in `Edit` panel:
+  - Updated `src/lib/components/EditPanel.svelte` to avoid resetting history when parent `initialImage` echoes a just-generated image back into the component.
+  - If incoming `initialImage` matches an existing history node, panel now activates that node instead of rebuilding history root.
+  - Preserves prior edits/forks across sequential edits and thumbnail navigation.
+  - Added session log `docs/session_logs/2026-03-03_session_198.md`.
+- Fixed Quick Direction prompt wiring in `Edit` panel:
+  - Updated `src/lib/components/EditPanel.svelte` so compiled edit prompts now include the selected quick-direction preset instruction text (`preset.prompt`), not only the preset label.
+  - Added quick-direction preset metadata line to compiled prompt for traceability/debugging.
+  - Resolves behavior where edits appeared to ignore Quick Direction selection.
+  - Added session log `docs/session_logs/2026-03-03_session_197.md`.
+- Added persistent character proportion guardrails for all Edit operations:
+  - Updated `src/lib/components/EditPanel.svelte` `buildCompiledEditPrompt()` to always inject anatomy/proportion constraints whenever `Context` is `character`.
+  - Character edits now automatically include normal humanoid ratio targets and anti-chibi/anti-bobblehead constraints without requiring manual prompt entry each time.
+  - Added session log `docs/session_logs/2026-03-03_session_196.md`.
+- Corrected remaining Edit panel control breakage after initial redesign:
+  - Updated `src/lib/components/EditPanel.svelte` to stack source + controls vertically instead of keeping a narrow side-by-side split.
+  - Moved edit-select controls to only use 3 columns at larger breakpoints and simplified toggle rows to prevent clipping/truncation.
+  - Added full-row span for the third toggle control to keep button rows visually clean.
+  - Added session log `docs/session_logs/2026-03-03_session_195.md`.
+- Polished `Edit` panel UI to remove cramped/ugly control layout:
+  - Updated `src/lib/components/EditPanel.svelte` carousel rendering to keep active step centered with fixed slot placeholders (5-7 slots), even when history count is low.
+  - Improved carousel arrows and thumbnail styling for clearer navigation affordances.
+  - Adjusted main layout breakpoint and spacing so source card + controls no longer look compressed.
+  - Cleaned control row visuals (select/button sizing, checkbox wrapping, label text) to prevent overflow and broken-looking button lines.
+  - Added session log `docs/session_logs/2026-03-03_session_194.md`.
+- Redesigned `Edit` panel source UX and added edit-sequence navigation/forking:
+  - Updated `src/lib/components/EditPanel.svelte` with a top edit-history carousel (5-7 thumbnails), active centered highlight, and previous/next arrow navigation.
+  - Added click-to-open for any prior edit step and non-destructive forking when generating from older history nodes.
+  - Added fork-point labeling for nodes with multiple child edits.
+  - Replaced the large source preview with a compact upload/replace box plus medium current-source thumbnail.
+  - Added session log `docs/session_logs/2026-03-03_session_193.md`.
+- Fixed RunPod queue-based image-edit integration in `Edit` API flow:
+  - Updated `src/routes/api/edit-image/+server.js` to submit image edits via RunPod `/run` and poll `/status/{jobId}` until completion.
+  - Resolved failure where queue-based responses had no immediate image payload (`RunPod response did not contain an image`).
+  - Updated payload mapping to satisfy worker-required image keys (`image_url` / `image_path` / `image_base64`) based on input type.
+  - Added output normalization for raw base64 image responses so frontend always receives a valid data URL (`data:image/...`).
+  - Preserved existing output normalization and frontend contract (`{ image: dataUrl }`).
+  - Added session log `docs/session_logs/2026-03-03_session_192.md`.
+- Wired Edit image generation to RunPod Qwen image-edit endpoint (server-side):
+  - Updated `src/routes/api/edit-image/+server.js` to call RunPod via `/runsync` when `RUNPOD_API_KEY` and `RUNPOD_QWEN_IMAGE_ENDPOINT_ID` (or `RUNPOD_IMAGE_EDIT_ENDPOINT_ID`) are configured.
+  - Added flexible RunPod payload mapping (`prompt`, `instruction`, `image`, `images`) and robust output extraction for both data URLs and hosted image URLs.
+  - Added server-side URL-to-dataURL conversion so frontend and upload flows continue receiving `data:image/...` results without UI changes.
+  - Preserved existing Gemini cascade as fallback only when RunPod image-edit env vars are not set.
+  - Added session log `docs/session_logs/2026-03-03_session_191.md`.
+- Adjusted Edit split layout to keep large inputs full-width below:
+  - Updated `src/lib/components/EditPanel.svelte` so only preview + compact top controls remain in the 50/50 row.
+  - Moved prompt textarea, advanced section, and apply button back to full-width below the split row.
+  - Added session log `docs/session_logs/2026-02-25_session_190.md`.
+- Reworked Edit tab layout into a 50/50 preview-controls split:
+  - Updated `src/lib/components/EditPanel.svelte` to use a two-column layout on larger screens (`preview` left, `controls` right).
+  - Source preview now occupies half-width of the Edit panel container at desktop sizes.
+  - Edit/Expand controls, prompt area, advanced section, and apply button now render in the right half.
+  - Mobile behavior remains stacked (single-column) for narrow screens.
+  - Added session log `docs/session_logs/2026-02-25_session_189.md`.
+- Added character consistency edit-iteration planning doc:
+  - Created `docs/CHARACTER_CONSISTENCY_EDIT_ITERATION_PLAN.md`.
+  - Defines phased implementation for:
+    - consistency-first prompting
+    - sequential edit chains
+    - back/forward navigation
+    - branching
+    - output controls (aspect ratio/resolution/model routing)
+    - quality gates and retry flow
+  - Added session log `docs/session_logs/2026-02-25_session_188.md`.
+- Reverted synthetic progress display on Jobs cards (restored original behavior):
+  - Updated `src/lib/components/JobsPanel.svelte` to remove time-based fake progress rendering on active file cards.
+  - Card overlays now display raw `job.progress` again (original logic).
+  - Added session log `docs/session_logs/2026-02-25_session_187.md`.
+- Applied synthetic progress behavior to Jobs file cards:
+  - Updated `src/lib/components/JobsPanel.svelte` so active job cards no longer rely only on sparse backend progress updates.
+  - Card overlay percentage now uses a computed display value:
+    - takes max of actual queue progress and a time-based synthetic ramp
+    - ramps from ~10% up to 88% while active (`queued`/`processing`)
+    - preserves actual 100% when completed
+  - Added 1s tick effect while active jobs exist so card percentages update smoothly.
+  - Added session log `docs/session_logs/2026-02-25_session_186.md`.
+- Smoothed Edit/Expand job progress to avoid 10% stall:
+  - Updated `src/lib/components/EditPanel.svelte` to add simulated queue progress while generation is pending.
+  - Progress now increments steadily from 10% up to a cap of 88% during processing.
+  - On successful completion, queue completion still finalizes at 100%.
+  - On failure/early return, simulation timer is cleared before failing the job.
+  - Added session log `docs/session_logs/2026-02-25_session_185.md`.
+- Added `Context` control in Edit and context-specific prompt commands:
+  - Updated `src/lib/components/EditPanel.svelte` to add a `Context` dropdown in Edit mode (`Character`, `Building`, `Item`, `Asset`, `Scenery`, `Special Effect`).
+  - Quick Direction options now scope to the selected context instead of showing a mixed global list.
+  - Compiled prompt lines now vary by context, including explicit uncropped wording (example: building uses `Keep all parts of the building visible within the image.`).
+  - Consistency-mode command and remove-background command are also context-specific.
+  - Added context persistence to Edit panel local state and validation/reset behavior for invalid context IDs.
+  - Added session log `docs/session_logs/2026-02-25_session_184.md`.
+- Updated right Preview action layout and added GPT context action:
+  - Updated `src/routes/+page.svelte` so `Set Start` and `Set End` render adjacent in the same row.
+  - Added new right-panel button: `💬 Use in GPT Chat`.
+  - New action sets the current preview image as `chatReferenceImage`, switches Design mode to `chat`, and navigates to the Design tab.
+  - Save action now spans full row width below the action buttons.
+  - Added session log `docs/session_logs/2026-02-25_session_183.md`.
+- Removed top `Export` heading text in Export tab:
+  - Updated `src/lib/components/ExportPanel.svelte` to remove the top section label so panel starts directly with controls.
+  - Added session log `docs/session_logs/2026-02-25_session_182.md`.
+- Added live animated sprite preview to Export tab:
+  - Updated `src/lib/components/ExportPanel.svelte` to render an in-panel `Animated Sprite Preview`.
+  - Preview auto-plays by cycling `project.frames` at project FPS (fallback 12 fps), so users can see animation motion directly in Export.
+  - Added frame-index clamp behavior for frame-count changes to avoid stale-index issues.
+  - Added session log `docs/session_logs/2026-02-25_session_181.md`.
+- Fixed asset folder picker navigation so users can escape current folder:
+  - Updated `src/lib/components/FolderPicker.svelte` breadcrumb initialization.
+  - When opened with a current asset folder, picker now shows `Root / <CurrentFolder>` instead of only `<CurrentFolder>`.
+  - Result: users can click `Root` and navigate/select any folder, or create a new one in a different location.
+  - Added session log `docs/session_logs/2026-02-25_session_180.md`.
+- Removed BG selector from center panel active-asset bar and centered `Select Asset`:
+  - Updated `src/lib/components/CenterPanel.svelte` to remove the `BG` color picker and related save-status text.
+  - Removed chroma-key save handler/state/imports from center panel script.
+  - Updated active-asset bar layout from `1fr / auto / auto` to `1fr / auto / 1fr` so `🎯 Select Asset` remains visually centered.
+  - Added session log `docs/session_logs/2026-02-25_session_179.md`.
+- Added centered `🎯 Select Asset` control in center panel active-asset row:
+  - Updated `src/lib/components/CenterPanel.svelte` to place a centered `🎯 Select Asset` button between active-asset info and right-side toggles.
+  - Button opens folder selection modal for active asset context.
+  - Removed redundant `Change Folder` button from right-side controls.
+  - Passed asset-specific modal labels to folder picker (`🎯 Select Asset Folder`, `Use asset folder`).
+- Updated `src/lib/components/FolderPicker.svelte` with optional props:
+  - `modalTitle` (default: `📁 Save to Folder`)
+  - `confirmLabel` (default: `💾 Save to`)
+  - Existing usages remain unchanged via defaults; active-asset flow now uses asset-specific wording.
+  - Added session log `docs/session_logs/2026-02-25_session_178.md`.
+- Added compact stacked command lines for Edit mode + quick direction:
+  - Updated `src/lib/components/EditPanel.svelte` so compiled prompts always include a short edit-mode command:
+    - `Treat this as a fresh transform.`
+    - `Change only the requested target.`
+    - `Preserve subject identity and silhouette.`
+  - Updated quick direction output to a short stacked line:
+    - `Quick direction: <selected option label>.`
+  - Checkbox controls (`Keep Uncropped`, `Flat Background`, `Remove Background`) continue to stack as individual short lines.
+  - Added session log `docs/session_logs/2026-02-25_session_177.md`.
+- Replaced verbose Edit prompt compiler with minimal option-based lines:
+  - Updated `src/lib/components/EditPanel.svelte` so compiled Edit prompts no longer include `CONTROL RULES`, `EDIT SCOPE`, `AVOID`, `OUTPUT REQUIREMENTS`, or priority boilerplate.
+  - Compiled prompt now includes only short lines for active controls:
+    - quick direction (if selected)
+    - uncropped toggle
+    - flat background toggle
+    - remove background toggle
+    - user task text (if provided)
+  - Added session log `docs/session_logs/2026-02-25_session_176.md`.
+- Simplified uncropped Edit prompt wording to be direct and literal:
+  - Updated `src/lib/components/EditPanel.svelte` so uncropped output instructions now say: "Show the entire subject including head and feet."
+  - Applied this wording in both `CONTROL RULES` framing and `OUTPUT REQUIREMENTS`.
+  - Added session log `docs/session_logs/2026-02-25_session_175.md`.
 - Removed non-functional Edit context/style controls:
   - Updated `src/lib/components/EditPanel.svelte` to remove `Context Type` and `Style` dropdowns from Edit mode UI.
   - Removed context/style prompt-injection logic so these no longer silently influence generated edits.

@@ -29,12 +29,16 @@
 	let saveFolderPath   = $state(null);
 	let isSaving         = $state(false);
 	let jobsSaveNote     = $state('');
+	let showPromptModal = $state(false);
+	let promptModalTitle = $state('');
+	let promptModalBody = $state('');
 	let featureP1ActiveAssetDestinationGuard = $state(true);
 	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
 
 	// Multi-select
 	let selectedJobIds = $state(new Set());
 	let isSelectionMode = $derived(selectedJobIds.size > 0);
+	let focusedEditGroupId = $state(null);
 
 	jobQueue.subscribe(v => { queue = v; });
 	completedJobs.subscribe(v => { completed = v; });
@@ -54,6 +58,79 @@
 	const activeJobs = $derived(queue.filter(j => j.status === 'pending' || j.status === 'processing'));
 	const failedJobs = $derived(queue.filter(j => j.status === 'failed'));
 	const allJobs = $derived([...activeJobs, ...failedJobs, ...completed.jobs]);
+	const completedEditGroups = $derived.by(() => {
+		const grouped = new Map();
+		const groupedIds = new Set();
+		for (const job of completed.jobs) {
+			if (job?.type !== 'sprite') continue;
+			const key = job?.editClusterId || job?.editRootHistoryId;
+			if (!key) continue;
+			if (!grouped.has(key)) grouped.set(key, []);
+			grouped.get(key).push(job);
+			groupedIds.add(job.id);
+		}
+
+		const groups = [];
+		for (const [rootHistoryId, items] of grouped.entries()) {
+			const sorted = [...items].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+			const explicitRoot = sorted.find((item) => !item.editParentHistoryId) || sorted[0];
+			const rootJob = explicitRoot;
+			const childJobs = sorted.filter((item) => item.id !== rootJob.id);
+			groups.push({ rootHistoryId, rootJob, childJobs });
+		}
+		groups.sort((a, b) => new Date(b.rootJob.createdAt) - new Date(a.rootJob.createdAt));
+
+		const standaloneCompleted = completed.jobs
+			.filter((job) => !groupedIds.has(job.id))
+			.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+		return { groups, standaloneCompleted };
+	});
+
+	const focusedEditGroup = $derived.by(() => {
+		if (!focusedEditGroupId) return null;
+		return completedEditGroups.groups.find((group) => group.rootHistoryId === focusedEditGroupId) || null;
+	});
+
+	const renderedJobs = $derived.by(() => {
+		const entries = [];
+		if (focusedEditGroup) {
+			entries.push({
+				job: focusedEditGroup.rootJob,
+				isChild: false,
+				childCount: focusedEditGroup.childJobs.length,
+				rootHistoryId: focusedEditGroup.rootHistoryId
+			});
+			for (const child of focusedEditGroup.childJobs) {
+				entries.push({
+					job: child,
+					isChild: true,
+					childCount: 0,
+					rootHistoryId: focusedEditGroup.rootHistoryId
+				});
+			}
+			return entries;
+		}
+
+		for (const job of activeJobs) {
+			entries.push({ job, isChild: false, childCount: 0, rootHistoryId: null });
+		}
+		for (const job of failedJobs) {
+			entries.push({ job, isChild: false, childCount: 0, rootHistoryId: null });
+		}
+		for (const group of completedEditGroups.groups) {
+			entries.push({
+				job: group.rootJob,
+				isChild: false,
+				childCount: group.childJobs.length,
+				rootHistoryId: group.rootHistoryId
+			});
+		}
+		for (const job of completedEditGroups.standaloneCompleted) {
+			entries.push({ job, isChild: false, childCount: 0, rootHistoryId: null });
+		}
+		return entries;
+	});
 
 	const STATUS_META = {
 		queued: { label: 'Queued', badgeClass: 'bg-slate-500 text-white', icon: 'Q' },
@@ -63,6 +140,12 @@
 		saved: { label: 'Saved', badgeClass: 'bg-violet-500 text-white', icon: '💾' }
 	};
 
+	const KIND_META = {
+		image: { label: 'IMG', badgeClass: 'bg-sky-700/80 text-white' },
+		animation: { label: 'ANIM', badgeClass: 'bg-indigo-700/80 text-white' },
+		video: { label: 'VID', badgeClass: 'bg-rose-700/80 text-white' }
+	};
+
 	function canonicalStatus(job) {
 		if (job?.status === 'pending') return 'queued';
 		if (job?.status === 'processing') return 'processing';
@@ -70,6 +153,7 @@
 		if (job?.status === 'failed') return 'failed';
 		if (job?.status === 'saved') return 'saved';
 		if (job?.status === 'cancelled') return 'failed';
+		if (!job?.status && (job?.image || job?.frames?.length || job?.videoUrl)) return 'completed';
 		return 'queued';
 	}
 
@@ -226,7 +310,14 @@
 		// For animations, load into project so the right-side animation player is used.
 		if (job.frames?.length) {
 			useForProject(job);
-			window.dispatchEvent(new CustomEvent('jobsPreviewCleared'));
+			window.dispatchEvent(
+				new CustomEvent('jobsAnimationSelected', {
+					detail: {
+						jobId: job.id,
+						label: job.name || 'Animation'
+					}
+				})
+			);
 			return;
 		}
 
@@ -242,6 +333,91 @@
 				}
 			})
 		);
+	}
+
+	function openEditGroup(rootHistoryId) {
+		if (!rootHistoryId) return;
+		focusedEditGroupId = rootHistoryId;
+		menuItemId = null;
+		deselectAll();
+	}
+
+	function backToJobList() {
+		focusedEditGroupId = null;
+		menuItemId = null;
+		deselectAll();
+	}
+
+	function loadIntoEditFromJob(job) {
+		if (!isSpriteJob(job) || !job?.image) return false;
+		projectStore.update((p) => ({
+			...p,
+			editImage: job.image,
+			editFileId: job.sourceFileId || null,
+			editClusterId: job.editClusterId || job.editRootHistoryId || null,
+			editForceNewCluster: false
+		}));
+		menuItemId = null;
+		return true;
+	}
+
+	function startNewForkFromJob(job) {
+		if (!isSpriteJob(job) || !job?.image) return;
+		projectStore.update((p) => ({
+			...p,
+			editImage: job.image,
+			editFileId: null,
+			editClusterId: null,
+			editForceNewCluster: true
+		}));
+		menuItemId = null;
+	}
+
+	function formatPromptJsonValue(value) {
+		if (!value) return '';
+		if (typeof value === 'string') {
+			try {
+				return JSON.stringify(JSON.parse(value), null, 2);
+			} catch {
+				return value;
+			}
+		}
+		try {
+			return JSON.stringify(value, null, 2);
+		} catch {
+			return String(value);
+		}
+	}
+
+	function openPromptJsonModal(job) {
+		const body = formatPromptJsonValue(job?.promptJson);
+		if (!body) return;
+		promptModalTitle = `${job?.name || 'Job'} JSON Prompt`;
+		promptModalBody = body;
+		showPromptModal = true;
+		menuItemId = null;
+	}
+
+	function closePromptJsonModal() {
+		showPromptModal = false;
+		promptModalTitle = '';
+		promptModalBody = '';
+	}
+
+	function onJobCardClick(entry) {
+		if (!entry) return;
+		if (loadIntoEditFromJob(entry.job)) {
+			previewInRightPanel(entry.job);
+			if (!focusedEditGroupId && !entry.isChild && entry.childCount > 0 && entry.rootHistoryId) {
+				openEditGroup(entry.rootHistoryId);
+			}
+			return;
+		}
+		if (!focusedEditGroupId && !entry.isChild && entry.childCount > 0 && entry.rootHistoryId) {
+			openEditGroup(entry.rootHistoryId);
+			return;
+		}
+		previewInRightPanel(entry.job);
 	}
 
 	// ── actions ──────────────────────────────────────────────
@@ -271,6 +447,23 @@
 				url: null // Jobs don't have URLs, they're in-memory
 			});
 			console.log(`[JobsPanel] Added to queue: ${job.name} (${job.frames.length} frames)`);
+		}
+		menuItemId = null;
+	}
+
+	async function renameJob(job) {
+		const currentName = job?.name || 'Job';
+		const next = prompt('Rename job:', currentName);
+		const nextName = String(next || '').trim();
+		if (!nextName || nextName === currentName) {
+			menuItemId = null;
+			return;
+		}
+		const cStatus = canonicalStatus(job);
+		if (cStatus === 'completed' || cStatus === 'saved') {
+			await completedJobs.renameJob(job.id, nextName);
+		} else {
+			jobQueue.updateJob(job.id, { name: nextName });
 		}
 		menuItemId = null;
 	}
@@ -432,7 +625,7 @@
 	}
 
 	function selectAll() {
-		const selectableJobs = allJobs.filter(j => {
+		const selectableJobs = renderedJobs.map((entry) => entry.job).filter((j) => {
 			const isActive = canonicalStatus(j) === 'queued' || canonicalStatus(j) === 'processing';
 			return !isActive; // Can select completed and failed jobs
 		});
@@ -454,6 +647,25 @@
 
 		for (const job of selected) {
 			discard(job);
+		}
+		deselectAll();
+	}
+
+	async function batchRename() {
+		const selected = getSelectedJobs();
+		if (selected.length === 0) return;
+		const baseName = prompt('Batch rename - base name:', 'Edited Job');
+		const cleanBase = String(baseName || '').trim();
+		if (!cleanBase) return;
+		let idx = 1;
+		for (const job of selected) {
+			const nextName = selected.length === 1 ? cleanBase : `${cleanBase} ${idx++}`;
+			const cStatus = canonicalStatus(job);
+			if (cStatus === 'completed' || cStatus === 'saved') {
+				await completedJobs.renameJob(job.id, nextName);
+			} else {
+				jobQueue.updateJob(job.id, { name: nextName });
+			}
 		}
 		deselectAll();
 	}
@@ -609,52 +821,81 @@
      ═══════════════════════════════════════════════════════════ -->
 <div class="flex flex-col h-full text-xs">
 	<!-- Selection toolbar -->
-	{#if isSelectionMode}
-		<div class="flex items-center justify-between px-3 py-2 bg-blue-50 border-b border-blue-200 flex-shrink-0">
+	<div class="px-3 py-2 bg-blue-50 border-b border-blue-200 flex-shrink-0 space-y-1.5">
+		<div class="flex items-center justify-between">
 			<div class="flex items-center gap-2">
-				<span class="text-xs font-medium text-blue-700">
-					{selectedJobIds.size} selected
-				</span>
+				{#if focusedEditGroupId}
+					<button
+						class="px-2 py-1 text-[10px] bg-white border border-blue-300 text-blue-700 rounded hover:bg-blue-100 transition-colors"
+						onclick={backToJobList}
+						title="Back to all jobs"
+					>
+						← Back
+					</button>
+				{/if}
+				<span class="text-xs font-medium text-blue-700">{selectedJobIds.size} selected</span>
 			</div>
 			<div class="flex items-center gap-1">
 				<button
 					class="px-2 py-1 text-[10px] bg-blue-500 text-white rounded hover:bg-blue-600 transition-colors"
-					onclick={batchUseForProject}
-					title="Use first selected for project"
+					onclick={selectAll}
+					title="Select all"
 				>
-					▶ Use
+					☑ Select All
 				</button>
 				<button
-					class="px-2 py-1 text-[10px] bg-green-500 text-white rounded hover:bg-green-600 transition-colors"
-					onclick={batchSaveToFolder}
-					title="Save selected to folder"
-				>
-					💾 Save
-				</button>
-				<button
-					class="px-2 py-1 text-[10px] bg-gray-500 text-white rounded hover:bg-gray-600 transition-colors"
-					onclick={batchDownload}
-					title="Download selected"
-				>
-					📥 Download
-				</button>
-				<button
-					class="px-2 py-1 text-[10px] bg-red-500 text-white rounded hover:bg-red-600 transition-colors"
-					onclick={batchDelete}
-					title="Delete selected"
-				>
-					🗑 Delete
-				</button>
-				<button
-					class="px-2 py-1 text-[10px] bg-gray-300 text-gray-700 rounded hover:bg-gray-400 transition-colors"
+					class="px-2 py-1 text-[10px] bg-gray-300 text-gray-700 rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
 					onclick={deselectAll}
 					title="Deselect all"
+					disabled={!isSelectionMode}
 				>
 					✕ Cancel
 				</button>
 			</div>
 		</div>
-	{/if}
+		<div class="grid grid-cols-5 gap-1">
+			<button
+				class="px-2 py-1 text-[10px] bg-blue-500 text-white rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+				onclick={batchUseForProject}
+				title="Use first selected for project"
+				disabled={!isSelectionMode}
+			>
+				▶ Use
+			</button>
+			<button
+				class="px-2 py-1 text-[10px] bg-green-500 text-white rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+				onclick={batchSaveToFolder}
+				title="Save selected to folder"
+				disabled={!isSelectionMode}
+			>
+				💾 Save
+			</button>
+			<button
+				class="px-2 py-1 text-[10px] bg-amber-500 text-white rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+				onclick={batchRename}
+				title="Rename selected"
+				disabled={!isSelectionMode}
+			>
+				✏ Rename
+			</button>
+			<button
+				class="px-2 py-1 text-[10px] bg-gray-500 text-white rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+				onclick={batchDownload}
+				title="Download selected"
+				disabled={!isSelectionMode}
+			>
+				📥 Download
+			</button>
+			<button
+				class="px-2 py-1 text-[10px] bg-red-500 text-white rounded transition-colors disabled:opacity-45 disabled:cursor-not-allowed"
+				onclick={batchDelete}
+				title="Delete selected"
+				disabled={!isSelectionMode}
+			>
+				🗑 Delete
+			</button>
+		</div>
+	</div>
 
 	<div class="flex-1 overflow-y-auto p-2">
 		{#if !completed.loaded && allJobs.length === 0}
@@ -672,20 +913,24 @@
 		{:else}
 			<!-- Jobs Grid -->
 			<div class="grid grid-cols-4 gap-2">
-				{#each allJobs as job (job.id)}
+				{#each renderedJobs as entry (`${entry.job.id}-${entry.isChild ? 'child' : 'root'}`)}
+					{@const job = entry.job}
 					{@const thumb = thumbnail(job)}
 					{@const cStatus = canonicalStatus(job)}
 					{@const cMeta = STATUS_META[cStatus]}
+					{@const cKind = canonicalKind(job)}
+					{@const kindMeta = KIND_META[cKind] || KIND_META.image}
 					{@const isActive = cStatus === 'queued' || cStatus === 'processing'}
 					{@const isFailed = cStatus === 'failed'}
 					{@const isCompleted = cStatus === 'completed' || cStatus === 'saved'}
 					{@const isSelected = selectedJobIds.has(job.id)}
 					{@const canSelect = !isActive}
+					{@const hasChildren = entry.childCount > 0}
 					<!-- svelte-ignore a11y_no_static_element_interactions -->
 					<div
 						class="relative group rounded-lg border-2 cursor-pointer transition-all aspect-square bg-gray-100
-							{isSelected ? 'border-blue-500 ring-2 ring-blue-300' : isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : 'border-transparent hover:border-gray-300'}"
-						onclick={() => previewInRightPanel(job)}
+							{isSelected ? 'border-blue-500 ring-2 ring-blue-300' : isFailed ? 'border-red-300' : isActive ? 'border-blue-300' : entry.isChild ? 'border-blue-200/70 bg-blue-50/30' : 'border-transparent hover:border-gray-300'}"
+						onclick={() => onJobCardClick(entry)}
 					>
 						<!-- Selection checkbox -->
 						{#if canSelect}
@@ -723,8 +968,19 @@
 							{cMeta.icon}
 						</div>
 
+						<!-- Asset kind chip -->
+						<div class="absolute bottom-8 left-1 px-1 py-0.5 rounded text-[8px] font-semibold leading-none z-10 {kindMeta.badgeClass}">
+							{kindMeta.label}
+						</div>
+
+						{#if hasChildren}
+							<div class="absolute bottom-8 right-1 px-1 py-0.5 rounded bg-slate-700/80 text-white text-[8px] font-semibold leading-none z-10">
+								📂 {entry.childCount}
+							</div>
+						{/if}
+
 						<!-- Menu button (only for completed jobs) -->
-						{#if isCompleted}
+						{#if !isActive}
 							<button
 								class="absolute top-6 right-1 w-6 h-6 rounded-full bg-black/40 text-white text-xs flex items-center justify-center
 									opacity-0 group-hover:opacity-100 hover:bg-black/60 transition-all z-10"
@@ -739,14 +995,32 @@
 									class="absolute top-8 left-1 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
 									onclick={(e) => e.stopPropagation()}
 								>
-									<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
-										onclick={() => startSave(job)}>
-										💾 <span>Save to Folder</span>
+									{#if isCompleted}
+										<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
+											onclick={() => startSave(job)}>
+											💾 <span>Save to Folder</span>
+										</button>
+									{/if}
+									<button class="w-full text-left px-3 py-1.5 hover:bg-amber-50 text-gray-700 flex items-center gap-2"
+										onclick={() => renameJob(job)}>
+										✏️ <span>Rename</span>
 									</button>
 									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
 										onclick={() => useForProject(job)}>
 										▶ <span>Use for Project</span>
 									</button>
+									{#if isSpriteJob(job)}
+										<button class="w-full text-left px-3 py-1.5 hover:bg-orange-50 text-gray-700 flex items-center gap-2"
+											onclick={() => startNewForkFromJob(job)}>
+											🌱 <span>Start New Fork</span>
+										</button>
+									{/if}
+									{#if job.promptJson}
+										<button class="w-full text-left px-3 py-1.5 hover:bg-indigo-50 text-gray-700 flex items-center gap-2"
+											onclick={() => openPromptJsonModal(job)}>
+											🧾 <span>View JSON Prompt</span>
+										</button>
+									{/if}
 									{#if job.frames?.length}
 										<button class="w-full text-left px-3 py-1.5 hover:bg-blue-50 text-gray-700 flex items-center gap-2"
 											onclick={() => { addJobToQueue(job); menuItemId = null; }}>
@@ -777,8 +1051,15 @@
 						{/if}
 
 						<div class="px-1.5 py-1">
-							<p class="text-[11px] truncate text-center font-medium">{job.name || 'Job'}</p>
+							<p class="text-[11px] truncate text-center font-medium">
+								{entry.isChild ? `↳ ${job.name || 'Edit'}` : (job.name || 'Job')}
+							</p>
 							<p class="text-[9px] text-center text-gray-500">{cMeta.label}</p>
+							{#if hasChildren}
+								<p class="text-[9px] text-center text-slate-600">
+									{focusedEditGroupId === entry.rootHistoryId ? 'Showing edits' : 'Click to open edits'}
+								</p>
+							{/if}
 							{#if job.message && isActive}
 								<p class="text-[9px] text-gray-500 text-center truncate">{job.message}</p>
 							{/if}
@@ -793,18 +1074,6 @@
 	<div class="flex items-center justify-between px-2 py-1 bg-gray-50 border-t text-[10px] text-gray-500 flex-shrink-0">
 		<div class="flex items-center gap-2">
 			<span>{allJobs.length} job{allJobs.length !== 1 ? 's' : ''} ({activeJobs.length} active, {completed.jobs.length} completed)</span>
-			{#if !isSelectionMode && allJobs.filter(j => {
-				const cStatus = canonicalStatus(j);
-				return !(cStatus === 'queued' || cStatus === 'processing');
-			}).length > 0}
-				<button
-					class="text-blue-500 hover:text-blue-700 transition-colors"
-					onclick={selectAll}
-					title="Select all"
-				>
-					Select all
-				</button>
-			{/if}
 		</div>
 		{#if completed.jobs.length > 0 && !isSelectionMode}
 			<button
@@ -817,6 +1086,34 @@
 
 {#if jobsSaveNote}
 	<p class="px-2 py-1 text-[10px] text-amber-700 bg-amber-50 border-t border-amber-200">{jobsSaveNote}</p>
+{/if}
+
+{#if showPromptModal}
+	<!-- svelte-ignore a11y_no_static_element_interactions -->
+	<div
+		class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+		onclick={closePromptJsonModal}
+		onkeydown={(e) => { if (e.key === 'Escape') closePromptJsonModal(); }}
+		tabindex="0"
+		role="dialog"
+	>
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div
+			class="bg-white rounded-xl shadow-2xl w-full max-w-3xl p-4 space-y-3"
+			onclick={(e) => e.stopPropagation()}
+		>
+			<div class="flex items-center justify-between">
+				<h3 class="text-sm font-bold text-gray-800">{promptModalTitle}</h3>
+				<button
+					class="px-2 py-1 text-xs text-gray-600 hover:bg-gray-100 rounded"
+					onclick={closePromptJsonModal}
+				>
+					Close
+				</button>
+			</div>
+			<pre class="max-h-[70vh] overflow-auto rounded border border-gray-200 bg-gray-50 p-3 text-[11px] text-gray-800 whitespace-pre-wrap break-words">{promptModalBody}</pre>
+		</div>
+	</div>
 {/if}
 
 <!-- ── SAVE DIALOG ───────────────────────────────────────── -->

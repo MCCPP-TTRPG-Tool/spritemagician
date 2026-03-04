@@ -19,7 +19,7 @@
 import { db } from './client.js';
 import {
 	collection, doc, addDoc, updateDoc, deleteDoc,
-	getDocs, getDoc, query, where, orderBy,
+	getDocs, getDoc, query, where, orderBy, setDoc,
 	onSnapshot, serverTimestamp, writeBatch
 } from 'firebase/firestore';
 
@@ -193,6 +193,10 @@ export async function initializeDefaultFolders(uid) {
 
 const jobsCol = (uid) => collection(db, 'users', uid, 'jobs');
 const jobDoc  = (uid, id) => doc(db, 'users', uid, 'jobs', id);
+const editClustersCol = (uid) => collection(db, 'users', uid, 'edit_clusters');
+const editClusterDoc = (uid, clusterId) => doc(db, 'users', uid, 'edit_clusters', clusterId);
+const editClusterJobsDoc = (uid, clusterId, jobId) =>
+	doc(db, 'users', uid, 'edit_clusters', clusterId, 'jobs', jobId);
 
 /** Create a generation job */
 export async function createJob(uid, data) {
@@ -274,6 +278,59 @@ export async function clearFinishedJobs(uid) {
 	const batch = writeBatch(db);
 	snap.docs.forEach(d => batch.delete(d.ref));
 	await batch.commit();
+}
+
+/**
+ * Upsert a lightweight job log document by deterministic job id.
+ * Designed for resilient client-side logging (works with retry queues).
+ */
+export async function upsertJobLog(uid, jobId, payload = {}) {
+	if (!uid || !jobId) return;
+	await setDoc(
+		jobDoc(uid, jobId),
+		{
+			jobId,
+			...payload,
+			updatedAt: serverTimestamp()
+		},
+		{ merge: true }
+	);
+}
+
+/** Remove a job log document by id. */
+export async function deleteJobLog(uid, jobId) {
+	if (!uid || !jobId) return;
+	await deleteDoc(jobDoc(uid, jobId));
+}
+
+/** Persist cluster summary + individual edit snapshot (best effort). */
+export async function saveEditClusterJob(uid, clusterId, job) {
+	if (!uid || !clusterId || !job?.id) return;
+	await setDoc(
+		editClusterDoc(uid, clusterId),
+		{
+			clusterId,
+			lastJobId: job.id,
+			lastImage: job.image || null,
+			updatedAt: serverTimestamp()
+		},
+		{ merge: true }
+	);
+	await setDoc(
+		editClusterJobsDoc(uid, clusterId, job.id),
+		{
+			jobId: job.id,
+			image: job.image || null,
+			name: job.name || 'Edit Result',
+			promptJson: job.promptJson || null,
+			editHistoryId: job.editHistoryId || null,
+			editParentHistoryId: job.editParentHistoryId || null,
+			sourceFileId: job.sourceFileId || null,
+			createdAt: job.createdAt || new Date().toISOString(),
+			updatedAt: serverTimestamp()
+		},
+		{ merge: true }
+	);
 }
 
 // ═══════════════════════════════════════════════════════════════

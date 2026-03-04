@@ -9,6 +9,8 @@
 		initialFolderPath = '',
 		startFolderId = null,
 		startFolderName = 'Asset',
+		forceFolderPick = false,
+		autoSubmitOnFolderSelect = false,
 		isSaving = false,
 		errorMessage = '',
 		onClose = () => {},
@@ -25,13 +27,16 @@
 		fileName = initialFileName || '';
 		folderId = initialFolderId || null;
 		folderPath = initialFolderPath || '';
-		showFolderPicker = false;
+		showFolderPicker = !!forceFolderPick && !folderId;
 	});
 
 	function handleFolderSelect(nextFolderId, nextFolderPath) {
 		folderId = nextFolderId || null;
 		folderPath = nextFolderPath || '';
 		showFolderPicker = false;
+		if (autoSubmitOnFolderSelect && folderId && fileName.trim() && !isSaving) {
+			submit();
+		}
 	}
 
 	function submit() {
@@ -92,6 +97,9 @@
 							📁 Choose folder...
 						</button>
 					{/if}
+					{#if forceFolderPick && !folderId}
+						<p class="mt-1 text-[11px] text-amber-700">Select a destination folder to continue.</p>
+					{/if}
 				</div>
 
 				{#if errorMessage}
@@ -110,7 +118,7 @@
 				<button
 					class="px-4 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
 					onclick={submit}
-					disabled={isSaving}
+					disabled={isSaving || (forceFolderPick && !folderId)}
 				>
 					{isSaving ? '⏳ Saving...' : '💾 Save'}
 				</button>

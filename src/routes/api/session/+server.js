@@ -48,6 +48,9 @@ export async function POST({ request, cookies }) {
 			maxAge: SESSION_EXPIRY_MS / 1000
 		});
 
+		let isNewUser = false;
+		let needsOnboarding = false;
+
 		// Create/update user document in Firestore (non-blocking — don't fail login if Firestore is unavailable)
 		try {
 			const db = getAdminDb();
@@ -55,15 +58,24 @@ export async function POST({ request, cookies }) {
 			const userDoc = await userRef.get();
 
 			if (!userDoc.exists) {
+				isNewUser = true;
+				needsOnboarding = true;
 				await userRef.set({
 					email: decodedToken.email || null,
 					displayName: decodedToken.name || null,
 					photoURL: decodedToken.picture || null,
 					createdAt: new Date(),
 					lastLoginAt: new Date(),
-					isAdmin: false
+					isAdmin: false,
+					onboarding: {
+						completed: false,
+						skipped: false,
+						completedAt: null
+					}
 				});
 			} else {
+				const existing = userDoc.data() || {};
+				needsOnboarding = !existing?.onboarding?.completed;
 				await userRef.update({
 					lastLoginAt: new Date(),
 					displayName: decodedToken.name || userDoc.data().displayName,
@@ -77,6 +89,8 @@ export async function POST({ request, cookies }) {
 
 		return json({
 			success: true,
+			isNewUser,
+			needsOnboarding,
 			user: {
 				uid: decodedToken.uid,
 				email: decodedToken.email,

@@ -5,18 +5,14 @@
 	import FolderPicker from './FolderPicker.svelte';
 	import { browser } from '$app/environment';
 import { userFiles } from '$lib/stores/userFiles.js';
-import { updateFolderChromaKey } from '$lib/firebase/firestore.js';
 import { jobQueue } from '$lib/stores/jobQueue.js';
 	import {
 		activeAssetStore,
 	setActiveAssetContext,
-	setActiveAssetAutoSave,
-	setActiveAssetChromaKeyHex
+	setActiveAssetAutoSave
 	} from '$lib/stores/activeAsset.js';
 
 	let activeTab = $state('files'); // 'files' | 'jobs' | 'frames'
-let isSavingChroma = $state(false);
-let chromaUiNote = $state('');
 let showActiveAssetFolderPicker = $state(false);
 let queue = $state([]);
 
@@ -77,26 +73,13 @@ let generationSummaryText = $derived.by(() => {
 			activeTab = 'frames';
 		});
 
+		// When an animation job card is selected, open Frames tab to inspect loaded frames.
+		window.addEventListener('jobsAnimationSelected', () => {
+			activeTab = 'frames';
+		});
+
 		// Auto-save disabled - users should explicitly save from Jobs panel
 		// Removed autoSaveSprite and saveSpriteToGallery listeners to prevent unwanted saves to root folder
-	}
-
-	async function saveAssetChromaKey(hex) {
-		if (!$activeAssetStore?.folderId || !/^#[0-9A-Fa-f]{6}$/.test(hex)) return;
-		const uid = userFiles.getUid();
-		if (!uid) return;
-		isSavingChroma = true;
-		chromaUiNote = '';
-		try {
-			const normalized = hex.toUpperCase();
-			await updateFolderChromaKey(uid, $activeAssetStore.folderId, normalized);
-			setActiveAssetChromaKeyHex(normalized);
-			chromaUiNote = 'Saved';
-		} catch (err) {
-			chromaUiNote = 'Save failed';
-		} finally {
-			isSavingChroma = false;
-		}
 	}
 
 	function onActiveAssetFolderSelect(folderId, folderPath) {
@@ -104,7 +87,7 @@ let generationSummaryText = $derived.by(() => {
 		const folderName = String(folderPath || '')
 			.split(' / ')
 			.filter(Boolean)
-			.pop() || 'Asset';
+			.pop() || 'Folder';
 		setActiveAssetContext({
 			folderId,
 			folderName,
@@ -121,7 +104,9 @@ let generationSummaryText = $derived.by(() => {
 			onSelect={onActiveAssetFolderSelect}
 			onClose={() => showActiveAssetFolderPicker = false}
 			startFolderId={$activeAssetStore.folderId}
-			startFolderName={$activeAssetStore.folderName || 'Asset'}
+			startFolderName={$activeAssetStore.folderName || 'Folder'}
+			modalTitle="📁 Select Folder"
+			confirmLabel="Use folder"
 		/>
 	{/if}
 
@@ -157,19 +142,21 @@ let generationSummaryText = $derived.by(() => {
 	</div>
 
 	{#if $activeAssetStore.folderId}
-		<div class="px-2 py-1.5 border-b bg-emerald-50 text-[11px] text-emerald-800 flex items-center justify-between gap-2">
+		<div class="px-2 py-1.5 border-b bg-emerald-50 text-[11px] text-emerald-800 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
 			<div class="min-w-0">
-				<p class="font-semibold truncate">🎯 Active Asset: {$activeAssetStore.folderName}</p>
+				<p class="font-semibold truncate">📁 Current Folder: {$activeAssetStore.folderName}</p>
 				<p class="text-[10px] text-emerald-700/80">Selection is by folder.</p>
 			</div>
-			<div class="flex items-center gap-2 shrink-0">
+			<div class="justify-self-center">
 				<button
-					class="px-2 py-1 rounded border border-emerald-300 bg-white hover:bg-emerald-100"
+					class="px-3 py-1 rounded border border-emerald-300 bg-white hover:bg-emerald-100 font-medium"
 					onclick={() => showActiveAssetFolderPicker = true}
-					title="Choose a different folder as active asset"
+					title="Select or create folder"
 				>
-					Change Folder
+					📁 Select Folder
 				</button>
+			</div>
+			<div class="flex items-center gap-2 shrink-0 justify-self-end">
 				<label class="flex items-center gap-1">
 					<input
 						type="checkbox"
@@ -178,21 +165,6 @@ let generationSummaryText = $derived.by(() => {
 					/>
 					<span>Auto-save</span>
 				</label>
-				<label class="flex items-center gap-1">
-					<span>BG</span>
-					<input
-						type="color"
-						value={$activeAssetStore.chromaKeyHex || '#00FF00'}
-						class="w-7 h-6 p-0 border rounded cursor-pointer"
-						onchange={(e) => saveAssetChromaKey(e.target.value)}
-						title="Background chroma key color"
-					/>
-				</label>
-				{#if isSavingChroma}
-					<span class="text-[10px] text-emerald-700">Saving...</span>
-				{:else if chromaUiNote}
-					<span class="text-[10px] text-emerald-700">{chromaUiNote}</span>
-				{/if}
 			</div>
 		</div>
 	{/if}

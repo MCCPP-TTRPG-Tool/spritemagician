@@ -6,7 +6,9 @@
 		onSelect = null,
 		onClose = null,
 		startFolderId = null,
-		startFolderName = 'Root'
+		startFolderName = 'Root',
+		modalTitle = '📁 Save to Folder',
+		confirmLabel = '💾 Save to'
 	} = $props();
 
 	let folders = $state([]);
@@ -20,7 +22,9 @@
 	$effect(() => {
 		const initialId = startFolderId || null;
 		const initialName = initialId ? (startFolderName || 'Asset') : 'Root';
-		breadcrumbs = [{ id: initialId, name: initialName }];
+		breadcrumbs = initialId
+			? [{ id: null, name: 'Root' }, { id: initialId, name: initialName }]
+			: [{ id: null, name: 'Root' }];
 		loadFolders(initialId);
 	});
 
@@ -106,7 +110,7 @@
 	<div class="bg-white rounded-xl shadow-2xl w-full max-w-md" onclick={(e) => e.stopPropagation()}>
 		<!-- Header -->
 		<div class="flex items-center justify-between px-4 py-3 border-b">
-			<h3 class="text-sm font-bold text-gray-800">📁 Save to Folder</h3>
+			<h3 class="text-sm font-bold text-gray-800">{modalTitle}</h3>
 			<button class="text-gray-400 hover:text-gray-600 text-lg" onclick={onClose}>✕</button>
 		</div>
 
@@ -181,7 +185,7 @@
 				class="px-4 py-1.5 text-xs bg-blue-500 text-white rounded-lg hover:bg-blue-600 font-medium"
 				onclick={selectCurrent}
 			>
-				💾 Save to: {currentCrumb?.name || 'Root'}
+				{confirmLabel}: {currentCrumb?.name || 'Root'}
 			</button>
 		</div>
 	</div>

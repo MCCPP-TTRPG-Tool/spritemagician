@@ -17,6 +17,9 @@ const defaultProjectState = {
 	lastSaved: null,
 	// Set by FileTree to load an image into a standalone panel + switch tab
 	editImage: null,
+	editFileId: null,
+	editClusterId: null,
+	editForceNewCluster: false,
 	styleImage: null,
 	// Pre-selected save folder for animations
 	animSaveFolderId: null,
@@ -40,6 +43,9 @@ function toPersistedState(state) {
 		projectName: typeof state.projectName === 'string' ? state.projectName : 'Untitled Project',
 		lastSaved: state.lastSaved || null,
 		editImage: typeof state.editImage === 'string' ? state.editImage : null,
+		editFileId: typeof state.editFileId === 'string' ? state.editFileId : null,
+		editClusterId: typeof state.editClusterId === 'string' ? state.editClusterId : null,
+		editForceNewCluster: !!state.editForceNewCluster,
 		styleImage: typeof state.styleImage === 'string' ? state.styleImage : null,
 		animSaveFolderId: typeof state.animSaveFolderId === 'string' ? state.animSaveFolderId : null,
 		animSaveFolderPath: typeof state.animSaveFolderPath === 'string' ? state.animSaveFolderPath : null,

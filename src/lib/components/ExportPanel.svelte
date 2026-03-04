@@ -27,6 +27,27 @@
 	let previewColumns = $state(4);
 	let frameSize = $state(128);
 	let showFullSize = $state(false);
+	let previewFrameIndex = $state(0);
+
+	$effect(() => {
+		const frameCount = project.frames.length;
+		if (frameCount <= 1) {
+			previewFrameIndex = 0;
+			return;
+		}
+		const fps = Math.max(1, Number(project.fps) || 12);
+		const intervalMs = Math.max(50, Math.floor(1000 / fps));
+		const timer = setInterval(() => {
+			previewFrameIndex = (previewFrameIndex + 1) % frameCount;
+		}, intervalMs);
+		return () => clearInterval(timer);
+	});
+
+	$effect(() => {
+		if (previewFrameIndex >= project.frames.length) {
+			previewFrameIndex = 0;
+		}
+	});
 
 	// Save to folder state
 	let showFolderPicker = $state(false);
@@ -345,8 +366,6 @@
 </script>
 
 <div class="space-y-3">
-	<h2 class="text-sm font-bold">Export</h2>
-	
 	{#if project.frames.length > 0}
 		<!-- Settings -->
 		<div class="grid grid-cols-2 gap-2">
@@ -374,6 +393,22 @@
 					<option value={256}>256px</option>
 					<option value={512}>512px</option>
 				</select>
+			</div>
+		</div>
+
+		<!-- Live Animation Preview -->
+		<div class="bg-gray-100 border rounded p-2">
+			<div class="flex items-center justify-between mb-2">
+				<p class="text-xs text-gray-600">Animated Sprite Preview</p>
+				<p class="text-[10px] text-gray-500">{project.fps || 12} fps</p>
+			</div>
+			<div class="h-44 bg-white border rounded flex items-center justify-center overflow-hidden">
+				<img
+					src={project.frames[Math.min(previewFrameIndex, Math.max(0, project.frames.length - 1))]}
+					alt="Animated sprite preview"
+					class="max-w-full max-h-full object-contain"
+					style="image-rendering: pixelated;"
+				/>
 			</div>
 		</div>
 		

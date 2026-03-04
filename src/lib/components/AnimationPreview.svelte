@@ -5,6 +5,8 @@
 	import FolderPicker from './FolderPicker.svelte';
 	import AnimationQueueBar from './AnimationQueueBar.svelte';
 	import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
+	import { CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
+	import { cleanupBackgrounds, detectGreenArtifacts } from '$lib/utils/backgroundCleanup.js';
 import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12, currentFrame: 0 });
@@ -22,8 +24,10 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	let saveFolderId = $state(null);
 	let saveFolderPath = $state(null);
 	let isSavingFrame = $state(false);
+	let isSavingAllFrames = $state(false);
 	let saveFrameName = $state('');
 	let saveFrameNote = $state('');
+	let saveMode = $state('single'); // 'single' | 'all'
 	let featureP1ActiveAssetDestinationGuard = $state(true);
 	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
 	
@@ -233,6 +237,7 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 
 	let isRemovingBackground = $state(false);
 	let bgRemovalProgress = $state(null); // { status: string, message: string, progress?: number, current?: number, total?: number }
+	const USE_HYBRID_BG_REMOVAL = false; // Forced rollback: use legacy full rembg flow
 
 	async function removeBackgroundViaApi(images) {
 		const res = await fetch('/api/remove-background', {
@@ -250,6 +255,68 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		return data.images;
 	}
 
+	async function runRembgBatches(frames, frameIndexes, onProgress) {
+		const output = [...frames];
+		const batchSize = 4;
+		let processed = 0;
+
+		for (let i = 0; i < frameIndexes.length; i += batchSize) {
+			const end = Math.min(i + batchSize, frameIndexes.length);
+			const indexBatch = frameIndexes.slice(i, end);
+			const batch = indexBatch.map((idx) => output[idx]);
+			const cleanedBatch = await removeBackgroundViaApi(batch);
+			for (let j = 0; j < indexBatch.length; j++) {
+				const frameIndex = indexBatch[j];
+				output[frameIndex] = cleanedBatch[j] || output[frameIndex];
+				processed++;
+				onProgress?.(processed, frameIndexes.length, 'rembg');
+			}
+		}
+
+		return output;
+	}
+
+	async function removeBackgroundHybrid(frames, frameIndexes, onProgress) {
+		const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+		const initial = [...frames];
+
+		if (!USE_HYBRID_BG_REMOVAL) {
+			return runRembgBatches(initial, frameIndexes, onProgress);
+		}
+
+		const subset = frameIndexes.map((idx) => initial[idx]);
+		const chromaCleaned = await cleanupBackgrounds(
+			subset,
+			70,
+			(done, total) => onProgress?.(done, total, 'chroma'),
+			true,
+			{
+				chromaKeyHex: activeChroma,
+				chromaTolerance: CHROMA_KEY_TOLERANCE,
+				chromaOnly: true
+			}
+		);
+
+		// Write chroma-cleaned subset back into output.
+		for (let i = 0; i < frameIndexes.length; i++) {
+			initial[frameIndexes[i]] = chromaCleaned[i] || initial[frameIndexes[i]];
+		}
+
+		const flaggedGlobalIndexes = [];
+		for (let i = 0; i < frameIndexes.length; i++) {
+			const globalIndex = frameIndexes[i];
+			const artifact = await detectGreenArtifacts(initial[globalIndex], {
+				chromaKeyHex: activeChroma,
+				edgeSpillThreshold: 0.03,
+				opaqueGreenThreshold: 0.005
+			});
+			if (artifact.isArtifact) flaggedGlobalIndexes.push(globalIndex);
+		}
+
+		if (flaggedGlobalIndexes.length === 0) return initial;
+		return runRembgBatches(initial, flaggedGlobalIndexes, onProgress);
+	}
+
 	async function removeBackgroundFromCurrent() {
 		const cf = getCurrentFrame();
 		if (project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
@@ -260,15 +327,30 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		
 		try {
 			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
-			bgRemovalProgress = { status: 'processing', message: `Running rembg on ${activeChroma} frame...`, progress: 35 };
-			const [cleaned] = await removeBackgroundViaApi([project.frames[cf]]);
-			if (!cleaned) {
-				throw new Error('rembg failed for this frame');
-			}
-			const newFrames = [...project.frames];
-			newFrames[cf] = cleaned;
+			const total = 1;
+			const newFrames = await removeBackgroundHybrid(
+				project.frames,
+				[cf],
+				(done, batchTotal, phase) => {
+					if (phase === 'chroma') {
+						bgRemovalProgress = {
+							status: 'processing',
+							message: `Chroma cleanup (${done}/${batchTotal}) on ${activeChroma}...`,
+							progress: Math.min(85, Math.round((done / Math.max(1, batchTotal)) * 85))
+						};
+						return;
+					}
+					bgRemovalProgress = {
+						status: 'processing',
+						message: USE_HYBRID_BG_REMOVAL
+							? `rembg fallback (${done}/${batchTotal}) on ${activeChroma}...`
+							: `rembg cleanup (${done}/${batchTotal}) on ${activeChroma}...`,
+						progress: 85 + Math.round((done / Math.max(1, batchTotal)) * 15)
+					};
+				}
+			);
 			projectStore.update(p => ({ ...p, frames: newFrames }));
-			bgRemovalProgress = { status: 'completed', message: 'Background removed with rembg!', progress: 100 };
+			bgRemovalProgress = { status: 'completed', message: `Background cleanup done (${total} frame).`, progress: 100 };
 			setTimeout(() => {
 				bgRemovalProgress = null;
 			}, 2000);
@@ -295,28 +377,34 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		stop();
 		
 		try {
-			const newFrames = [...project.frames];
-			const totalFrames = newFrames.length;
-			const batchSize = 4;
-			
-			for (let i = 0; i < newFrames.length; i += batchSize) {
-				const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
-				const end = Math.min(i + batchSize, totalFrames);
-				const batch = newFrames.slice(i, end);
-				bgRemovalProgress = { 
-					status: 'processing', 
-					message: `Running rembg (${i + 1}-${end}/${totalFrames}) on ${activeChroma}...`, 
-					progress: Math.round((i / totalFrames) * 90),
-					current: i,
-					total: totalFrames
-				};
-				const cleanedBatch = await removeBackgroundViaApi(batch);
-				for (let j = 0; j < cleanedBatch.length; j++) {
-					const cleaned = cleanedBatch[j];
-					// Keep original frame if rembg fails on one item instead of nuking the whole run.
-					newFrames[i + j] = cleaned || newFrames[i + j];
+			const totalFrames = project.frames.length;
+			const allIndexes = project.frames.map((_, i) => i);
+			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+			const newFrames = await removeBackgroundHybrid(
+				project.frames,
+				allIndexes,
+				(done, total, phase) => {
+					if (phase === 'chroma') {
+						bgRemovalProgress = {
+							status: 'processing',
+							message: `Chroma cleanup (${done}/${total}) on ${activeChroma}...`,
+							progress: Math.min(85, Math.round((done / Math.max(1, total)) * 85)),
+							current: done,
+							total: totalFrames
+						};
+						return;
+					}
+					bgRemovalProgress = {
+						status: 'processing',
+						message: USE_HYBRID_BG_REMOVAL
+							? `rembg fallback (${done}/${total}) on ${activeChroma}...`
+							: `rembg cleanup (${done}/${total}) on ${activeChroma}...`,
+						progress: 85 + Math.round((done / Math.max(1, total)) * 15),
+						current: done,
+						total: totalFrames
+					};
 				}
-			}
+			);
 
 			bgRemovalProgress = { status: 'processing', message: 'Finalizing...', progress: 95, current: totalFrames, total: totalFrames };
 			projectStore.update(p => ({ ...p, frames: newFrames }));
@@ -354,10 +442,40 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		if (!saveFrameName) {
 			saveFrameName = `frame_${String(cf + 1).padStart(3, '0')}`;
 		}
+		saveMode = 'single';
 		saveFolderId = $activeAssetStore?.folderId || saveFolderId || null;
 		saveFolderPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || saveFolderPath || null;
 		
 		// Always show the save dialog with filename input
+		saveFrameNote = '';
+		showFolderPicker = true;
+	}
+
+	function defaultAllFramesBaseName() {
+		const raw = (project.prompt || 'animation').trim() || 'animation';
+		const clean = raw.replace(/[^a-zA-Z0-9_\- ]/g, '_').slice(0, 40).trim();
+		return clean || 'animation';
+	}
+
+	async function saveAllFrames() {
+		if (project.frames.length === 0) return;
+		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId) {
+			const blockedPayload = {
+				entryPoint: 'animation_preview',
+				sourceType: 'animation_frames'
+			};
+			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
+			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
+			saveFrameNote = 'Select an active asset folder first.';
+			return;
+		}
+
+		saveMode = 'all';
+		if (!saveFrameName) {
+			saveFrameName = defaultAllFramesBaseName();
+		}
+		saveFolderId = $activeAssetStore?.folderId || saveFolderId || null;
+		saveFolderPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || saveFolderPath || null;
 		saveFrameNote = '';
 		showFolderPicker = true;
 	}
@@ -381,7 +499,8 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	async function performSaveFrame() {
 		const cf = getCurrentFrame();
-		if (!saveFolderId || project.frames.length === 0 || cf < 0 || cf >= project.frames.length) return;
+		if (!saveFolderId || project.frames.length === 0) return;
+		if (saveMode === 'single' && (cf < 0 || cf >= project.frames.length)) return;
 		if (featureP1ActiveAssetDestinationGuard) {
 			const confirmedPayload = {
 				destinationPath: saveFolderPath || null,
@@ -391,7 +510,11 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
 		}
 		
-		isSavingFrame = true;
+		if (saveMode === 'single') {
+			isSavingFrame = true;
+		} else {
+			isSavingAllFrames = true;
+		}
 		stop();
 		
 		try {
@@ -400,48 +523,91 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 				saveFrameNote = 'You must be logged in to save files.';
 				return;
 			}
-			
-			const frameData = project.frames[cf];
-			// Use custom filename or generate default
-			const baseName = saveFrameName.trim() || `frame_${String(cf + 1).padStart(3, '0')}`;
-			const filename = baseName.endsWith('.png') ? baseName : `${baseName}.png`;
-			
-			const res = await fetch('/api/upload-file', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					imageData: frameData,
-					filename,
-					folder: saveFolderId
-				})
-			});
-			
-			if (!res.ok) {
-				const data = await res.json();
-				throw new Error(data.error || 'Upload failed');
+
+			if (saveMode === 'single') {
+				const frameData = project.frames[cf];
+				// Use custom filename or generate default
+				const baseName = saveFrameName.trim() || `frame_${String(cf + 1).padStart(3, '0')}`;
+				const filename = baseName.endsWith('.png') ? baseName : `${baseName}.png`;
+
+				const res = await fetch('/api/upload-file', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						imageData: frameData,
+						filename,
+						folder: saveFolderId
+					})
+				});
+
+				if (!res.ok) {
+					const data = await res.json();
+					throw new Error(data.error || 'Upload failed');
+				}
+
+				const { url } = await res.json();
+				await createFile(uid, saveFolderId, filename, url, 'image', {
+					sourceType: 'animation-frame',
+					frameIndex: cf,
+					totalFrames: project.frames.length,
+					animationName: project.prompt || 'animation',
+					fps: project.fps
+				});
+
+				saveFrameNote = `Frame ${cf + 1} saved successfully.`;
+			} else {
+				const total = project.frames.length;
+				const baseName = (saveFrameName.trim() || defaultAllFramesBaseName())
+					.replace(/[^a-zA-Z0-9_\- ]/g, '_')
+					.slice(0, 40)
+					.trim() || 'animation';
+
+				for (let i = 0; i < total; i++) {
+					const frameData = project.frames[i];
+					const frameSuffix = String(i + 1).padStart(3, '0');
+					const filename = `${baseName}_frame_${frameSuffix}.png`;
+					saveFrameNote = `Saving frames... ${i + 1}/${total}`;
+
+					const res = await fetch('/api/upload-file', {
+						method: 'POST',
+						headers: { 'Content-Type': 'application/json' },
+						body: JSON.stringify({
+							imageData: frameData,
+							filename,
+							folder: saveFolderId
+						})
+					});
+
+					if (!res.ok) {
+						const data = await res.json().catch(() => ({}));
+						throw new Error(data.error || `Upload failed at frame ${i + 1}`);
+					}
+
+					const { url } = await res.json();
+					await createFile(uid, saveFolderId, filename, url, 'image', {
+						sourceType: 'animation-frame-batch',
+						frameIndex: i,
+						totalFrames: total,
+						animationName: project.prompt || 'animation',
+						fps: project.fps
+					});
+				}
+
+				saveFrameNote = `Saved ${total} frames to folder.`;
 			}
-			
-			const { url } = await res.json();
-			await createFile(uid, saveFolderId, filename, url, 'image', {
-				sourceType: 'animation-frame',
-				frameIndex: cf,
-				totalFrames: project.frames.length,
-				animationName: project.prompt || 'animation',
-				fps: project.fps
-			});
-			
+
 			// Reset and close
 			saveFrameName = '';
 			showFolderPicker = false;
 			saveFolderId = null;
 			saveFolderPath = null;
-			
-			saveFrameNote = `Frame ${cf + 1} saved successfully.`;
+			saveMode = 'single';
 		} catch (err) {
 			console.error('Save frame error:', err);
 			saveFrameNote = 'Failed to save frame: ' + err.message;
 		} finally {
 			isSavingFrame = false;
+			isSavingAllFrames = false;
 		}
 	}
 
@@ -555,9 +721,16 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 				<button
 					class="h-7 px-2.5 text-xs bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-30"
 					onclick={saveCurrentFrame}
-					disabled={isSavingFrame}
+					disabled={isSavingFrame || isSavingAllFrames}
 					title="Save current frame"
 				>{isSavingFrame ? '⏳' : '💾 Save'}</button>
+
+				<button
+					class="h-7 px-2.5 text-xs bg-blue-700 text-white rounded hover:bg-blue-800 disabled:opacity-30"
+					onclick={saveAllFrames}
+					disabled={isSavingFrame || isSavingAllFrames || project.frames.length === 0}
+					title="Save all frames to folder"
+				>{isSavingAllFrames ? '⏳' : '💾 Save All'}</button>
 
 				<button
 					class="h-7 px-2.5 text-xs bg-gray-500 text-white rounded hover:bg-gray-600 disabled:opacity-30"
@@ -663,22 +836,28 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		<div class="bg-white rounded-xl shadow-2xl w-full max-w-md" onclick={(e) => e.stopPropagation()}>
 			<!-- Header -->
 			<div class="flex items-center justify-between px-4 py-3 border-b">
-				<h3 class="text-sm font-bold text-gray-800">💾 Save Frame</h3>
+				<h3 class="text-sm font-bold text-gray-800">{saveMode === 'all' ? '💾 Save All Frames' : '💾 Save Frame'}</h3>
 				<button class="text-gray-400 hover:text-gray-600 text-lg" onclick={() => { showFolderPicker = false; saveFrameName = ''; }}>✕</button>
 			</div>
 			
 			<!-- Filename Input -->
 			<div class="px-4 py-3 border-b">
-				<label class="block text-xs font-medium text-gray-700 mb-1.5">Filename</label>
+				<label class="block text-xs font-medium text-gray-700 mb-1.5">{saveMode === 'all' ? 'Base name' : 'Filename'}</label>
 				<input
 					type="text"
 					bind:value={saveFrameName}
-					placeholder={`frame_${String(getCurrentFrame() + 1).padStart(3, '0')}`}
+					placeholder={saveMode === 'all' ? defaultAllFramesBaseName() : `frame_${String(getCurrentFrame() + 1).padStart(3, '0')}`}
 					class="w-full px-2 py-1.5 text-xs border rounded focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none"
 					onkeydown={(e) => { if (e.key === 'Enter' && saveFolderId) performSaveFrame(); }}
 					autofocus
 				/>
-				<p class="text-[10px] text-gray-400 mt-1">Leave empty for default name. Extension (.png) will be added automatically.</p>
+				<p class="text-[10px] text-gray-400 mt-1">
+					{#if saveMode === 'all'}
+						Leaves empty to use a default base name. Files save as `base_frame_001.png`, `base_frame_002.png`, etc.
+					{:else}
+						Leave empty for default name. Extension (.png) will be added automatically.
+					{/if}
+				</p>
 			</div>
 			
 			<!-- Folder Selection -->
@@ -714,9 +893,17 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 							await performSaveFrame();
 						}
 					}}
-					disabled={!saveFolderId}
+					disabled={!saveFolderId || isSavingFrame || isSavingAllFrames}
 				>
-					💾 Save
+					{#if isSavingAllFrames}
+						⏳ Saving All...
+					{:else if isSavingFrame}
+						⏳ Saving...
+					{:else if saveMode === 'all'}
+						💾 Save All
+					{:else}
+						💾 Save
+					{/if}
 				</button>
 			</div>
 		</div>

@@ -16,7 +16,7 @@
 	} from '$lib/stores/design.js';
 
 	const OIL_PAINTING_FANTASY_PRESET =
-		'hyper-detailed concept art, cinematic lighting, oil painting strokes, high-resolution, studio render lighting, volumetric depth, moody atmospheric tone, digital painting in the style of 1980s fantasy art, coherent anatomy and forms, intentional composition, avoid generic AI artifacts and plastic-looking surfaces';
+		'Whimsical, surreal, vibrant, spec art 1980s fantasy oil painting, unified shadow masses, midtone-dominant value structure, soft form transitions, restrained highlights, matte surface rendering, simplified detail grouping, painterly background mass, selective high-chroma accents only on magical elements';
 
 	const CONTENT_PRESETS = {
 		character: 'Create a game-ready character design with a clear silhouette and strong identity.',
@@ -30,8 +30,7 @@
 	const STYLE_PRESETS = {
 		default: '',
 		diablo2: 'Theme add-on: dark gothic fantasy in the spirit of Diablo II, moody lighting, gritty textures, dramatic contrast, somber medieval atmosphere.',
-		oil_painting_fantasy:
-			'Theme add-on: Oil Painting Fantasy style with rich brushwork, cinematic lighting, volumetric depth, and moody 1980s fantasy atmosphere.',
+		oil_painting_fantasy: OIL_PAINTING_FANTASY_PRESET,
 		pixel_anchor: 'Theme add-on: crisp 2D pixel-art game rendering with readable silhouette, controlled palette, and sprite-ready detail.'
 	};
 	const GENESIS_MODEL_OPTIONS = [
@@ -51,6 +50,7 @@
 	let userInput = $state('');
 	let chatMessagesEl;
 	let referenceInputEl;
+	let genesisReferenceInputEl;
 	let showPreview = $state(false);
 	let showNewAssetModal = $state(false);
 	let newAssetName = $state('');
@@ -168,6 +168,30 @@
 		uiNote = '\u{1F9F9} GPT reference image removed.';
 	}
 
+	async function handleGenesisReferenceUpload(event) {
+		const file = event?.target?.files?.[0];
+		if (!file) return;
+		clearTransientMessages();
+		try {
+			if (!file.type.startsWith('image/')) {
+				throw new Error('Please select an image file.');
+			}
+			const dataUrl = await fileToDataUrl(file);
+			const optimized = await optimizeReferenceImage(dataUrl);
+			updateDesignState({ chatReferenceImage: optimized });
+			uiNote = '\u{1F5BC}\uFE0F Genesis reference image attached.';
+		} catch (err) {
+			uiNote = `\u26A0\uFE0F ${err.message || 'Failed to load reference image.'}`;
+		} finally {
+			if (genesisReferenceInputEl) genesisReferenceInputEl.value = '';
+		}
+	}
+
+	function clearGenesisReferenceImage() {
+		updateDesignState({ chatReferenceImage: null });
+		uiNote = '\u{1F9F9} Genesis reference image removed.';
+	}
+
 	$effect(() => {
 		if ($designStore.mode !== 'chat') return;
 		$designStore.messages.length;
@@ -175,12 +199,6 @@
 			if (!chatMessagesEl) return;
 			chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
 		});
-	});
-
-	$effect(() => {
-		if ($designStore.stylePreset !== 'oil_painting_fantasy') {
-			updateDesignState({ stylePreset: 'oil_painting_fantasy' });
-		}
 	});
 
 	function setMode(mode) {
@@ -835,6 +853,7 @@
 					value={$designStore.contentPreset}
 					onchange={(e) => updateDesignState({ contentPreset: e.target.value })}
 				>
+					<option value="">🚫 None</option>
 					<option value="character">&#x1F9D9; Character</option>
 					<option value="building">&#x1F3F0; Building</option>
 					<option value="item">&#x1F5E1;&#xFE0F; Item</option>
@@ -850,6 +869,7 @@
 					value={$designStore.stylePreset}
 					onchange={(e) => updateDesignState({ stylePreset: e.target.value })}
 				>
+					<option value="default">🚫 None</option>
 					<option value="oil_painting_fantasy">&#x1F5BC;&#xFE0F; Oil Painting Fantasy</option>
 				</select>
 			</div>
@@ -960,6 +980,30 @@
 				value={$designStore.draftPrompt}
 				oninput={(e) => updateDesignState({ draftPrompt: e.target.value })}
 			></textarea>
+			<div class="flex items-center gap-2 rounded border border-gray-200 bg-gray-50 px-2 py-1">
+				<button
+					class="px-2 py-1 rounded border bg-white text-xs text-gray-700 hover:bg-gray-100"
+					onclick={() => genesisReferenceInputEl?.click()}
+				>
+					🖼️ Upload Ref
+				</button>
+				<input
+					class="hidden"
+					type="file"
+					accept="image/*"
+					bind:this={genesisReferenceInputEl}
+					onchange={handleGenesisReferenceUpload}
+				/>
+				{#if $designStore.chatReferenceImage}
+					<img src={$designStore.chatReferenceImage} alt="Genesis reference" class="w-8 h-8 object-cover rounded border bg-white" />
+					<button class="text-[10px] text-red-600 hover:text-red-700" onclick={clearGenesisReferenceImage}>
+						Remove
+					</button>
+					<span class="text-[10px] text-gray-500">Used during Genesis generate</span>
+				{:else}
+					<span class="text-[10px] text-gray-500">No Genesis reference image attached</span>
+				{/if}
+			</div>
 			<button
 				class="w-full px-2 py-1.5 text-xs rounded border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
 				onclick={saveCurrentPromptToHistory}

@@ -612,3 +612,84 @@ export async function cleanupBackgrounds(images, alphaThreshold = 80, onProgress
 	}
 	return results;
 }
+
+/**
+ * Detect likely green/chroma artifacts remaining after background removal.
+ * Returns ratios that can be thresholded to decide rembg fallback.
+ */
+export async function detectGreenArtifacts(imageDataUrl, options = {}) {
+	if (!imageDataUrl) {
+		return {
+			isArtifact: false,
+			edgeSpillRatio: 0,
+			opaqueGreenRatio: 0,
+			edgePixels: 0,
+			opaquePixels: 0,
+			greenEdgePixels: 0,
+			greenOpaquePixels: 0
+		};
+	}
+
+	const chromaRgb = hexToRgb(options.chromaKeyHex || '#00FF00') || { r: 0, g: 255, b: 0 };
+	const keyHue = rgbToHsv(chromaRgb.r, chromaRgb.g, chromaRgb.b).h;
+	const edgeAlphaMin = Number.isFinite(options.edgeAlphaMin) ? options.edgeAlphaMin : 20;
+	const edgeAlphaMax = Number.isFinite(options.edgeAlphaMax) ? options.edgeAlphaMax : 220;
+	const opaqueAlphaMin = Number.isFinite(options.opaqueAlphaMin) ? options.opaqueAlphaMin : 220;
+	const edgeSpillThreshold = Number.isFinite(options.edgeSpillThreshold) ? options.edgeSpillThreshold : 0.03;
+	const opaqueGreenThreshold = Number.isFinite(options.opaqueGreenThreshold) ? options.opaqueGreenThreshold : 0.005;
+
+	return new Promise((resolve, reject) => {
+		const img = new Image();
+		img.crossOrigin = 'anonymous';
+		img.onload = () => {
+			const canvas = document.createElement('canvas');
+			canvas.width = img.width;
+			canvas.height = img.height;
+			const ctx = canvas.getContext('2d');
+			ctx.drawImage(img, 0, 0);
+			const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+			const data = imageData.data;
+
+			let edgePixels = 0;
+			let opaquePixels = 0;
+			let greenEdgePixels = 0;
+			let greenOpaquePixels = 0;
+
+			for (let i = 0; i < data.length; i += 4) {
+				const r = data[i];
+				const g = data[i + 1];
+				const b = data[i + 2];
+				const a = data[i + 3];
+				const hsv = rgbToHsv(r, g, b);
+				const hueDiff = hueDistanceDegrees(hsv.h, keyHue);
+				const greenDominance = g - Math.max(r, b);
+				const isGreenLike = hueDiff <= 48 && hsv.s >= 0.2 && hsv.v >= 0.08 && greenDominance > 16;
+
+				if (a >= edgeAlphaMin && a < edgeAlphaMax) {
+					edgePixels++;
+					if (isGreenLike) greenEdgePixels++;
+				}
+				if (a >= opaqueAlphaMin) {
+					opaquePixels++;
+					if (isGreenLike) greenOpaquePixels++;
+				}
+			}
+
+			const edgeSpillRatio = edgePixels > 0 ? greenEdgePixels / edgePixels : 0;
+			const opaqueGreenRatio = opaquePixels > 0 ? greenOpaquePixels / opaquePixels : 0;
+			const isArtifact = edgeSpillRatio > edgeSpillThreshold || opaqueGreenRatio > opaqueGreenThreshold;
+
+			resolve({
+				isArtifact,
+				edgeSpillRatio,
+				opaqueGreenRatio,
+				edgePixels,
+				opaquePixels,
+				greenEdgePixels,
+				greenOpaquePixels
+			});
+		};
+		img.onerror = () => reject(new Error('Failed to load image for artifact detection'));
+		img.src = imageDataUrl;
+	});
+}

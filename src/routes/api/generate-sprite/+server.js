@@ -11,6 +11,9 @@ import {
 	recordUsageEvent
 } from '$lib/server/requestTracking.js';
 
+const OPENAI_GPT_IMAGE_SIZE = '1024x1024';
+const OPENAI_PROMPT_REFINER_MODEL = 'gpt-4.1-mini';
+
 export async function POST({ request, locals }) {
 	let payloadBytes = 0;
 	let idempotencyKey = null;
@@ -82,10 +85,11 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Prompt or reference image is required' }, { status: 400 });
 		}
 
-		// Send prompt EXACTLY as provided - don't add extra instructions that confuse the model
-		const finalPrompt = generationNonce
-			? `${prompt}\n\nVariation nonce: ${generationNonce}`
-			: prompt;
+		// Keep OpenAI prompt clean; nonce-based variation is only used on Nano Banana path.
+		const finalPrompt =
+			selectedModel === 'nano_banana' && generationNonce
+				? `${prompt}\n\nVariation nonce: ${generationNonce}`
+				: prompt;
 
 		const generatedImage = await generateImageByModel({
 			selectedModel,
@@ -199,16 +203,85 @@ async function generateImageByModel({ selectedModel, finalPrompt, referenceImage
 	if (!env.OPENAI_API_KEY) {
 		throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY in .env');
 	}
-	if (referenceImage) {
-		throw new Error('Reference image is currently supported only with Nano Banana.');
-	}
 	if (selectedModel === 'gpt4') {
-		return generateWithOpenAI({ model: 'gpt-image-1', prompt: finalPrompt });
+		const refinedPrompt = await refineOpenAIPrompt(finalPrompt);
+		const firstPassImage = await generateWithOpenAI({
+			model: 'gpt-image-1.5',
+			prompt: refinedPrompt,
+			quality: 'high',
+			referenceImage
+		});
+		if (!firstPassImage) return firstPassImage;
+		const polishPrompt = buildOpenAIPolishPrompt(refinedPrompt);
+		try {
+			const polishedImage = await generateWithOpenAI({
+				model: 'gpt-image-1.5',
+				prompt: polishPrompt,
+				quality: 'high',
+				referenceImage: firstPassImage
+			});
+			return polishedImage || firstPassImage;
+		} catch (error) {
+			console.warn('[Sprite Generator] OpenAI polish pass failed, returning first pass image:', error);
+			return firstPassImage;
+		}
 	}
 	if (selectedModel === 'dalle') {
+		if (referenceImage) {
+			throw new Error('Reference image is currently supported only with GPT-4 Image and Nano Banana.');
+		}
 		return generateWithOpenAI({ model: 'dall-e-3', prompt: finalPrompt });
 	}
 	return generateWithGeminiNanoBanana({ finalPrompt, referenceImage, useMasterStyleAnchor });
+}
+
+async function refineOpenAIPrompt(inputPrompt) {
+	const sourcePrompt = String(inputPrompt || '').trim();
+	if (!sourcePrompt) return sourcePrompt;
+	try {
+		const response = await fetch('https://api.openai.com/v1/chat/completions', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				model: OPENAI_PROMPT_REFINER_MODEL,
+				temperature: 0.2,
+				messages: [
+					{
+						role: 'system',
+						content:
+							'Rewrite image prompts for maximum visual fidelity. Preserve subject intent exactly. Output a single final prompt only, no markdown, no explanations.'
+					},
+					{
+						role: 'user',
+						content:
+							`Refine this image-generation prompt to improve detail density, material realism, atmospheric depth, and composition clarity while keeping subject, style, and intent unchanged:\n\n${sourcePrompt}`
+					}
+				]
+			})
+		});
+		if (!response.ok) {
+			const errorText = await response.text();
+			console.warn('[Sprite Generator] OpenAI prompt refinement failed:', response.status, errorText);
+			return sourcePrompt;
+		}
+		const result = await response.json();
+		const refined = result?.choices?.[0]?.message?.content;
+		const cleaned = typeof refined === 'string' ? refined.trim() : '';
+		return cleaned || sourcePrompt;
+	} catch (error) {
+		console.warn('[Sprite Generator] OpenAI prompt refinement error:', error);
+		return sourcePrompt;
+	}
+}
+
+function buildOpenAIPolishPrompt(basePrompt) {
+	return (
+		`${basePrompt}\n\n` +
+		'Second pass clean polish (mandatory): preserve composition, pose, silhouette, and color story exactly. Keep forms clean with smooth surface transitions, polished materials, controlled detail density, and low-noise rendering. Use restrained weathering only at contact edges. Improve focal clarity without adding heavy grit. Do not simplify forms, do not change framing, and do not introduce new subjects. AVOID: excessive grit, crusty texture noise, heavy rust pitting, dirty patina, rough painterly speckle.'
+	);
 }
 
 async function generateWithGeminiNanoBanana({ finalPrompt, referenceImage, useMasterStyleAnchor }) {
@@ -300,19 +373,86 @@ async function generateWithGeminiNanoBanana({ finalPrompt, referenceImage, useMa
 	return extractGeneratedImage(result);
 }
 
-async function generateWithOpenAI({ model, prompt }) {
-	const response = await fetch('https://api.openai.com/v1/images/generations', {
-		method: 'POST',
-		headers: {
-			Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-			'Content-Type': 'application/json'
-		},
-		body: JSON.stringify({
-			model,
-			prompt,
-			size: '1024x1024'
-		})
-	});
+function dataUrlToImageParts(dataUrl) {
+	const commaIndex = dataUrl.indexOf(',');
+	if (commaIndex === -1) return null;
+	const header = dataUrl.slice(0, commaIndex);
+	const base64Data = dataUrl.slice(commaIndex + 1);
+	const mimeMatch = header.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64$/);
+	if (!mimeMatch || !base64Data) return null;
+	return {
+		mimeType: mimeMatch[1],
+		buffer: Buffer.from(base64Data, 'base64')
+	};
+}
+
+function mimeToExtension(mimeType) {
+	if (mimeType === 'image/jpeg') return 'jpg';
+	if (mimeType === 'image/webp') return 'webp';
+	if (mimeType === 'image/gif') return 'gif';
+	return 'png';
+}
+
+async function normalizeReferenceImage(referenceImage) {
+	if (!referenceImage || typeof referenceImage !== 'string') return null;
+	if (referenceImage.startsWith('data:image/')) {
+		const parsed = dataUrlToImageParts(referenceImage);
+		if (!parsed) return null;
+		return parsed;
+	}
+	if (referenceImage.startsWith('http://') || referenceImage.startsWith('https://')) {
+		const imageResponse = await fetch(referenceImage);
+		if (!imageResponse.ok) {
+			throw new Error(`Failed to fetch reference image: ${imageResponse.status}`);
+		}
+		const mimeType = imageResponse.headers.get('content-type') || 'image/png';
+		const buffer = Buffer.from(await imageResponse.arrayBuffer());
+		return { mimeType, buffer };
+	}
+	return {
+		mimeType: 'image/png',
+		buffer: Buffer.from(referenceImage, 'base64')
+	};
+}
+
+async function generateWithOpenAI({ model, prompt, quality, referenceImage }) {
+	const hasReference = !!referenceImage;
+	let response;
+	if (hasReference) {
+		const parsedReference = await normalizeReferenceImage(referenceImage);
+		if (!parsedReference?.buffer?.length) {
+			throw new Error('Failed to parse reference image for OpenAI request.');
+		}
+		const formData = new FormData();
+		formData.set('model', model);
+		formData.set('prompt', prompt);
+		formData.set('size', OPENAI_GPT_IMAGE_SIZE);
+		if (quality) formData.set('quality', quality);
+		const ext = mimeToExtension(parsedReference.mimeType);
+		const filename = `reference.${ext}`;
+		formData.set('image', new Blob([parsedReference.buffer], { type: parsedReference.mimeType }), filename);
+		response = await fetch('https://api.openai.com/v1/images/edits', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${env.OPENAI_API_KEY}`
+			},
+			body: formData
+		});
+	} else {
+		response = await fetch('https://api.openai.com/v1/images/generations', {
+			method: 'POST',
+			headers: {
+				Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				model,
+				prompt,
+				size: OPENAI_GPT_IMAGE_SIZE,
+				...(quality ? { quality } : {})
+			})
+		});
+	}
 	if (!response.ok) {
 		const errorText = await response.text();
 		throw new Error(`OpenAI image API error: ${response.status} ${errorText}`);

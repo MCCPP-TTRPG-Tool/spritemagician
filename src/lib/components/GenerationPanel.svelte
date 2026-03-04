@@ -7,8 +7,9 @@
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	import { pixelateFrames } from '$lib/utils/pixelate.js';
+	import { cleanupBackgrounds, detectGreenArtifacts } from '$lib/utils/backgroundCleanup.js';
 	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
-	import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
+	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	
 	let project = $state({ frames: [], fps: 12, firstFrame: null, frameCount: 8 });
@@ -67,6 +68,7 @@
 	let frameTargetMode = $state('auto'); // 'auto' | 'manual'
 	let manualFrameCount = $state(16);
 	let inputLongEdge = $state(1024); // Cap source image long edge before video generation
+	const USE_HYBRID_BG_REMOVAL = false; // Forced rollback: always use full rembg pass
 	
 	function handleEndFrameUpload(dataUrl) {
 		endFrame = dataUrl;
@@ -368,15 +370,33 @@
 					
 					if (removeBackground) {
 						const totalFrames = rawFrames.length;
-						progress = { ...progress, message: `Removing background with rembg (${totalFrames} frames)...` };
+						progress = {
+							...progress,
+							message: USE_HYBRID_BG_REMOVAL
+								? `Running chroma cleanup (${totalFrames} frames)...`
+								: `Removing background with rembg (${totalFrames} frames)...`
+						};
 						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: `Running rembg background removal...` });
+							jobQueue.updateJob(queueJobId, {
+								message: USE_HYBRID_BG_REMOVAL
+									? 'Running chroma cleanup + artifact scan...'
+									: 'Running rembg background removal...'
+							});
 						}
 						
 						const cleanedFrames = await removeBackgroundWithRembg(
 							rawFrames,
-							(done, total) => {
-								progress = { ...progress, message: `rembg cleanup (${done}/${total})...` };
+							(done, total, phase) => {
+								if (phase === 'chroma') {
+									progress = { ...progress, message: `Chroma cleanup (${done}/${total})...` };
+									return;
+								}
+								progress = {
+									...progress,
+									message: USE_HYBRID_BG_REMOVAL
+										? `rembg fallback (${done}/${total})...`
+										: `rembg cleanup (${done}/${total})...`
+								};
 							}
 						);
 						
@@ -403,7 +423,7 @@
 					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
 					console.log(`Adding animation to completed jobs: ${poseName} with ${finalFrames.length} frames`);
 					
-					await completedJobs.addAnimation({
+					const completedJobId = await completedJobs.addAnimation({
 						name: poseName,
 						frames: finalFrames,
 						pose: selectedPose,
@@ -423,6 +443,20 @@
 					// Mark job as complete
 					if (queueJobId) {
 						jobQueue.completeJob(queueJobId, { frameCount: finalFrames.length });
+					}
+
+					// Broadcast completion directly from generation flow so UI tab changes
+					// still happen even when JobsPanel is not mounted.
+					if (typeof window !== 'undefined') {
+						window.dispatchEvent(new CustomEvent('animationCompleted'));
+						window.dispatchEvent(
+							new CustomEvent('jobsAnimationSelected', {
+								detail: {
+									jobId: completedJobId,
+									label: poseName
+								}
+							})
+						);
 					}
 						
 					} catch (extractError) {
@@ -477,14 +511,15 @@
 		}
 	}
 
-	async function removeBackgroundWithRembg(frames, onProgress) {
+	async function runRembgBatches(frames, frameIndexes, onProgress) {
 		const output = [...frames];
-		const total = frames.length;
 		const batchSize = 4;
+		let rembgProcessed = 0;
 
-		for (let i = 0; i < total; i += batchSize) {
-			const end = Math.min(i + batchSize, total);
-			const batch = frames.slice(i, end);
+		for (let i = 0; i < frameIndexes.length; i += batchSize) {
+			const end = Math.min(i + batchSize, frameIndexes.length);
+			const indexBatch = frameIndexes.slice(i, end);
+			const batch = indexBatch.map((idx) => output[idx]);
 			const response = await fetch('/api/remove-background', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
@@ -498,14 +533,54 @@
 				throw new Error('rembg returned invalid response');
 			}
 
-			for (let j = 0; j < data.images.length; j++) {
-				const frameIndex = i + j;
+			for (let j = 0; j < indexBatch.length; j++) {
+				const frameIndex = indexBatch[j];
 				output[frameIndex] = data.images[j] || output[frameIndex];
-				if (onProgress) onProgress(frameIndex + 1, total);
+				rembgProcessed++;
+				if (onProgress) onProgress(rembgProcessed, frameIndexes.length, 'rembg');
 			}
 		}
 
 		return output;
+	}
+
+	async function removeBackgroundWithRembg(frames, onProgress) {
+		if (!USE_HYBRID_BG_REMOVAL) {
+			return runRembgBatches(frames, frames.map((_, i) => i), onProgress);
+		}
+
+		const total = frames.length;
+		const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
+		const output = await cleanupBackgrounds(
+			frames,
+			70,
+			(done, count) => {
+				if (onProgress) onProgress(done, count, 'chroma');
+			},
+			true,
+			{
+				chromaKeyHex: activeChroma,
+				chromaTolerance: CHROMA_KEY_TOLERANCE,
+				chromaOnly: true
+			}
+		);
+
+		const flaggedFrameIndexes = [];
+		for (let i = 0; i < output.length; i++) {
+			const artifact = await detectGreenArtifacts(output[i], {
+				chromaKeyHex: activeChroma,
+				edgeSpillThreshold: 0.03,
+				opaqueGreenThreshold: 0.005
+			});
+			if (artifact.isArtifact) flaggedFrameIndexes.push(i);
+		}
+
+		if (flaggedFrameIndexes.length === 0) {
+			return output;
+		}
+
+		console.log(`[GenerationPanel] BG cleanup fallback: ${flaggedFrameIndexes.length}/${total} frames sent to rembg`);
+		return runRembgBatches(output, flaggedFrameIndexes, onProgress);
 	}
 
 	async function generateFrames() {

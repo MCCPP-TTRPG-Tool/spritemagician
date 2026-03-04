@@ -9,7 +9,6 @@
  */
 import { json } from '@sveltejs/kit';
 import { getAdminDb } from '$lib/firebase/admin.js';
-import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -98,15 +97,9 @@ export async function POST({ request, locals }) {
 				.slice(0, 10)
 			: [];
 		const folderMetadata = {
-			assetType: String(incomingMetadata.assetType || '').trim().slice(0, 40),
 			notes: String(incomingMetadata.notes || '').trim().slice(0, 1000),
 			tags,
-			source: String(incomingMetadata.source || '').trim().slice(0, 40),
-			chromaKeyHex:
-				typeof incomingMetadata.chromaKeyHex === 'string' &&
-				/^#[0-9A-Fa-f]{6}$/.test(incomingMetadata.chromaKeyHex)
-					? incomingMetadata.chromaKeyHex.toUpperCase()
-					: CHROMA_KEY_HEX
+			source: String(incomingMetadata.source || '').trim().slice(0, 40)
 		};
 
 		const db = getAdminDb();

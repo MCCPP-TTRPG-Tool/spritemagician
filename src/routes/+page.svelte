@@ -12,19 +12,22 @@
 	import ModelGeneration3DPanel from '$lib/components/ModelGeneration3DPanel.svelte';
 	import RigAnimation3DPanel from '$lib/components/RigAnimation3DPanel.svelte';
 	import { designStore } from '$lib/stores/design.js';
-	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { authStore } from '$lib/stores/auth.js';
 	import { auth } from '$lib/firebase/client.js';
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 	import { createFile } from '$lib/firebase/firestore.js';
 	import { goto } from '$app/navigation';
+	import { onMount, tick } from 'svelte';
 	
 	let activeTab = $state('design'); // 'design' | 'edit' | 'animate'
 	let rightTab = $state('preview'); // 'preview' | 'export'
-	let appMode = $state('2d'); // '2d' | '3d'
+	let appMode = $state('home'); // 'home' | '2d' | '3d'
+	let homeLeftTab = $state('docs'); // 'docs' | 'tutorials'
+	let homeCenterTab = $state('home'); // 'home' | 'settings'
 	let showUserMenu = $state(false);
 	let showBillingModal = $state(false);
+	let showNewProjectModal = $state(false);
 	let showDesignConversationsInCenter = $state(false);
 	let isSavingStill = $state(false);
 	let rightPanelNote = $state('');
@@ -39,10 +42,10 @@
 	let previewContextUpdatedAt = $state(new Date().toISOString());
 	let previousPreviewContextSignature = $state('');
 	let featureP1PreviewContextHeader = $state(true);
-	let featureP1ActiveAssetDestinationGuard = $state(true);
+	let mobilePanelsEl;
+	let homeCenterPanelEl;
 	const PANEL_STATE_KEY = 'spritemagician.page.panel.v1';
 	const FEATURE_P1_PREVIEW_CONTEXT_HEADER_KEY = 'sm.ff.p1_preview_context_header';
-	const FEATURE_P1_ACTIVE_ASSET_GUARD_KEY = 'sm.ff.p1_active_asset_destination_guard';
 
 	if (typeof window !== 'undefined') {
 		try {
@@ -55,17 +58,10 @@
 				if (parsed?.rightTab === 'preview' || parsed?.rightTab === 'export') {
 					rightTab = parsed.rightTab;
 				}
-				if (parsed?.appMode === '2d' || parsed?.appMode === '3d') {
-					appMode = parsed.appMode;
-				}
 			}
 			const rawFeatureFlag = localStorage.getItem(FEATURE_P1_PREVIEW_CONTEXT_HEADER_KEY);
 			if (rawFeatureFlag === '0') {
 				featureP1PreviewContextHeader = false;
-			}
-			const rawAssetGuardFlag = localStorage.getItem(FEATURE_P1_ACTIVE_ASSET_GUARD_KEY);
-			if (rawAssetGuardFlag === '0') {
-				featureP1ActiveAssetDestinationGuard = false;
 			}
 		} catch {
 			// ignore storage parse errors
@@ -74,6 +70,9 @@
 
 	// Images passed from FileTree -> store -> here -> component props
 	let editImage = $state(null);
+	let editSourceFileId = $state(null);
+	let editSourceClusterId = $state(null);
+	let editForceNewCluster = $state(false);
 	let editOutputImage = $state(null);
 
 	// React to FileTree setting editImage in the store
@@ -81,9 +80,18 @@
 		const img = $projectStore.editImage;
 		if (img) {
 			editImage = img;
+			editSourceFileId = $projectStore.editFileId || null;
+			editSourceClusterId = $projectStore.editClusterId || null;
+			editForceNewCluster = !!$projectStore.editForceNewCluster;
 			activeTab = 'edit';
 			// Clear the store value immediately to allow re-triggering with same image
-			projectStore.update(s => ({ ...s, editImage: null }));
+			projectStore.update((s) => ({
+				...s,
+				editImage: null,
+				editFileId: null,
+				editClusterId: null,
+				editForceNewCluster: false
+			}));
 		}
 	});
 
@@ -186,6 +194,21 @@
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 
+		const onJobsAnimationSelected = () => {
+			jobsPreviewImage = null;
+			jobsPreviewLabel = '';
+			jobsPreviewJobId = null;
+			activeTab = 'animate';
+			rightTab = 'export';
+		};
+
+		window.addEventListener('jobsAnimationSelected', onJobsAnimationSelected);
+		return () => window.removeEventListener('jobsAnimationSelected', onJobsAnimationSelected);
+	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+
 		const onOpen3DMode = () => {
 			appMode = '3d';
 		};
@@ -246,24 +269,6 @@
 	}
 
 	function emitPreviewTelemetry(eventName, payload) {
-		if (typeof window === 'undefined') return;
-		window.dispatchEvent(
-			new CustomEvent('smTelemetryEvent', {
-				detail: {
-					eventName,
-					payload,
-					ts: new Date().toISOString()
-				}
-			})
-		);
-	}
-
-	function emitAssetUiEvent(name, payload) {
-		if (typeof window === 'undefined') return;
-		window.dispatchEvent(new CustomEvent(name, { detail: payload }));
-	}
-
-	function emitAssetTelemetry(eventName, payload) {
 		if (typeof window === 'undefined') return;
 		window.dispatchEvent(
 			new CustomEvent('smTelemetryEvent', {
@@ -344,35 +349,6 @@
 			return 'Animation actions target: current animation playback frames.';
 		}
 		return `Right-panel actions target: ${previewContext.sourceLabel}`;
-	});
-
-	let activeSaveDestinationLabel = $derived.by(() => {
-		return $activeAssetStore?.folderPath || $activeAssetStore?.folderName || '';
-	});
-
-	let hasActiveSaveDestination = $derived.by(() => !!$activeAssetStore?.folderId);
-
-	let previousActiveAssetPath = '';
-	let hasInitializedActiveAssetTracking = false;
-
-	$effect(() => {
-		if (!featureP1ActiveAssetDestinationGuard) return;
-		const nextPath = $activeAssetStore?.folderPath || $activeAssetStore?.folderName || '';
-		if (!hasInitializedActiveAssetTracking) {
-			previousActiveAssetPath = nextPath;
-			hasInitializedActiveAssetTracking = true;
-			return;
-		}
-		if (nextPath === previousActiveAssetPath) return;
-
-		const payload = {
-			fromAssetPath: previousActiveAssetPath || null,
-			toAssetPath: nextPath || null,
-			changeSource: 'header_control'
-		};
-		emitAssetUiEvent('asset.active.changed', payload);
-		emitAssetTelemetry('sm.p1.active_asset_changed', payload);
-		previousActiveAssetPath = nextPath;
 	});
 
 	$effect(() => {
@@ -456,6 +432,22 @@
 		rightPanelNote = 'Set as animation end frame.';
 	}
 
+	function sendStillToGptContext() {
+		if (!rightPreviewImage) return;
+		trackPreviewAction('send_gpt_context');
+		designStore.update((state) => ({
+			...state,
+			mode: 'chat',
+			chatReferenceImage: rightPreviewImage
+		}));
+		activeTab = 'design';
+		rightTab = 'preview';
+		jobsPreviewImage = null;
+		jobsPreviewLabel = '';
+		jobsPreviewJobId = null;
+		rightPanelNote = 'Sent image to GPT chat context.';
+	}
+
 	function downloadCurrentStill() {
 		if (!rightPreviewImage) return;
 		const a = document.createElement('a');
@@ -477,29 +469,67 @@
 	$effect(() => {
 		if (typeof window === 'undefined') return;
 		try {
-			localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({ activeTab, rightTab, appMode }));
+			localStorage.setItem(PANEL_STATE_KEY, JSON.stringify({ activeTab, rightTab }));
 		} catch {
 			// ignore storage issues
+		}
+	});
+
+	const homeProjectThumbnails = [
+		{ id: 'new-project', name: 'Create New Project', isCreateNew: true },
+		{ id: 'proj-1', name: 'Hero Sprite Pack', emoji: '🧙' },
+		{ id: 'proj-2', name: 'Boss Enemy Set', emoji: '🐉' },
+		{ id: 'proj-3', name: 'Town NPC Batch', emoji: '🧑' },
+		{ id: 'proj-4', name: 'Sci-Fi Props', emoji: '🚀' },
+		{ id: 'proj-5', name: 'Forest Creatures', emoji: '🌲' }
+	];
+
+	const homeProjectList = [
+		{ id: 'list-1', name: 'Hero Sprite Pack', emoji: '🧙' },
+		{ id: 'list-2', name: 'Boss Enemy Set', emoji: '🐉' },
+		{ id: 'list-3', name: 'Town NPC Batch', emoji: '🧑' },
+		{ id: 'list-4', name: 'Sci-Fi Props', emoji: '🚀' },
+		{ id: 'list-5', name: 'Forest Creatures', emoji: '🌲' },
+		{ id: 'list-6', name: 'Retro UI Kit', emoji: '🎮' }
+	];
+
+	let quickSaveFolderId = $derived.by(() => $userFiles?.currentFolderId || null);
+	let quickSaveFolderPath = $derived.by(() => {
+		const crumbs = Array.isArray($userFiles?.breadcrumbs) ? $userFiles.breadcrumbs : [];
+		if (!crumbs.length) return '';
+		return crumbs.map((c) => c.name).join(' / ');
+	});
+
+	async function focusCenterPanelOnMobile() {
+		if (typeof window === 'undefined') return;
+		if (window.innerWidth >= 768) return;
+		if (!mobilePanelsEl || !homeCenterPanelEl) return;
+		await tick();
+		mobilePanelsEl.scrollTo({
+			left: homeCenterPanelEl.offsetLeft,
+			behavior: 'auto'
+		});
+	}
+
+	onMount(() => {
+		if (appMode === 'home') {
+			focusCenterPanelOnMobile();
+		}
+	});
+
+	$effect(() => {
+		if (appMode === 'home') {
+			focusCenterPanelOnMobile();
 		}
 	});
 
 	function openStillSavePicker() {
 		if (!rightPreviewImage || isSavingStill) return;
 		trackPreviewAction('save');
-		if (featureP1ActiveAssetDestinationGuard && !$activeAssetStore?.folderId) {
-			rightPanelNote = 'Select an active asset folder first.';
-			const blockedPayload = {
-				entryPoint: 'preview',
-				sourceType: 'image'
-			};
-			emitAssetUiEvent('asset.destination.blocked_missing_context', blockedPayload);
-			emitAssetTelemetry('sm.p1.save_without_active_asset_blocked', blockedPayload);
-			return;
-		}
 		unifiedSaveError = '';
 		unifiedSaveFileName = `${activeTab}_result_${Date.now()}.png`;
-		unifiedSaveFolderId = $activeAssetStore.folderId || null;
-		unifiedSaveFolderPath = $activeAssetStore.folderPath || $activeAssetStore.folderName || '';
+		unifiedSaveFolderId = null;
+		unifiedSaveFolderPath = '';
 		showUnifiedSaveDialog = true;
 
 		const openedPayload = {
@@ -509,6 +539,16 @@
 		};
 		emitPreviewUiEvent('save.dialog.opened', openedPayload);
 		emitPreviewTelemetry('sm.p1.save_opened', openedPayload);
+	}
+
+	async function quickSaveStillToCurrentFolder() {
+		if (!rightPreviewImage || isSavingStill) return;
+		if (!quickSaveFolderId) {
+			rightPanelNote = 'Open a destination folder in File Tree first.';
+			return;
+		}
+		const filename = `${activeTab}_result_${Date.now()}.png`;
+		await saveStillToFolder(quickSaveFolderId, quickSaveFolderPath, filename);
 	}
 
 	function closeUnifiedSaveDialog() {
@@ -543,21 +583,13 @@
 		}
 
 		unifiedSaveError = '';
-		if (featureP1ActiveAssetDestinationGuard) {
-			const confirmedPayload = {
-				destinationPath: folderPath || null,
-				confirmationSource: 'dialog_submit'
-			};
-			emitAssetUiEvent('asset.destination.confirmed', confirmedPayload);
-			emitAssetTelemetry('sm.p1.save_destination_confirmed', confirmedPayload);
-		}
 		await saveStillToFolder(folderId, folderPath, fileName);
 	}
 
 	async function saveStillToFolder(targetFolderId, targetFolderPath, explicitFilename = '') {
 		if (!rightPreviewImage || isSavingStill) return;
 		if (!targetFolderId) {
-			rightPanelNote = 'Select an active asset folder first.';
+			rightPanelNote = 'Select a destination folder first.';
 			return;
 		}
 		const uid = userFiles.getUid();
@@ -649,6 +681,12 @@
 		</div>
 		<div class="flex items-center border rounded overflow-hidden">
 			<button
+				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === 'home' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'}"
+				onclick={() => appMode = 'home'}
+			>
+				Home
+			</button>
+			<button
 				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === '2d' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'}"
 				onclick={() => appMode = '2d'}
 			>
@@ -708,14 +746,49 @@
 						</div>
 					{/if}
 				</div>
+			{:else}
+				<button
+					class="px-2 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+					onclick={() => goto('/login')}
+				>
+					Sign In
+				</button>
 			{/if}
 		</div>
 	</header>
 
-	<div class="mobile-panels flex-1 flex md:grid md:grid-cols-3 gap-2 p-2 overflow-x-auto overflow-y-hidden md:overflow-hidden snap-x snap-mandatory md:snap-none">
+	<div bind:this={mobilePanelsEl} class="mobile-panels flex-1 flex md:grid md:grid-cols-3 gap-2 p-2 overflow-x-auto overflow-y-hidden md:overflow-hidden snap-x snap-mandatory md:snap-none">
 		<!-- Left Column: Create / Animate -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
-			{#if appMode === '2d'}
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink {appMode === 'home' ? 'order-2 md:order-none' : ''}">
+			{#if appMode === 'home'}
+				<div class="flex border-b">
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {homeLeftTab === 'docs' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => homeLeftTab = 'docs'}
+					>
+						📚 Docs
+					</button>
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {homeLeftTab === 'tutorials' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => homeLeftTab = 'tutorials'}
+					>
+						🎓 Tutorials
+					</button>
+				</div>
+				<div class="p-3 flex-1 min-h-0 overflow-y-auto">
+					{#if homeLeftTab === 'docs'}
+						<div class="rounded border border-gray-200 bg-gray-50 p-3">
+							<p class="text-xs font-medium text-gray-700">Docs Placeholder</p>
+							<p class="text-xs text-gray-500 mt-1">Documentation links will be added in a later phase.</p>
+						</div>
+					{:else}
+						<div class="rounded border border-gray-200 bg-gray-50 p-3">
+							<p class="text-xs font-medium text-gray-700">Tutorials Placeholder</p>
+							<p class="text-xs text-gray-500 mt-1">Tutorial links and onboarding flows will be added in a later phase.</p>
+						</div>
+					{/if}
+				</div>
+			{:else if appMode === '2d'}
 				<div class="flex border-b">
 				<button
 					class="flex-1 px-2 py-2 text-xs font-medium transition-colors {activeTab === 'design' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
@@ -741,7 +814,13 @@
 					{#if activeTab === 'design'}
 						<DesignPanel />
 					{:else if activeTab === 'edit'}
-						<EditPanel initialImage={editImage} onChange={handleEditOutput} />
+						<EditPanel
+							initialImage={editImage}
+							sourceFileId={editSourceFileId}
+							sourceClusterId={editSourceClusterId}
+							forceNewCluster={editForceNewCluster}
+							onChange={handleEditOutput}
+						/>
 					{:else if activeTab === 'animate'}
 						<AutoFitPanel minScale={0.9}>
 							<GenerationPanel />
@@ -758,18 +837,90 @@
 			{/if}
 		</div>
 
-		<!-- Middle Column: File Tree / Jobs / Frames -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
-			{#if showDesignConversationsInCenter}
-				<DesignConversationsPanel />
-			{:else}
-				<CenterPanel />
-			{/if}
-		</div>
-
-		<!-- Right Column: Preview / Export (tabbed) -->
-		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink">
-			{#if appMode === '2d'}
+		<!-- Middle Column: Preview / Export (tabbed) -->
+		<div bind:this={homeCenterPanelEl} class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink {appMode === 'home' ? 'order-1 md:order-none' : ''}">
+			{#if appMode === 'home'}
+				<div class="flex border-b">
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {homeCenterTab === 'home' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => homeCenterTab = 'home'}
+					>
+						🏠 Home
+					</button>
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {homeCenterTab === 'settings' ? 'bg-indigo-50 text-indigo-600 border-b-2 border-indigo-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => homeCenterTab = 'settings'}
+					>
+						⚙️ Settings
+					</button>
+				</div>
+				<div class="p-3 flex-1 min-h-0 overflow-y-auto">
+					{#if homeCenterTab === 'home'}
+						{#if !$authStore.isLoggedIn}
+							<div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+								<p class="text-sm font-semibold text-gray-900">Welcome to Sprite Magician</p>
+								<p class="text-xs text-gray-600 mt-1">
+									Sign in to access your projects, saved outputs, and workspace progress.
+								</p>
+								<div class="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2">
+									<p class="text-xs text-blue-700">Login information</p>
+									<p class="text-xs text-blue-600 mt-1">Use your existing Firebase account to continue.</p>
+									<button
+										class="mt-2 px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
+										onclick={() => goto('/login')}
+									>
+										Sign In / Create Account
+									</button>
+								</div>
+								<p class="text-xs text-gray-500 mt-3">
+									Sprite Magician is a unified 2D/3D creative workspace for generation, editing, and animation workflows.
+								</p>
+							</div>
+						{:else}
+							<div class="space-y-3">
+								<div class="rounded-lg border border-gray-200 p-3">
+									<p class="text-sm font-semibold text-gray-900">Your Current Projects</p>
+									<div class="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
+										{#each homeProjectThumbnails as project}
+											{#if project.isCreateNew}
+												<button
+													class="rounded border-2 border-dashed border-blue-300 bg-blue-50 p-2 text-left hover:bg-blue-100 transition-colors"
+													onclick={() => showNewProjectModal = true}
+												>
+													<div class="h-16 rounded bg-white/70 flex items-center justify-center text-xl">➕</div>
+													<p class="text-[11px] text-blue-700 mt-2 font-medium">{project.name}</p>
+												</button>
+											{:else}
+												<div class="rounded border border-gray-200 bg-gray-50 p-2">
+													<div class="h-16 rounded bg-white flex items-center justify-center text-xl">{project.emoji}</div>
+													<p class="text-[11px] text-gray-700 mt-2 font-medium truncate">{project.name}</p>
+												</div>
+											{/if}
+										{/each}
+									</div>
+								</div>
+								<div class="rounded-lg border border-gray-200 p-3">
+									<p class="text-xs font-semibold text-gray-800">Project List</p>
+									<div class="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">
+										{#each homeProjectList as project}
+											<div class="rounded border border-gray-200 bg-gray-50 p-2 text-center">
+												<div class="text-lg">{project.emoji}</div>
+												<p class="text-[11px] text-gray-700 mt-1 truncate">{project.name}</p>
+											</div>
+										{/each}
+									</div>
+									<p class="text-[10px] text-gray-500 mt-2">Asset/file-system integration placeholder for later refactor.</p>
+								</div>
+							</div>
+						{/if}
+					{:else}
+						<div class="rounded border border-gray-200 bg-gray-50 p-3">
+							<p class="text-xs font-medium text-gray-700">Settings Placeholder</p>
+							<p class="text-xs text-gray-500 mt-1">Under construction.</p>
+						</div>
+					{/if}
+				</div>
+			{:else if appMode === '2d'}
 				<div class="flex border-b flex-shrink-0">
 					<button
 						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {rightTab === 'preview' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
@@ -781,23 +932,12 @@
 					>&#x1F4E6; Export</button>
 				</div>
 				<div class="flex-1 min-h-0 overflow-hidden flex flex-col">
-					<PreviewContextHeader
-						enabled={featureP1PreviewContextHeader}
-						chipLabel={mapPreviewChipLabel(previewContext.type)}
-						sourceLabel={previewContext.sourceLabel}
-						modelLabel={previewContext.modelLabel}
-						timestampLabel={formatPreviewTimestamp(previewContextUpdatedAt)}
-						actionSafetyLine={previewActionSafetyLine}
-						canReset={previewContext.isOverride}
-						onResetContext={resetPreviewContext}
-					/>
 					<div class="flex-1 min-h-0 overflow-hidden">
 						{#if rightTab === 'preview'}
 							{#if activeTab === 'animate' && !useJobsPreviewOverride}
 								<AnimationPreview />
 							{:else}
-								<div class="h-full p-3 flex flex-col gap-2">
-								<p class="text-xs text-gray-500">{rightPreviewLabel}</p>
+								<div class="h-full p-2 flex flex-col gap-1.5">
 								<div class="flex-1 border rounded bg-gray-100 flex items-center justify-center overflow-hidden">
 									{#if rightPreviewImage}
 										<img src={rightPreviewImage} alt={rightPreviewLabel} class="max-w-full max-h-full object-contain" />
@@ -805,35 +945,34 @@
 										<p class="text-xs text-gray-400">No result yet</p>
 									{/if}
 								</div>
-								<div class="grid grid-cols-2 gap-2">
-									<button class="px-2 py-1.5 text-xs rounded bg-teal-500 text-white disabled:bg-gray-400" onclick={loadStillIntoEdit} disabled={!rightPreviewImage}>
-										✏️ Load in Edit
-									</button>
-									<button class="px-2 py-1.5 text-xs rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsStartFrame} disabled={!rightPreviewImage}>
+								<div class="grid grid-cols-3 gap-1.5">
+									<button class="px-1.5 py-0.5 text-[10px] rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsStartFrame} disabled={!rightPreviewImage}>
 										▶ Set Start
 									</button>
-									<button class="px-2 py-1.5 text-xs rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsEndFrame} disabled={!rightPreviewImage}>
+									<button class="px-1.5 py-0.5 text-[10px] rounded bg-indigo-500 text-white disabled:bg-gray-400" onclick={setStillAsEndFrame} disabled={!rightPreviewImage}>
 										⏹ Set End
 									</button>
+									<button class="px-1.5 py-0.5 text-[10px] rounded bg-teal-500 text-white disabled:bg-gray-400" onclick={loadStillIntoEdit} disabled={!rightPreviewImage}>
+										✏️ Load in Edit
+									</button>
+									<button class="px-1.5 py-0.5 text-[10px] rounded bg-sky-500 text-white disabled:bg-gray-400" onclick={sendStillToGptContext} disabled={!rightPreviewImage}>
+										💬 Use in GPT Chat
+									</button>
 									<button
-										class="px-2 py-1.5 text-xs rounded bg-emerald-500 text-white disabled:bg-gray-400"
+										class="px-1.5 py-0.5 text-[10px] rounded bg-emerald-500 text-white disabled:bg-gray-400"
 										onclick={openStillSavePicker}
 										disabled={!rightPreviewImage || isSavingStill}
 									>
 										{isSavingStill ? '⏳ Saving...' : '💾 Save To...'}
 									</button>
+									<button
+										class="px-1.5 py-0.5 text-[10px] rounded bg-emerald-700 text-white disabled:bg-gray-400"
+										onclick={quickSaveStillToCurrentFolder}
+										disabled={!rightPreviewImage || isSavingStill || !quickSaveFolderId}
+									>
+										{isSavingStill ? '⏳ Saving...' : '⚡ Quick Save (Current Folder)'}
+									</button>
 								</div>
-								{#if featureP1ActiveAssetDestinationGuard}
-									{#if hasActiveSaveDestination}
-										<p class="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
-											Saving to: {activeSaveDestinationLabel}
-										</p>
-									{:else}
-										<p class="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-											No active asset selected. Save is blocked until a destination is selected.
-										</p>
-									{/if}
-								{/if}
 								{#if rightPanelNote}
 									<p class="text-[10px] text-gray-500">{rightPanelNote}</p>
 								{/if}
@@ -881,6 +1020,40 @@
 			{/if}
 		</div>
 
+		<!-- Right Column: File Tree / Jobs / Frames -->
+		<div class="bg-white rounded shadow overflow-hidden flex flex-col min-h-0 w-full shrink-0 snap-start md:w-auto md:shrink {appMode === 'home' ? 'order-3 md:order-none' : ''}">
+			{#if appMode === 'home'}
+				<div class="p-3 flex-1 min-h-0 overflow-y-auto space-y-3">
+					<div class="rounded-lg border border-gray-200 p-3">
+						<p class="text-xs font-semibold text-gray-800">Subscription Plans</p>
+						<div class="mt-2 space-y-2">
+							<div class="rounded border border-gray-200 bg-gray-50 p-2">
+								<p class="text-xs font-medium text-gray-700">Starter</p>
+								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
+							</div>
+							<div class="rounded border border-gray-200 bg-gray-50 p-2">
+								<p class="text-xs font-medium text-gray-700">Pro</p>
+								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
+							</div>
+							<div class="rounded border border-gray-200 bg-gray-50 p-2">
+								<p class="text-xs font-medium text-gray-700">Studio</p>
+								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
+							</div>
+						</div>
+					</div>
+					<div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+						<p class="text-xs font-semibold text-emerald-800">Wallet</p>
+						<p class="text-sm font-bold text-emerald-900 mt-1">Balance: $0.00</p>
+						<p class="text-[11px] text-emerald-700 mt-1">Subscription status placeholder.</p>
+					</div>
+				</div>
+			{:else if showDesignConversationsInCenter}
+				<DesignConversationsPanel />
+			{:else}
+				<CenterPanel />
+			{/if}
+		</div>
+
 	</div>
 </div>
 
@@ -890,8 +1063,10 @@
 	initialFileName={unifiedSaveFileName}
 	initialFolderId={unifiedSaveFolderId}
 	initialFolderPath={unifiedSaveFolderPath}
-	startFolderId={$activeAssetStore.folderId}
-	startFolderName={$activeAssetStore.folderName || 'Asset'}
+	startFolderId={null}
+	startFolderName={'Root'}
+	forceFolderPick={true}
+	autoSubmitOnFolderSelect={true}
 	isSaving={isSavingStill}
 	errorMessage={unifiedSaveError}
 	onClose={closeUnifiedSaveDialog}
@@ -968,6 +1143,46 @@
 				<button
 					class="px-3 py-1.5 text-xs rounded bg-gray-900 text-white hover:bg-black"
 					onclick={() => showBillingModal = false}
+				>
+					Close
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+{#if showNewProjectModal}
+	<div
+		class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
+		onclick={() => showNewProjectModal = false}
+		onkeydown={(e) => { if (e.key === 'Escape') showNewProjectModal = false; }}
+		role="dialog"
+		aria-modal="true"
+		tabindex="0"
+	>
+		<div class="w-full max-w-md bg-white rounded-xl shadow-xl border p-4" onclick={(e) => e.stopPropagation()}>
+			<div class="flex items-start justify-between gap-3">
+				<div>
+					<h2 class="text-base font-semibold text-gray-900">Create New Project</h2>
+					<p class="text-xs text-gray-500 mt-1">Project creation flow placeholder.</p>
+				</div>
+				<button
+					class="text-gray-500 hover:text-gray-800 text-xl leading-none"
+					onclick={() => showNewProjectModal = false}
+					aria-label="Close new project modal"
+				>
+					×
+				</button>
+			</div>
+			<div class="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
+				<p class="text-xs text-gray-600">
+					This modal will be connected to the project creation workflow in a later phase.
+				</p>
+			</div>
+			<div class="mt-4 flex justify-end">
+				<button
+					class="px-3 py-1.5 text-xs rounded bg-gray-900 text-white hover:bg-black"
+					onclick={() => showNewProjectModal = false}
 				>
 					Close
 				</button>
