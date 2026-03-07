@@ -78,8 +78,10 @@ export async function POST({ request, locals }) {
 		const responseBody = {
 			ok: true,
 			stage: 'generate_model',
-			message: '3D generation foundation endpoint ready. Provider call not wired yet.',
-			inputType: safeInputType
+			message:
+				'3D generation is intentionally local-first right now. Upload a model to proceed into marker rigging.',
+			inputType: safeInputType,
+			mode: 'local_first'
 		};
 		if (idempotencyKey) {
 			await completeIdempotentRequest({
@@ -94,7 +96,7 @@ export async function POST({ request, locals }) {
 		await recordUsageEvent({
 			uid: locals.user.uid,
 			routeKey: '3d-generate',
-			provider: 'placeholder',
+			provider: 'internal',
 			statusCode: 200,
 			requestBytes: payloadBytes,
 			metadata: { inputType: safeInputType, hasReferenceUrl: !!safeReferenceImageUrl }
@@ -118,7 +120,7 @@ export async function POST({ request, locals }) {
 			await recordUsageEvent({
 				uid: locals.user.uid,
 				routeKey: '3d-generate',
-				provider: 'placeholder',
+				provider: 'internal',
 				success: false,
 				statusCode: 500,
 				requestBytes: payloadBytes,

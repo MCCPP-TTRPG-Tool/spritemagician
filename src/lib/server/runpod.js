@@ -175,3 +175,28 @@ export function extractFirstImageDataUrl(payload) {
 
 	return null;
 }
+
+export function extractFirstModelUrl(payload) {
+	const urls = [];
+	const MODEL_EXT_RE = /\.(glb|gltf|fbx|obj|blend|usdz)(\?|#|$)/i;
+
+	function walk(node) {
+		if (!node) return;
+		if (typeof node === 'string') {
+			if (/^https?:\/\//i.test(node) && MODEL_EXT_RE.test(node)) {
+				urls.push(node);
+			}
+			return;
+		}
+		if (Array.isArray(node)) {
+			node.forEach(walk);
+			return;
+		}
+		if (typeof node === 'object') {
+			Object.values(node).forEach(walk);
+		}
+	}
+
+	walk(payload);
+	return urls[0] || null;
+}

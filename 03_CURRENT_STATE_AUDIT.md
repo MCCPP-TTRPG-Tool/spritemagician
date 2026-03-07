@@ -1,6 +1,6 @@
 # 03 CURRENT STATE AUDIT
 
-Last Updated: 2026-03-03
+Last Updated: 2026-03-04
 
 ## Product State
 - Main app remains a three-panel workspace on desktop.
@@ -16,6 +16,390 @@ Last Updated: 2026-03-03
 - Center file system panel remains unchanged across modes.
 
 ## Recent Significant Change
+- CORS blocker removed for 3D viewport model loads:
+  - Added `src/routes/api/3d/model-proxy/+server.js`:
+    - authenticated + rate-limited proxy endpoint for remote model bytes.
+    - validates protocol/host and currently allows Firebase storage hosts.
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - remote model URLs are rewritten to same-origin proxy path before reaching three.js loaders.
+    - blob/data URLs and same-origin sources bypass proxy.
+  - Result:
+    - Firebase model URLs no longer fail in browser due to missing CORS headers.
+    - rigging workflow can load model geometry reliably again, unblocking save/submit flow.
+  - Added session log `docs/session_logs/2026-03-04_session_019.md`.
+- Rigging persistence hardening and reload-loop fix:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - marker edits now autosave rig spec JSON to local cache on every placement/drag update.
+    - clear action now also updates local cache.
+    - added `lastLoadedModelUrl` guard so unchanged `threeDModelUrl` does not trigger redundant model reloads on unrelated project store updates.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - rig submit now resolves model URL from either left-panel `modelUrl` or `projectStore.threeDModelUrl`.
+    - added explicit user-facing error when no model URL is available at submit.
+  - Result:
+    - rigging work is continuously persisted during placement.
+    - long rigging sessions are no longer destabilized by reactive reload churn.
+  - Added session log `docs/session_logs/2026-03-04_session_018.md`.
+- Rig viewport camera snaps corrected for front/side rigging views:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - fixed `frameCameraForDirection(...)` to use proper axes:
+      - `front` -> camera along `+Z`
+      - `side` -> camera along `+X`
+    - added torso-height target (`center.y + 10% model height`) to avoid low-angle "looking up from below" snaps.
+    - adjusted default/iso vertical offset to remain above model midline.
+  - Result:
+    - front view no longer points upward from below the model.
+    - side view remains level and full-model framed for marker placement.
+  - Added session log `docs/session_logs/2026-03-04_session_017.md`.
+- 3D model load flow hardened with local-first fallback (upload no longer blocks viewport load):
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - when a file is selected, app now creates a local blob URL and immediately dispatches viewport load.
+    - upload to Firebase continues in background; on success, viewport source is replaced with cloud URL.
+    - `load_model_url` dispatch now includes `formatHint` from filename extension.
+    - status messaging now reflects fallback behavior when upload fails ("local model still loaded").
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - `loadModelFromUrl` now supports `forcedType`.
+    - `load_model_url` event handler passes `formatHint` to loader selection, avoiding blob URL extension-detection failures.
+  - Result:
+    - model loading into viewport is now deterministic from file selection and no longer depends on cloud upload success/timing.
+    - front/side camera controls can operate immediately because a local model is loaded first.
+  - Added session log `docs/session_logs/2026-03-04_session_016.md`.
+- 3D viewport loading and camera controls made deterministic from rigging panel actions:
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - `Load In Viewport` now dispatches explicit `threeDRigViewportAction` with `type: load_model_url` and URL payload.
+    - successful `Upload Model` now also triggers immediate `load_model_url` action.
+    - viewport action dispatcher now supports detail payloads (`requestRigViewportAction(type, extra)`).
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - added `load_model_url` event handler to load model directly, independent of store-change timing.
+    - added in-viewport status overlay so load/camera errors are visible instead of silent.
+  - Result:
+    - model loading no longer depends solely on reactive URL change detection, reducing "button clicked but nothing happened" behavior.
+    - front/side workflow now provides immediate feedback in viewport context.
+  - Added session log `docs/session_logs/2026-03-04_session_015.md`.
+- 3D rigging interaction regressions fixed (upload + camera view buttons):
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - restored hidden model file input binding so `Upload Model` button opens picker again and upload flow executes.
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - `Front View` / `Side View` actions now provide explicit status feedback when no model is loaded, preventing silent failure perception.
+  - Result:
+    - model upload path from Rigging panel is functional again, and camera view controls have deterministic behavior/feedback.
+  - Added session log `docs/session_logs/2026-03-04_session_014.md`.
+- 3D rigging UI stability fix: invalid Svelte markup removed in active 3D panels.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - replaced invalid self-closing non-void tags (`textarea`, progress bar `div`) with explicit closing tags.
+    - replaced standalone `<label>` text blocks with non-form-label helper text blocks to remove repeated label association issues.
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - replaced self-closing viewport host `<div ... />` with explicit close tag.
+  - Result:
+    - panel hot-reload/refresh behavior is now stable so newest rigging, camera, and normalization changes can execute consistently.
+  - Added session log `docs/session_logs/2026-03-04_session_013.md`.
+- 3D model load path now performs actual normalization for Blender-ready rigging:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - added `normalizeModelForRig(...)` and integrated it into both remote URL load and local file load paths.
+    - model normalization now actively applies:
+      - center on XZ origin
+      - ground to Y=0
+      - uniform scale to target height (1.8m)
+      - post-scale re-center/re-ground correction
+    - preflight report now includes normalization metadata:
+      - `normalizationApplied`
+      - `appliedScaleFactor`
+    - viewport status now confirms normalization was applied.
+  - Result:
+    - marker placement now happens against a normalized model space that is materially closer to the downstream Blender rigging assumptions.
+  - Added session log `docs/session_logs/2026-03-04_session_012.md`.
+- Rigging camera jump controls added with full-model framing:
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - added rigging quick-view buttons:
+      - `Front View`
+      - `Side View`
+    - buttons dispatch viewport actions through existing cross-panel event bridge.
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - added `frameCameraForDirection(...)` helper that computes model bounds and camera distance from FOV.
+    - wired actions:
+      - `view_front`
+      - `view_side`
+    - each jump keeps the entire model framed in camera and updates status text.
+  - Result:
+    - users can snap to front/side rigging views quickly without manually panning/zooming to recover full character framing.
+  - Added session log `docs/session_logs/2026-03-04_session_011.md`.
+- Left 3D rigging panel workflow clarified and marker requirements made explicit:
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - improved model action labeling for rigging context:
+      - `Load In Viewport`
+      - `Upload / Replace Model`
+    - rigging controls now include direct model upload action in-rig tab (`Upload Model`) plus local opener (`Open Local`).
+    - restored explicit "what still needs rigging" visibility:
+      - per-marker `set/missing` checklist grid for all required humanoid joints.
+      - missing marker summary text.
+      - `Focus Next Missing` action to jump active marker to next unplaced joint.
+  - Result:
+    - left panel now communicates rigging completion state clearly and provides a tighter rigging-first UX without hunting for missing joints.
+  - Added session log `docs/session_logs/2026-03-04_session_010.md`.
+- 3D panel tabs and control placement aligned with existing tabbed UX patterns:
+  - Updated `src/routes/+page.svelte`:
+    - 3D left column now uses page-level workflow tabs (`Generate`, `Rigging`, `Animate`) in the same structural style as other panel tab rows.
+    - added 3D left-tab synchronization via `open3DLeftTab` listener and `setThreeDLeftTab(...)`.
+    - 3D middle column now uses a tab-style header (`Viewport`) with viewport-only content, keeping middle section focused on model interaction surface.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - removed internal duplicated 3D tab strip (left-panel tabs are now owned by page-level container).
+    - removed rigging provider selector UI per request.
+    - rigging and animation requests no longer pass provider from frontend state.
+  - Result:
+    - 3D left/middle sections now behave more consistently with the app’s existing tabbed panel model while keeping rigging controls in the left panel and viewport-only content in the middle.
+  - Added session log `docs/session_logs/2026-03-04_session_009.md`.
+- Blender rigging handoff now has a concrete executable contract:
+  - Added `src/lib/server/blenderRigPayload.js`:
+    - defines canonical humanoid bone hierarchy.
+    - builds deterministic `blender_rig_v1` payload for `rig_from_markers` jobs:
+      - model input
+      - marker coordinates
+      - rig options
+      - normalization directives
+      - output `.blend` + preview `.glb` targets.
+  - Updated `src/routes/api/3d/rig/+server.js`:
+    - rig job docs now persist `blenderPayload` generated at submit time.
+    - route accepts optional `modelPreflight` and includes `blenderSpecVersion` in response.
+  - Added `src/routes/api/3d/rig-blender-payload/+server.js`:
+    - authenticated endpoint to fetch a rig job's Blender payload by `jobId`.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - `Run Rigging` now forwards `modelPreflight` so normalization hints carry into Blender payload.
+  - Added `runpod/blender_rig_from_markers.py`:
+    - headless Blender prototype runner that consumes payload JSON and executes:
+      - model import
+      - ground/center/scale normalization
+      - armature creation from marker hierarchy
+      - automatic weight binding
+      - save `rigged.blend`
+      - export `rig_preview.glb`
+  - Result:
+    - manual rig marker output is now directly translatable into Blender automation instead of being UI-only metadata.
+  - Added session log `docs/session_logs/2026-03-04_session_008.md`.
+- 3D rigging UX restructured: controls now in left panel, viewport-only in middle:
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - Rigging tab now contains manual rig controls previously embedded in viewport panel:
+      - active marker selector
+      - marker size slider
+      - `Open Model` / `Save RigSpec` / `Clear`
+      - marker coverage readout
+    - moved preflight summary presentation into left rigging tab.
+    - updated 3D tab labels/styling to better match 2D mode tab language and visual hierarchy.
+    - added viewport-action event bridge (`threeDRigViewportAction`) from left controls to middle viewport.
+    - writes rig UI state into shared project store (`threeDRigUI`).
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - removed in-panel controls/checklist/preflight widgets so middle is viewport-only.
+    - listens for left-side action events (`open_model`, `save_rigspec`, `clear_markers`).
+    - syncs active marker and marker size from shared store.
+    - marker drag selection now updates shared active marker in store.
+  - Updated `src/lib/stores/project.js`:
+    - added persisted `threeDRigUI` object:
+      - `activeMarker`
+      - `markerSizeMult`
+  - Result:
+    - 3D mode now follows the intended split: left side controls/workflow, middle viewport interaction surface.
+  - Added session log `docs/session_logs/2026-03-04_session_007.md`.
+- 3D model readiness checks added for rigging/weighting preflight:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - added `Model Preflight` section shown after model load.
+    - preflight now reports:
+      - grounded status (`minY` proximity to ground)
+      - XZ centering status
+      - scale reasonableness from model height heuristic
+      - baseline auto-weight viability signal + mesh counts
+    - added suggested normalization output:
+      - uniform scale factor
+      - translate vector to center + ground model
+    - preflight report is persisted in project state for downstream processing stages.
+  - Updated `src/lib/stores/project.js`:
+    - added persisted `threeDModelPreflight` state key.
+  - Result:
+    - users can now explicitly see whether loaded models are likely rig-ready and what normalization transform should be applied before Blender weighting.
+  - Added session log `docs/session_logs/2026-03-04_session_006.md`.
+- RigSpec save flow hardened with explicit cross-panel confirmation:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - RigSpec writes now use plain JSON-safe snapshot conversion before storing in `projectStore` (and during marker drag updates).
+    - `Save RigSpec` now also emits `threeDRigSpecSaved` event + writes best-effort local cache (`spritemagician.rigspec.latest`).
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - listens to `threeDRigSpecSaved` to surface immediate save confirmation in left panel status.
+    - `Run Rigging` now checks marker count client-side and returns clearer guidance when too few markers are placed.
+  - Result:
+    - saving marker layouts is more reliable and user-visible before rig job submission.
+  - Added session log `docs/session_logs/2026-03-04_session_005.md`.
+- 3D rigging viewport interaction and panel layout fixed for manual marker workflow:
+  - Updated `src/lib/components/RigAnimation3DPanel.svelte`:
+    - marker placement now uses camera-aligned flat-plane projection for left-click placement (reduces random depth jumps).
+    - navigation mapping clarified: middle/right mouse navigate viewport while left-click places markers.
+    - marker visibility increased:
+      - larger auto-scaled marker size
+      - bright core + halo rendering
+      - depth-agnostic marker rendering so markers stay visible over model surface.
+    - added marker-size slider for user-side visibility tuning.
+    - fixed toolbar overflow/fit issues:
+      - wrapped toolbar layout
+      - constrained control widths
+      - shortened `Open Local Model` label to `Open Model`
+      - disabled horizontal overflow on rig workspace container.
+    - marker checklist now uses responsive columns (`1` on narrow, `2` on wider layouts).
+  - Result:
+    - rigging workspace now behaves closer to expected manual-rigger interaction and remains usable within narrower panel widths without horizontal clipping.
+  - Added session log `docs/session_logs/2026-03-04_session_004.md`.
+- Local marker rigging now queues real rig jobs with status tracking:
+  - Updated `src/routes/api/3d/rig/+server.js`:
+    - endpoint now accepts marker-based `rigSpec` payloads (template `humanoid_v1`) and validates marker coordinates/count.
+    - creates local-first rig job records in Firestore:
+      - `users/{uid}/rig_jobs/{jobId}`
+    - job schema includes:
+      - `type: rig_from_markers`
+      - `status/progress/message`
+      - provider + model URL
+      - normalized marker set and marker counts
+      - basic rig options (`ik_hands`, `ik_feet`)
+  - Added `src/routes/api/3d/rig-status/+server.js`:
+    - authenticated read endpoint for rig job status/progress/message by `jobId`.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - `Run Rigging` now submits `modelUrl + rigSpec` from project state.
+    - added `jobId` display, manual status refresh action, and progress bar in Rigging tab.
+    - submission now blocks with clear guidance when user has not saved rig markers yet.
+  - Result:
+    - marker placement in three.js now feeds a real rigging contract and creates durable queued rig jobs that can be consumed by a future rig worker.
+  - Added session log `docs/session_logs/2026-03-04_session_003.md`.
+- 3D workflow pivoted to local-first rigging foundation (no immediate RunPod dependency):
+  - Updated `src/routes/api/3d/generate/+server.js`:
+    - removed active upstream RunPod submission from 3D generate flow.
+    - endpoint now intentionally returns local-first guidance while preserving existing auth/rate-limit/idempotency safeguards.
+  - Added `src/routes/api/upload-3d-model/+server.js`:
+    - supports direct upload of `.glb`, `.gltf`, `.fbx`, and `.obj` via base64 data URL.
+    - stores model in Firebase Storage and returns a tokenized media URL.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - added direct 3D model upload button/file picker in 3D panel.
+    - successful upload auto-loads model URL into project state and routes to rigging view.
+  - Rebuilt `src/lib/components/RigAnimation3DPanel.svelte` into a real three.js workspace:
+    - replaced preview-only `model-viewer` embedding.
+    - added three.js scene + camera + orbit controls + model loaders (`GLTFLoader`, `FBXLoader`, `OBJLoader`).
+    - added click-to-place humanoid marker workflow (AccuRig-style scaffold) storing model-local marker coordinates.
+    - added coverage readout + clear markers + save rig spec action.
+  - Updated `src/lib/stores/project.js`:
+    - added persisted `threeDRigSpec` state for marker contract storage.
+  - Result:
+    - users can now upload a 3D model and start marker-based rigging setup directly in-app before any remote rig/animation worker integration.
+  - Added session log `docs/session_logs/2026-03-04_session_002.md`.
+- 3D workflow Phase 1 now runs an actual async RunPod generation + normalization contract:
+  - Updated `src/routes/api/3d/generate/+server.js`:
+    - replaced placeholder response with real RunPod submit.
+    - added structured input contract for `generate_and_normalize_3d` including:
+      - axis normalization target (`Y` forward, `Z` up)
+      - transform apply, origin centering, feet-to-ground directives
+      - canonical output format target `glb`
+    - now registers RunPod job ownership for authenticated status polling.
+  - Added `src/routes/api/3d/generate-status/+server.js`:
+    - secure RunPod status endpoint with auth + ownership checks.
+    - normalized status response and completed-job `modelUrl` extraction.
+  - Updated `src/lib/server/runpod.js`:
+    - added `extractFirstModelUrl(...)` to parse model artifact URLs from nested worker output.
+  - Updated `src/lib/components/ModelGeneration3DPanel.svelte`:
+    - generate action now stores returned `runpodId` and polls `/api/3d/generate-status`.
+    - on completion, auto-loads model URL into `projectStore.threeDModelUrl` and routes 3D tabs to `rigging`.
+    - polling cleanup now aborts correctly on panel unmount.
+  - Result:
+    - the 3D Generate tab now supports an end-to-end asynchronous job lifecycle for the first production-oriented pipeline slice.
+  - Added session log `docs/session_logs/2026-03-04_session_001.md`.
+- Idle animation posture retuned to avoid exaggerated squatting:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - revised all idle preset prompts to request micro knee flex only and explicitly avoid crouch/deep squat posture.
+    - added idle-wide runtime motion clamp:
+      - all idle presets now clamp `motionAmount` to `70..90`.
+    - adjusted `Idle - Battle Ready` runtime clamp to `82..96` (down from prior high-force behavior).
+  - Result:
+    - idle outputs should read as alive without excessive knee compression or squat-heavy posture.
+  - Added session log `docs/session_logs/2026-03-03_session_272.md`.
+- Hard pass completed on animation prompts and backend prompt enforcement:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - revised the entire preset prompt layer with stricter motion-stability and anti-noise wording.
+    - tightened cast/hit/death presets to reduce accidental large VFX behavior.
+    - custom prompt enhancer now includes anti-VFX constraints for locomotion and general custom modes.
+    - static-lock prompt text now avoids aura/glow-heavy language.
+  - Updated `src/routes/api/generate-animation/+server.js`:
+    - removed FLF prompt truncation behavior that replaced long prompts with `"animate"`.
+    - added prompt normalization helper and strict backend prompt composition:
+      - style lock
+      - camera/temporal lock
+      - scale lock
+      - no-VFX lock
+      - loop/static lock sections
+      - normalized user action directive
+    - strengthened server default negative prompt with extra anti-blast/debris terms.
+  - Result:
+    - animation prompts now have much stronger control and less random effect injection, with better preservation of authored action intent.
+  - Added session log `docs/session_logs/2026-03-03_session_271.md`.
+- Animation generation now explicitly suppresses unwanted explosion/VFX artifacts:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - expanded shared WAN negative suffix used by built-in presets to discourage:
+      - explosion effects
+      - random fire bursts
+      - particle storms
+      - magical flashes
+      - dramatic lens flare
+      - screen-wide energy effects
+  - Updated `src/routes/api/generate-animation/+server.js`:
+    - expanded server default negative prompt with anti-VFX terms so suppression applies even when user negative prompt is blank.
+  - Result:
+    - non-effects animations should be less likely to produce random explosion-like visual artifacts.
+  - Added session log `docs/session_logs/2026-03-03_session_270.md`.
+- Idle presets now explicitly include knee bend up/down movement:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - revised idle preset prompts to require subtle knee flexion/extension and vertical bob driven by knee movement:
+      - `Idle - Classic`
+      - `Idle - Soft Breath`
+      - `Idle - Alive Hero`
+      - `Idle - Lantern Sway`
+      - `Idle - Battle Ready`
+  - Result:
+    - idle outputs should show more readable lower-body life (small knee dip/release) instead of mostly static upper-body/prop motion.
+  - Added session log `docs/session_logs/2026-03-03_session_269.md`.
+- Running presets retuned to reduce disjointed/chaotic motion:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - refined running prompt instructions (`Running - In Place Clean`, `Running - Sprint`, `Running - Heavy Charge`) to enforce gait cadence, contact order, and anti-jitter temporal continuity.
+    - added per-running-preset runtime stabilization:
+      - clamps running `motionAmount` to `88..118`
+      - enforces minimum `guidanceScale` of `8` when unset/low
+  - Result:
+    - running outputs should be less erratic and more coherent across frames with steadier in-place rhythm.
+  - Added session log `docs/session_logs/2026-03-03_session_268.md`.
+- `Idle - Battle Ready` preset now enforces visible body motion instead of lantern-only flicker:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - strengthened `Idle - Battle Ready` prompt with explicit torso bob/compression-release/guard-adjustment directives.
+    - added explicit guardrail: avoid lighting-only/lantern-only animation behavior.
+    - added per-preset motion floor: `idle_battle_ready` now sends `motionAmount >= 105`.
+  - Result:
+    - higher probability of readable idle body movement instead of static character with emissive flicker.
+  - Added session log `docs/session_logs/2026-03-03_session_267.md`.
+- Added dedicated Running presets in Animate `Type` dropdown:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - new running entries:
+      - `Running - In Place Clean`
+      - `Running - Sprint`
+      - `Running - Heavy Charge`
+    - all running presets include temporal stability + anti-flicker guidance shared with the expanded WAN preset set.
+    - custom locomotion prompt enhancement now detects run keywords (`run`, `sprint`, `jog`) in addition to walking keywords, and applies stronger in-place cadence + anti-jitter constraints.
+  - Result:
+    - users can select explicit running animation presets from the UI rather than overloading walking/custom prompts.
+  - Added session log `docs/session_logs/2026-03-03_session_266.md`.
+- WAN 2.2 Animate preset library expanded with stability-focused variants:
+  - Updated `src/lib/components/GenerationPanel.svelte`:
+    - expanded animation `Type` presets from single basic entries to multiple variants per class:
+      - Idle: Classic, Soft Breath, Alive Hero, Lantern Sway, Battle Ready
+      - Cast Spell: Classic, Charge + Release, Channel Loop, One-Hand Sigil
+      - Attack: Classic, Quick Slash, Heavy Strike, Combo 2-Hit
+      - Walking: Classic, In Place Clean, Sneak, Heavy March
+      - Take Damage: Classic, Light Flinch, Heavy Stagger, Magic Shock
+      - Death: Classic, Forward Collapse, Backward Fall, Arcane Dissolve
+      - Custom retained
+    - added shared WAN temporal-stability prompt suffixes to built-in presets:
+      - stable exposure / white balance / temporal coherence guidance
+      - anti-flicker and anti-artifact directives (brightness pulsing, jitter, shimmer, morphing, ghosting)
+    - preserved legacy preset IDs (`idle`, `cast`, `attack`, `walk`, `hit`, `death`, `custom`) for local-state compatibility.
+  - Result:
+    - users now have many ready-to-use animation presets in the existing dropdown, tuned for more alive idle motion and fewer temporal artifacts.
+  - Added session log `docs/session_logs/2026-03-03_session_265.md`.
 - GPT two-pass polish now targets clean/smooth finish instead of gritty over-texturing:
   - Updated `src/routes/api/generate-sprite/+server.js`:
     - rewrote second-pass polish prompt to emphasize:
@@ -1843,6 +2227,10 @@ Last Updated: 2026-03-03
 - `create-folder` API now accepts optional metadata and sanitizes/stores it on folder docs.
 - Existing file-tree `🎯 New Asset` and `🧹 Fresh Start` controls remain available.
 - GPT chat split flow remains in place (`Send` ideation + `Write Prompt` drafting).
+- Animation Preview `💾 Save All` now saves as one animation file (`.anim.json`) instead of per-frame PNG batches:
+  - Uses `/api/save-animation` with frame payload + fps.
+  - Writes a single file-tree record with `fileType: animation` and thumbnail metadata.
+  - Saved file can be opened from File Tree/Frames and loads into the standard animation preview/export workflow.
 
 ## Risk / Follow-up
 - Optional: route animation/exports/jobs saves through the same active asset context for full end-to-end consistency.

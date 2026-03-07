@@ -67,6 +67,12 @@ const MODELS = {
 // Replicate FLF model for interpolation
 const FLF_MODEL_VERSION = '003fd8a38ff17cb6022c3117bb90f7403cb632062ba2b098710738d116847d57';
 
+function normalizePromptText(value, fallback) {
+	const text = String(value || '').trim();
+	if (!text) return fallback;
+	return text.replace(/\s+/g, ' ').slice(0, 1800);
+}
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Replicate — WAN 2.2 First/Last Frame interpolation
@@ -85,9 +91,11 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	// Preserve strict static-lock prompts when present; otherwise keep short-prompt optimization.
-	const wantsStrictLock = /STATIC ASSET LOCK/i.test(prompt || '');
-	const enhancedPrompt = wantsStrictLock ? (prompt || 'animate') : ((prompt && prompt.length < 80) ? prompt : 'animate');
+	// Always keep the authored prompt. Truncating to "animate" destroys motion intent.
+	const enhancedPrompt = normalizePromptText(
+		prompt,
+		'in-place sprite animation with stable camera and smooth temporal continuity'
+	);
 	console.log('[FLF] Prompt:', enhancedPrompt);
 
 	// Use the model's own default negative prompt (Chinese). Only add user extras if provided.
@@ -227,33 +235,42 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		isInterpolation = true;
 	}
 	
-	// Enhanced prompt engineering for better accuracy and loops
-	const PIXEL_ART_PRESERVE = 'IMPORTANT: Maintain pixel art style, preserve crisp pixels, no smoothing, no blur, keep pixelated aesthetic, consistent character design';
-	
-	// Size consistency instructions
-	const SIZE_CONSISTENCY = 'CRITICAL: Character must maintain exact same size and scale throughout entire animation. No scaling, no zoom in or out, no size changes, consistent character dimensions from first frame to last frame. Character size must remain constant.';
+	// Hard constraints that apply to every animation request.
+	const STYLE_LOCK =
+		'2D sprite animation. Preserve original character identity, silhouette, outfit details, and pixel-art readability. Do not invent new props.';
+	const CAMERA_AND_TEMPORAL_LOCK =
+		'Stable camera framing. Smooth frame-to-frame continuity. No pose popping. No random drift.';
+	const SIZE_CONSISTENCY =
+		'Character must keep consistent scale from first frame to last frame. No zoom in/out and no size changes.';
+	const NO_VFX_LOCK =
+		'No explosions, no particle storms, no random fire bursts, no dramatic lens flare, and no screen-wide energy effects.';
 	const STATIC_ASSET_LOCK = staticAssetMode
-		? 'STATIC ASSET LOCK: Main object is anchored in world space. No translation, no camera pan, no orbit, no rotation, no drift, no wobble, and no jitter. Keep silhouette and base fixed. Motion is limited to internal emissive light flicker, glow pulses, or subtle atmospheric shimmer only.'
+		? 'STATIC ASSET LOCK: Anchor object in world space. No translation, no camera pan, no orbit, no rotation, no drift, no wobble, and no jitter. Keep silhouette and base fixed.'
 		: '';
-	
-	// Loop-specific instructions for seamless animations
 	const LOOP_INSTRUCTIONS = (loop || perfectLoop)
-		? `${perfectLoop ? 'PERFECT LOOP REQUIRED: Zero seam tolerance. End frame must match first frame exactly. No hitch or drift at wrap point.' : 'SEAMLESS LOOP:'} The animation must end exactly where it begins. First frame and last frame must be identical. Smooth transition from last frame back to first frame. No visible jump or discontinuity. Perfect loop continuity.`
+		? `${perfectLoop ? 'PERFECT LOOP REQUIRED: end frame must match first frame exactly.' : 'SEAMLESS LOOP REQUIRED:'} Smooth wrap with no hitch.`
 		: '';
-	
-	// Enhanced prompt structure
-	let enhancedPrompt;
-	if (prompt) {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${STATIC_ASSET_LOCK} ${LOOP_INSTRUCTIONS} ${prompt}. Consistent character appearance, stable camera position, smooth motion, no jitter, no flickering, high quality animation`;
-	} else {
-		enhancedPrompt = `${PIXEL_ART_PRESERVE}. ${SIZE_CONSISTENCY} ${STATIC_ASSET_LOCK} ${LOOP_INSTRUCTIONS} Subtle idle animation, gentle breathing, minimal movement, mouth closed and static, no mouth movement, no talking, no jaw movement, smooth and natural motion`;
-	}
+	const USER_PROMPT = normalizePromptText(
+		prompt,
+		'subtle idle animation with breathing and small knee bend cycle, feet planted'
+	);
+	const enhancedPrompt = [
+		STYLE_LOCK,
+		CAMERA_AND_TEMPORAL_LOCK,
+		SIZE_CONSISTENCY,
+		NO_VFX_LOCK,
+		STATIC_ASSET_LOCK,
+		LOOP_INSTRUCTIONS,
+		`Action directive: ${USER_PROMPT}`
+	]
+		.filter(Boolean)
+		.join(' ');
 	
 	// Default negative prompt to avoid common issues
 	const staticLockNegative = staticAssetMode
 		? ', camera motion, camera pan, camera orbit, object rotation, object drift, translation, wobble, jitter, shake, perspective shift, framing change'
 		: '';
-	const defaultNegativePrompt = `blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality, mouth movement, talking, jaw movement, lip sync, character scaling, size changes, zoom in, zoom out, character growing, character shrinking, inconsistent character size${staticLockNegative}`;
+	const defaultNegativePrompt = `blurry, distorted, inconsistent, flickering, jittery, pixelated artifacts, color bleeding, ghosting, double image, duplicate limbs, extra appendages, deformed, bad anatomy, low quality, mouth movement, talking, jaw movement, lip sync, character scaling, size changes, zoom in, zoom out, character growing, character shrinking, inconsistent character size, explosion effects, random fire bursts, particle storms, magical flashes, dramatic lens flare, screen-space energy bursts, shockwave VFX, debris bursts, blast rings${staticLockNegative}`;
 	const finalNegativePrompt = negativePrompt 
 		? `${defaultNegativePrompt}, ${negativePrompt}`
 		: defaultNegativePrompt;

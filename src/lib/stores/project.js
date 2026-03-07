@@ -26,7 +26,13 @@ const defaultProjectState = {
 	animSaveFolderPath: null,
 	// FileTree-to-3D handoff values
 	threeDReferenceImage: null,
-	threeDModelUrl: null
+	threeDModelUrl: null,
+	threeDRigSpec: null,
+	threeDModelPreflight: null,
+	threeDRigUI: {
+		activeMarker: 'pelvis',
+		markerSizeMult: 1.4
+	}
 };
 
 function toPersistedState(state) {
@@ -50,7 +56,29 @@ function toPersistedState(state) {
 		animSaveFolderId: typeof state.animSaveFolderId === 'string' ? state.animSaveFolderId : null,
 		animSaveFolderPath: typeof state.animSaveFolderPath === 'string' ? state.animSaveFolderPath : null,
 		threeDReferenceImage: typeof state.threeDReferenceImage === 'string' ? state.threeDReferenceImage : null,
-		threeDModelUrl: typeof state.threeDModelUrl === 'string' ? state.threeDModelUrl : null
+		threeDModelUrl: typeof state.threeDModelUrl === 'string' ? state.threeDModelUrl : null,
+		threeDRigSpec:
+			state.threeDRigSpec && typeof state.threeDRigSpec === 'object' ? state.threeDRigSpec : null,
+		threeDModelPreflight:
+			state.threeDModelPreflight && typeof state.threeDModelPreflight === 'object'
+				? state.threeDModelPreflight
+				: null,
+		threeDRigUI:
+			state.threeDRigUI && typeof state.threeDRigUI === 'object'
+				? {
+						activeMarker:
+							typeof state.threeDRigUI.activeMarker === 'string'
+								? state.threeDRigUI.activeMarker
+								: 'pelvis',
+						markerSizeMult:
+							Number.isFinite(Number(state.threeDRigUI.markerSizeMult))
+								? Number(state.threeDRigUI.markerSizeMult)
+								: 1.4
+					}
+				: {
+						activeMarker: 'pelvis',
+						markerSizeMult: 1.4
+					}
 	};
 }
 

@@ -561,39 +561,35 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 					.replace(/[^a-zA-Z0-9_\- ]/g, '_')
 					.slice(0, 40)
 					.trim() || 'animation';
+				saveFrameNote = `Saving animation... ${total} frames`;
 
-				for (let i = 0; i < total; i++) {
-					const frameData = project.frames[i];
-					const frameSuffix = String(i + 1).padStart(3, '0');
-					const filename = `${baseName}_frame_${frameSuffix}.png`;
-					saveFrameNote = `Saving frames... ${i + 1}/${total}`;
+				const res = await fetch('/api/save-animation', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({
+						name: baseName,
+						frames: project.frames,
+						fps: project.fps || 12,
+						prompt: project.prompt || ''
+					})
+				});
 
-					const res = await fetch('/api/upload-file', {
-						method: 'POST',
-						headers: { 'Content-Type': 'application/json' },
-						body: JSON.stringify({
-							imageData: frameData,
-							filename,
-							folder: saveFolderId
-						})
-					});
-
-					if (!res.ok) {
-						const data = await res.json().catch(() => ({}));
-						throw new Error(data.error || `Upload failed at frame ${i + 1}`);
-					}
-
-					const { url } = await res.json();
-					await createFile(uid, saveFolderId, filename, url, 'image', {
-						sourceType: 'animation-frame-batch',
-						frameIndex: i,
-						totalFrames: total,
-						animationName: project.prompt || 'animation',
-						fps: project.fps
-					});
+				if (!res.ok) {
+					const data = await res.json().catch(() => ({}));
+					throw new Error(data.error || 'Failed to save animation file');
 				}
 
-				saveFrameNote = `Saved ${total} frames to folder.`;
+				const { url, frameCount, thumbnailUrl } = await res.json();
+				await createFile(uid, saveFolderId, `${baseName}.anim.json`, url, 'animation', {
+					sourceType: 'animation',
+					frameCount: frameCount || total,
+					fps: project.fps || 12,
+					animationName: baseName,
+					prompt: project.prompt || '',
+					thumbnailUrl: thumbnailUrl || null
+				});
+
+				saveFrameNote = `Saved animation file (${frameCount || total} frames).`;
 			}
 
 			// Reset and close
@@ -853,7 +849,7 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 				/>
 				<p class="text-[10px] text-gray-400 mt-1">
 					{#if saveMode === 'all'}
-						Leaves empty to use a default base name. Files save as `base_frame_001.png`, `base_frame_002.png`, etc.
+						Leaves empty to use a default base name. Saves one file: `base.anim.json`.
 					{:else}
 						Leave empty for default name. Extension (.png) will be added automatically.
 					{/if}

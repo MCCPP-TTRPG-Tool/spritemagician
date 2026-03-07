@@ -25,6 +25,8 @@
 	let appMode = $state('home'); // 'home' | '2d' | '3d'
 	let homeLeftTab = $state('docs'); // 'docs' | 'tutorials'
 	let homeCenterTab = $state('home'); // 'home' | 'settings'
+	let threeDLeftTab = $state('generate'); // 'generate' | 'rigging' | 'animation'
+	let threeDMiddleTab = $state('viewport'); // viewport-only for now
 	let showUserMenu = $state(false);
 	let showBillingModal = $state(false);
 	let showNewProjectModal = $state(false);
@@ -216,6 +218,26 @@
 		window.addEventListener('open3DMode', onOpen3DMode);
 		return () => window.removeEventListener('open3DMode', onOpen3DMode);
 	});
+
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const onOpen3DLeftTab = (event) => {
+			const tab = event?.detail?.tab;
+			if (tab === 'generate' || tab === 'rigging' || tab === 'animation') {
+				threeDLeftTab = tab;
+			}
+		};
+		window.addEventListener('open3DLeftTab', onOpen3DLeftTab);
+		return () => window.removeEventListener('open3DLeftTab', onOpen3DLeftTab);
+	});
+
+	function setThreeDLeftTab(tab) {
+		if (tab !== 'generate' && tab !== 'rigging' && tab !== 'animation') return;
+		threeDLeftTab = tab;
+		if (typeof window !== 'undefined') {
+			window.dispatchEvent(new CustomEvent('open3DLeftTab', { detail: { tab } }));
+		}
+	}
 
 	$effect(() => {
 		if (typeof window === 'undefined') return;
@@ -828,8 +850,25 @@
 					{/if}
 				</div>
 			{:else}
-				<div class="px-3 py-2 border-b bg-blue-50 text-blue-700 text-xs font-medium">
-					3D Workflow
+				<div class="flex border-b">
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {threeDLeftTab === 'generate' ? 'bg-amber-50 text-amber-600 border-b-2 border-amber-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => setThreeDLeftTab('generate')}
+					>
+						⚙️ Generate
+					</button>
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {threeDLeftTab === 'rigging' ? 'bg-teal-50 text-teal-600 border-b-2 border-teal-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => setThreeDLeftTab('rigging')}
+					>
+						🦴 Rigging
+					</button>
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {threeDLeftTab === 'animation' ? 'bg-emerald-50 text-emerald-600 border-b-2 border-emerald-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => setThreeDLeftTab('animation')}
+					>
+						🎬 Animate
+					</button>
 				</div>
 				<div class="p-3 flex-1 overflow-y-auto">
 					<ModelGeneration3DPanel />
@@ -1011,12 +1050,19 @@
 					</div>
 				</div>
 			{:else}
-				<div class="px-3 py-2 border-b bg-blue-50 text-blue-700 text-xs font-medium">
-					3D Preview
+				<div class="flex border-b flex-shrink-0">
+					<button
+						class="flex-1 px-2 py-2 text-xs font-medium transition-colors {threeDMiddleTab === 'viewport' ? 'bg-blue-50 text-blue-600 border-b-2 border-blue-600' : 'text-gray-600 hover:bg-gray-50'}"
+						onclick={() => threeDMiddleTab = 'viewport'}
+					>
+						🧊 Viewport
+					</button>
 				</div>
-				<div class="flex-1 min-h-0 overflow-y-auto">
-					<RigAnimation3DPanel />
-				</div>
+				{#if threeDMiddleTab === 'viewport'}
+					<div class="flex-1 min-h-0 overflow-y-auto">
+						<RigAnimation3DPanel />
+					</div>
+				{/if}
 			{/if}
 		</div>
 
