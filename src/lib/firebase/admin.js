@@ -2,6 +2,8 @@ import { initializeApp, cert, getApps } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
 import { getStorage } from 'firebase-admin/storage';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { env } from '$env/dynamic/private';
 
 let adminApp;
@@ -16,16 +18,25 @@ let adminStorage;
 function initAdmin() {
 	try {
 		if (getApps().length === 0) {
-			const projectId = env.FIREBASE_PROJECT_ID;
-			const clientEmail = env.FIREBASE_CLIENT_EMAIL;
-			const privateKey = env.FIREBASE_PRIVATE_KEY;
+			let projectId = env.FIREBASE_PROJECT_ID;
+			let clientEmail = env.FIREBASE_CLIENT_EMAIL;
+			let privateKey = env.FIREBASE_PRIVATE_KEY;
 			const storageBucket = env.FIREBASE_STORAGE_BUCKET;
 
 			if (!projectId || !clientEmail || !privateKey) {
-				console.error('[Firebase Admin] Missing credentials. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env');
-				throw new Error(
-					'Firebase Admin credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env'
+				const localServiceAccount = path.resolve(
+					process.cwd(),
+					'sprite-magician-firebase-adminsdk-fbsvc-1f5fb56c63.json'
 				);
+				if (!existsSync(localServiceAccount)) {
+					throw new Error(
+						'Firebase Admin credentials not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY in .env'
+					);
+				}
+				const serviceAccount = JSON.parse(readFileSync(localServiceAccount, 'utf8'));
+				projectId = serviceAccount.project_id;
+				clientEmail = serviceAccount.client_email;
+				privateKey = serviceAccount.private_key;
 			}
 
 			adminApp = initializeApp({

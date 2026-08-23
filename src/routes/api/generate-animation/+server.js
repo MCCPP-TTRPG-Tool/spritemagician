@@ -11,7 +11,7 @@
  * - lucataco/wan-2.2-first-last-frame (Replicate, same API key)
  * 
  * Flow:
- * 1. Upload reference image to get URL
+ * 1. Send the reference image as a Replicate-supported data URL
  * 2. Generate video using selected model
  * 3. Return video URL for client to extract frames
  */
@@ -19,7 +19,6 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -114,20 +113,10 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 
 	console.log('[FLF] Parameters:', { durationSeconds, numInferenceSteps, guidanceScale, guidanceScale2, shift, seed: seed ?? 'random' });
 
-	// 1. Ensure both frames are public URLs (Replicate requires URLs)
-	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Uploading start & end frames...' });
-
-	let startUrl = startImageDataUrl;
-	if (startImageDataUrl.startsWith('data:')) {
-		startUrl = await uploadImageToFirebase(startImageDataUrl, `flf-start-${Date.now()}.png`);
-	}
-	let endUrl = endImageDataUrl;
-	if (endImageDataUrl.startsWith('data:')) {
-		endUrl = await uploadImageToFirebase(endImageDataUrl, `flf-end-${Date.now()}.png`);
-	}
-
-	console.log('[FLF] Start URL:', startUrl);
-	console.log('[FLF] End URL:', endUrl);
+	// Replicate accepts HTTP URLs and data URLs for file inputs. Keeping the
+	// data URLs avoids requiring Firebase Admin credentials for local animation.
+	const startUrl = startImageDataUrl;
+	const endUrl = endImageDataUrl;
 
 	// 2. Submit prediction with full parameter set
 	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `Submitting to Replicate FLF (${durationSeconds}s, ${numInferenceSteps} steps)...` });
@@ -414,20 +403,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			return;
 		}
 
-		// For Replicate API, upload to Firebase first to get public URL
+		// Replicate accepts data URLs directly, so local animation does not need
+		// a Firebase Admin upload before submitting the prediction.
 		setProgress(jobId, {
 			currentFrame: 0,
 			totalFrames: frameCount,
 			status: 'processing',
-			message: 'Uploading reference image...'
+			message: 'Preparing reference image...'
 		});
 
-		let imageUrl;
-		if (referenceImage.startsWith('data:')) {
-			imageUrl = await uploadImageToFirebase(referenceImage, `anim-input-${Date.now()}.png`);
-		} else {
-			imageUrl = referenceImage;
-		}
+		const imageUrl = referenceImage;
 
 		setProgress(jobId, {
 			currentFrame: 0,
@@ -474,17 +459,11 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			};
 		} else if (modelId === 'wan22') {
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
-			// WAN 2.2 supports motion_bucket_id for motion control
-			const wanMotion = staticAssetMode
-				? 24
-				: (motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127);
 			input = {
 				prompt: enhancedPrompt,
-				negative_prompt: finalNegativePrompt,
 				image: imageUrl,
 				num_frames: wanFrames,
-				fps: fps,
-				motion_bucket_id: wanMotion,
+				frames_per_second: fps,
 				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan25') {
