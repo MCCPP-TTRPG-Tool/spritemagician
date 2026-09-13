@@ -720,6 +720,12 @@
 			>
 				3D
 			</button>
+			<button
+				class="px-4 py-1.5 text-sm font-medium bg-white text-violet-700 hover:bg-violet-50"
+				onclick={() => goto('/portrait-motion')}
+			>
+				Portrait Motion
+			</button>
 		</div>
 		<div class="flex-1 flex items-center justify-end gap-3">
 			<button

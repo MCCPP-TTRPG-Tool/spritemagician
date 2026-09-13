@@ -19,6 +19,7 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
+import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -30,6 +31,12 @@ import {
 
 // Available Replicate models (standard I2V)
 const MODELS = {
+	wan27: {
+		name: 'Wan 2.7 I2V (Recommended)',
+		version: 'wan-video/wan-2.7-i2v',
+		speed: 'medium',
+		isModelPath: true
+	},
 	wan22: {
 		name: 'Wan 2.2 Fast (Cheapest)',
 		version: 'wan-video/wan-2.2-i2v-fast',
@@ -63,13 +70,45 @@ const MODELS = {
 	}
 };
 
+// Native first/last-frame conditioning gives quiet idles a real spatial anchor.
+async function runReplicateWan27(jobId, firstFrame, lastFrame, prompt, frameCount, fps, negativePrompt, seed) {
+	const duration = Math.max(2, Math.min(5, Math.ceil(frameCount / Math.max(1, fps))));
+	const input = {
+		first_frame: firstFrame,
+		...(lastFrame ? { last_frame: lastFrame } : {}),
+		prompt,
+		negative_prompt: negativePrompt,
+		resolution: '720p',
+		duration,
+		// Prompt expansion can invent a performance from an otherwise quiet idle.
+		enable_prompt_expansion: false,
+		...(seed != null ? { seed } : {})
+	};
+	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `Starting Wan 2.7 anchored I2V (${duration}s)...` });
+	const submit = await fetch('https://api.replicate.com/v1/models/wan-video/wan-2.7-i2v/predictions', {
+		method: 'POST', headers: { Authorization: `Token ${env.REPLICATE_API_TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ input })
+	});
+	if (!submit.ok) throw new Error(`Wan 2.7 API error: ${await submit.text()}`);
+	let result = await submit.json();
+	for (let attempt = 0; (result.status === 'starting' || result.status === 'processing') && attempt < 240; attempt++) {
+		await new Promise((resolve) => setTimeout(resolve, 2000));
+		const poll = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, { headers: { Authorization: `Token ${env.REPLICATE_API_TOKEN}` } });
+		if (!poll.ok) continue;
+		result = await poll.json();
+		setProgress(jobId, { currentFrame: Math.min(Math.floor(attempt / 4), frameCount - 1), totalFrames: frameCount, status: 'processing', message: `Wan 2.7: ${result.status}...` });
+	}
+	if (result.status !== 'succeeded') throw new Error(result.error || 'Wan 2.7 generation timed out');
+	return result.output;
+}
+
 // Replicate FLF model for interpolation
 const FLF_MODEL_VERSION = '003fd8a38ff17cb6022c3117bb90f7403cb632062ba2b098710738d116847d57';
 
-function normalizePromptText(value, fallback) {
-	const text = String(value || '').trim();
-	if (!text) return fallback;
-	return text.replace(/\s+/g, ' ').slice(0, 1800);
+function requireRawPrompt(value) {
+	if (typeof value !== 'string' || !value.trim()) {
+		throw new Error('An animation prompt is required.');
+	}
+	return value;
 }
 
 
@@ -90,12 +129,8 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 		throw new Error('REPLICATE_API_TOKEN not set in .env');
 	}
 
-	// Always keep the authored prompt. Truncating to "animate" destroys motion intent.
-	const enhancedPrompt = normalizePromptText(
-		prompt,
-		'in-place sprite animation with stable camera and smooth temporal continuity'
-	);
-	console.log('[FLF] Prompt:', enhancedPrompt);
+	const rawPrompt = requireRawPrompt(prompt);
+	console.log('[FLF] Raw prompt:', rawPrompt);
 
 	// Use the model's own default negative prompt (Chinese). Only add user extras if provided.
 	const MODEL_DEFAULT_NEGATIVE = '色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走,过曝，';
@@ -124,7 +159,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 	const inputPayload = {
 		start_image: startUrl,
 		end_image: endUrl,
-		prompt: enhancedPrompt,
+		prompt: rawPrompt,
 		negative_prompt: finalNegativePrompt,
 		duration_seconds: durationSeconds,
 		num_inference_steps: numInferenceSteps,
@@ -224,36 +259,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		isInterpolation = true;
 	}
 	
-	// Hard constraints that apply to every animation request.
-	const STYLE_LOCK =
-		'2D sprite animation. Preserve original character identity, silhouette, outfit details, and pixel-art readability. Do not invent new props.';
-	const CAMERA_AND_TEMPORAL_LOCK =
-		'Stable camera framing. Smooth frame-to-frame continuity. No pose popping. No random drift.';
-	const SIZE_CONSISTENCY =
-		'Character must keep consistent scale from first frame to last frame. No zoom in/out and no size changes.';
-	const NO_VFX_LOCK =
-		'No explosions, no particle storms, no random fire bursts, no dramatic lens flare, and no screen-wide energy effects.';
-	const STATIC_ASSET_LOCK = staticAssetMode
-		? 'STATIC ASSET LOCK: Anchor object in world space. No translation, no camera pan, no orbit, no rotation, no drift, no wobble, and no jitter. Keep silhouette and base fixed.'
-		: '';
-	const LOOP_INSTRUCTIONS = (loop || perfectLoop)
-		? `${perfectLoop ? 'PERFECT LOOP REQUIRED: end frame must match first frame exactly.' : 'SEAMLESS LOOP REQUIRED:'} Smooth wrap with no hitch.`
-		: '';
-	const USER_PROMPT = normalizePromptText(
-		prompt,
-		'subtle idle animation with breathing and small knee bend cycle, feet planted'
-	);
-	const enhancedPrompt = [
-		STYLE_LOCK,
-		CAMERA_AND_TEMPORAL_LOCK,
-		SIZE_CONSISTENCY,
-		NO_VFX_LOCK,
-		STATIC_ASSET_LOCK,
-		LOOP_INSTRUCTIONS,
-		`Action directive: ${USER_PROMPT}`
-	]
-		.filter(Boolean)
-		.join(' ');
+	const rawPrompt = requireRawPrompt(prompt);
 	
 	// Default negative prompt to avoid common issues
 	const staticLockNegative = staticAssetMode
@@ -265,6 +271,12 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		: defaultNegativePrompt;
 	
 	try {
+		if (modelId === 'wan27') {
+			const videoUrl = await runReplicateWan27(jobId, referenceImage, endImage, rawPrompt, frameCount, fps, finalNegativePrompt, seed);
+			setProgress(jobId, { currentFrame: frameCount, totalFrames: frameCount, status: 'completed', message: 'Wan 2.7 video generated! Extracting frames...', videoUrl, loop: true, frames: [] });
+			setTimeout(() => clearProgress(jobId), 120000);
+			return;
+		}
 		// ── Interpolation Mode (Start → End frame via Replicate FLF) ────────
 		if (isInterpolation) {
 			console.log('[Animation] Interpolation → Replicate WAN 2.2 FLF');
@@ -273,7 +285,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				jobId,
 				referenceImage,
 				endImage,
-				enhancedPrompt,
+				rawPrompt,
 				frameCount,
 				fps,
 				{ ...flfOptions, negativePrompt: interpolationNegative }
@@ -428,7 +440,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			// Hailuo supports guidance_scale
 			const hailuoGuidance = guidanceScale !== null ? guidanceScale : 7.5;
 			input = {
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				negative_prompt: finalNegativePrompt,
 				first_frame_image: imageUrl,
 				guidance_scale: hailuoGuidance,
@@ -440,7 +452,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			const ltxMotion = motionAmount ? Math.max(0.1, Math.min(2.0, motionAmount / 127)) : 1.0;
 			input = {
 				input_image: imageUrl,
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				negative_prompt: finalNegativePrompt,
 				num_frames: Math.min(65, frameCount * 3),
 				guidance_scale: ltxGuidance,
@@ -451,7 +463,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			// Live2D supports guidance_scale
 			const live2dGuidance = guidanceScale !== null ? guidanceScale : 7.5;
 			input = {
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				negative_prompt: finalNegativePrompt,
 				first_frame_image: imageUrl,
 				guidance_scale: live2dGuidance,
@@ -460,7 +472,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		} else if (modelId === 'wan22') {
 			const wanFrames = Math.min(121, Math.max(81, frameCount));
 			input = {
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				image: imageUrl,
 				num_frames: wanFrames,
 				frames_per_second: fps,
@@ -470,7 +482,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			// WAN 2.5 supports additional parameters
 			const wan25Motion = motionAmount ? Math.max(1, Math.min(255, motionAmount)) : 127;
 			input = {
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				negative_prompt: finalNegativePrompt,
 				image: imageUrl,
 				max_area: '832x480',
@@ -480,7 +492,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			};
 		} else {
 			input = {
-				prompt: enhancedPrompt,
+				prompt: rawPrompt,
 				first_frame_image: imageUrl
 			};
 		}
@@ -661,15 +673,13 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Replicate API token not configured. Set REPLICATE_API_TOKEN in .env' }, { status: 500 });
 		}
 
-		const displayName = isInterpolation ? 'WAN 2.2 FLF (Replicate)' : selectedModel.name;
+		const displayName = selectedModel.name;
 
 		setProgress(jobId, {
 			currentFrame: 0,
 			totalFrames: numFrames,
 			status: 'starting',
-			message: isInterpolation
-				? 'Interpolating with WAN 2.2 First-Last-Frame...'
-				: `Initializing ${selectedModel.name}...`
+			message: isInterpolation ? 'Interpolating first and last frames with Wan 2.2...' : `Initializing ${selectedModel.name}...`
 		});
 		
 		// Build FLF options object for interpolation mode

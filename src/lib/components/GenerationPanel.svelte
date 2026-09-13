@@ -7,6 +7,7 @@
 	import FrameUpload from './FrameUpload.svelte';
 	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
 	import { pixelateFrames } from '$lib/utils/pixelate.js';
+	import { addCanvasPadding } from '$lib/utils/canvasPadding.js';
 	import { cleanupBackgrounds, detectGreenArtifacts } from '$lib/utils/backgroundCleanup.js';
 	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
 	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
@@ -38,12 +39,12 @@
 	const MAX_MANUAL_FRAMES = 120;
 
 	// Animation settings tuned for faster sprite iteration
-	let duration = $state(2); // seconds (shorter by default for faster turnaround)
+	let duration = $state(3); // WAN 2.7 is most coherent for short 2–5 second clips
 	let motionAmount = $state(50); // 1-255, lower = subtle motion for sprites
 	let shouldLoop = $state(false); // Loop animation back to first frame
 	let perfectLoop = $state(false); // Force end/start seam smoothing + exact closure
 	let staticAssetLock = $state(false); // Keep object anchored in place (no drift/rotation/jitter)
-	let selectedPose = $state('idle'); // Pose preset
+	let selectedPose = $state('custom'); // Presets only populate the raw prompt field
 	
 	// Advanced settings for better accuracy and loops
 	let showAdvanced = $state(false);
@@ -97,6 +98,11 @@
 	const withWanPreset = (directive) => `${HOMM3_STYLE}, ${directive}, ${WAN_MOTION_STABILITY}, ${WAN_NOISE_SUPPRESSION}`;
 	
 	const posePresets = [
+		{
+			id: 'bust_idle_peaceful',
+			name: 'Bust - Peaceful Idle (Locked)',
+			description: withWanPreset('CHEST-UP CHARACTER BUST ONLY. Single locked-off shot. The character remains peaceful and silent, with a closed relaxed mouth throughout. Motion is limited to one very gentle breathing cycle in the upper chest and shoulders, one slow natural blink, and imperceptible head balance correction. Keep head position, face, shoulders, crop, and silhouette fixed. No speech, no lip motion, no expression change, no head turn, no body sway, no camera movement, no zoom, no reframing')
+		},
 		{ 
 			id: 'idle', 
 			name: 'Idle - Classic', 
@@ -251,6 +257,7 @@
 	let pixelateOutput = $state(false); // Disabled by default - only enable if you want pixelation effect
 	let pixelSize = $state(2); // Size of each "pixel" (2-8)
 	let colorLevels = $state(64); // Color levels (8, 16, 32)
+	let canvasPadding = $state(0); // Transparent pixels added equally around each finished frame
 
 	if (browser) {
 		try {
@@ -284,6 +291,7 @@
 				if (typeof parsed?.pixelateOutput === 'boolean') pixelateOutput = parsed.pixelateOutput;
 				if (typeof parsed?.pixelSize === 'number') pixelSize = parsed.pixelSize;
 				if (typeof parsed?.colorLevels === 'number') colorLevels = parsed.colorLevels;
+				if (typeof parsed?.canvasPadding === 'number') canvasPadding = parsed.canvasPadding;
 			}
 		} catch {
 			// ignore storage parse errors
@@ -383,7 +391,8 @@
 					removeBackground,
 					pixelateOutput,
 					pixelSize,
-					colorLevels
+					colorLevels,
+					canvasPadding
 				})
 			);
 		} catch {
@@ -597,6 +606,15 @@
 					
 					isGenerating = false;
 				}
+
+				if (canvasPadding > 0 && finalFrames.length > 0) {
+					const totalFrames = finalFrames.length;
+					progress = { ...progress, message: `Adding ${canvasPadding}px transparent padding (0/${totalFrames})...` };
+					if (queueJobId) jobQueue.updateJob(queueJobId, { message: `Adding ${canvasPadding}px canvas padding...` });
+					finalFrames = await addCanvasPadding(finalFrames, canvasPadding, (done, total) => {
+						progress = { ...progress, message: `Adding ${canvasPadding}px transparent padding (${done}/${total})...` };
+					});
+				}
 				
 				// If frames are directly included
 				if (data.frames && data.frames.length > 0) {
@@ -735,8 +753,6 @@
 		projectStore.update(p => ({ ...p, frames: [] }));
 
 		try {
-			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
-			const chromaPromptLock = `Background must be a flat solid chroma key ${activeChroma}. Use ${activeChroma} for background only, never on the subject.`;
 			const normalizedLongEdge = Number(inputLongEdge) || 1024;
 			const sourceImage = await clampImageLongEdge(project.firstFrame, normalizedLongEdge);
 			const sourceEndImage = lockedInterpolation && lockedEndFrame
@@ -746,41 +762,20 @@
 			// Calculate frame count from effective duration and FPS
 			const requestedFrameCount = targetFrameCount;
 			
-			// Build prompt from pose preset
-			let posePrompt;
-			if (selectedPose === 'custom') {
-				// For custom prompts, add context if it mentions locomotion
-				const lowerPrompt = prompt.toLowerCase();
-				if (
-					lowerPrompt.includes('walk') ||
-					lowerPrompt.includes('stride') ||
-					lowerPrompt.includes('step') ||
-					lowerPrompt.includes('run') ||
-					lowerPrompt.includes('sprint') ||
-					lowerPrompt.includes('jog')
-				) {
-					// Enhance locomotion prompts with specific cadence and anti-jitter constraints
-					posePrompt = `2D fantasy game sprite, side view facing right, ${prompt}, smooth in-place locomotion cycle, legs alternate in natural cadence, arms swing opposite to legs, stable torso rhythm, consistent pace, clean loop timing, no jitter, no spazzing, no frame brightness pulsing, no random VFX, no explosions, controlled motion, static camera, looping animation, game asset quality`;
-				} else {
-					// General custom prompt with sprite context
-					posePrompt = `2D fantasy game sprite, side view facing right, ${prompt}, smooth motion, consistent character, no jitter, no random VFX or explosions, static camera, looping animation, game asset quality`;
-				}
-			} else {
-				posePrompt = posePresets.find(p => p.id === selectedPose)?.description || selectedPose;
-			}
-			posePrompt = `${posePrompt}. ${chromaPromptLock}`;
-			if (staticAssetLock) {
-				posePrompt = `${posePrompt}. STATIC ASSET MODE: Keep the main object perfectly locked in place. No translation, no camera movement, no orbit, no rotation, no zoom, no scale change, and no jitter. Motion is limited to tiny internal shimmer only while silhouette and base remain fixed.`;
+			const posePrompt = prompt;
+			if (!posePrompt.trim()) {
+				throw new Error('Enter an animation prompt. It will be sent to Wan exactly as typed.');
 			}
 			
 			// Use animation endpoint
 			const isRunningPreset = selectedPose.startsWith('run_');
-			const isIdlePreset = selectedPose === 'idle' || selectedPose.startsWith('idle_');
+			const isIdlePreset = selectedPose === 'bust_idle_peaceful' || selectedPose === 'idle' || selectedPose.startsWith('idle_');
 			const effectiveMotionAmount = (() => {
 				if (selectedPose === 'idle_battle_ready') {
 					const raw = Number(motionAmount) || 88;
 					return Math.max(82, Math.min(96, raw));
 				}
+				if (selectedPose === 'bust_idle_peaceful') return 20;
 				if (isIdlePreset) {
 					const raw = Number(motionAmount) || 82;
 					return Math.max(70, Math.min(90, raw));
@@ -912,19 +907,24 @@
 
 	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
 		<p class="text-xs font-semibold text-gray-700">🎬 Animation Setup</p>
-		<div class="flex items-center gap-2">
+		<div class="hidden">
 			<span class="text-xs font-medium text-gray-700">Type:</span>
-			<select bind:value={selectedPose} class="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white">
+			<select bind:value={selectedPose} onchange={() => {
+				const preset = posePresets.find((pose) => pose.id === selectedPose);
+				if (preset && selectedPose !== 'custom') prompt = preset.description;
+			}} class="flex-1 px-2 py-1 text-xs border border-gray-300 rounded bg-white">
 				{#each posePresets as pose}
 					<option value={pose.id}>{pose.name}</option>
 				{/each}
 			</select>
 		</div>
-		{#if selectedPose === 'custom'}
-			<input type="text" bind:value={prompt} placeholder="Describe animation..." class="w-full px-2 py-1 text-xs border border-gray-300 rounded" />
-		{/if}
+		<input type="text" bind:value={prompt} placeholder="Raw prompt, e.g. subtle idle breathing and one blink" class="w-full px-2 py-1 text-xs border border-gray-300 rounded" />
+		<p class="text-[10px] text-gray-500">Sent to Wan exactly as typed.</p>
+		<button class="w-full px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300 transition-colors" onclick={() => showAdvanced = !showAdvanced}>
+			{showAdvanced ? '▼ Hide' : '▶ Show'} animation settings
+		</button>
 
-		<div class="flex items-center gap-2 text-xs">
+		<div class={showAdvanced ? 'flex items-center gap-2 text-xs' : 'hidden'}>
 			<span class="text-gray-700 font-medium">📐 Max Input:</span>
 			<select bind:value={inputLongEdge} onchange={(e) => inputLongEdge = Number(e.target.value)} class="px-2 py-1 border border-gray-300 rounded bg-white text-xs">
 				<option value={640}>640px</option>
@@ -936,7 +936,7 @@
 			<span class="text-[10px] text-gray-500">Caps source long edge before generation</span>
 		</div>
 
-		<div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
+		<div class={showAdvanced ? 'grid grid-cols-1 md:grid-cols-3 gap-2 text-xs' : 'hidden'}>
 			<div class="p-2 rounded border bg-gray-50">
 				<p class="text-[10px] text-gray-500">⏱️ Duration</p>
 				<p class="font-medium">{useInterpolation ? flfDurationSeconds : duration}s</p>
@@ -969,7 +969,7 @@
 			</div>
 		</div>
 
-		<div class="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+		<div class={showAdvanced ? 'grid grid-cols-2 md:grid-cols-5 gap-2 text-xs' : 'hidden'}>
 			<label class="flex items-center gap-1"><input type="checkbox" bind:checked={shouldLoop} class="w-3 h-3" />🔁 Loop</label>
 			<label class="flex items-center gap-1 text-purple-700"><input type="checkbox" bind:checked={perfectLoop} class="w-3 h-3" />♾️ Perfect</label>
 			<label class="flex items-center gap-1 text-gray-600"><input type="checkbox" bind:checked={removeBackground} class="w-3 h-3" />🧽 Remove BG</label>
@@ -987,7 +987,7 @@
 		{isGenerating ? '⏳ Generating...' : useInterpolation ? '⚡ Interpolate Frames' : '🚀 Generate Animation'}
 	</button>
 
-	<div class="rounded-lg border border-gray-200 bg-white p-2 space-y-2">
+	<div class={showAdvanced ? 'rounded-lg border border-gray-200 bg-white p-2 space-y-2' : 'hidden'}>
 		<p class="text-xs font-semibold text-gray-700">🧮 Frame Planner</p>
 		<div class="text-[11px] bg-blue-50 border border-blue-200 rounded px-2 py-1 text-blue-800">
 			⏱️ {useInterpolation ? flfDurationSeconds : duration}s × 🎞️ {project.fps} fps = <strong>{rawEstimatedFrames}</strong> raw frames
@@ -1015,7 +1015,7 @@
 	
 	<!-- Pixelation Settings (when enabled) -->
 	{#if pixelateOutput}
-		<div class="flex items-center gap-3 text-[10px] bg-amber-50 border border-amber-200 rounded p-2">
+		<div class={showAdvanced ? 'flex items-center gap-3 text-[10px] bg-amber-50 border border-amber-200 rounded p-2' : 'hidden'}>
 			<span class="text-amber-700 font-medium">Pixel Art:</span>
 			<label class="flex items-center gap-1">
 				<span class="text-gray-600">Size:</span>
@@ -1038,9 +1038,18 @@
 		</div>
 	{/if}
 
+	<!-- Transparent canvas space is applied after extraction, never sent to the video model. -->
+	<div class={showAdvanced ? 'flex items-center gap-2 text-[10px] bg-violet-50 border border-violet-200 rounded p-2' : 'hidden'}>
+		<label class="flex items-center gap-2">
+			<span class="font-medium text-violet-800">Canvas Padding</span>
+			<input type="number" min="0" max="2048" step="1" bind:value={canvasPadding} class="w-16 px-1 py-0.5 border rounded text-[10px]" />
+			<span class="text-gray-600">px on every side · transparent</span>
+		</label>
+	</div>
+
 	<!-- Advanced Settings Toggle -->
 	<button
-		class="w-full px-2 py-1 text-xs text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded border border-gray-300 transition-colors"
+		class="hidden"
 		onclick={() => showAdvanced = !showAdvanced}
 	>
 		{showAdvanced ? '▼' : '▶'} Advanced Settings {showAdvanced ? '(Hide)' : '(Show)'}
@@ -1052,7 +1061,8 @@
 			
 			{#if useInterpolation}
 				<!-- ═══ FLF-SPECIFIC SETTINGS (Interpolation Mode) ═══ -->
-				<p class="text-[10px] text-indigo-600 font-medium mb-1">⚡ WAN 2.2 First-Last-Frame Settings</p>
+				<p class="text-[10px] text-indigo-600 font-medium mb-1">⚡ Wan 2.2 First/Last-Frame Interpolation</p>
+				<p class="text-[9px] text-gray-500 -mt-1">Uses the start and end images to guide the animation's opening and closing frame.</p>
 
 				<!-- Duration -->
 				<div>

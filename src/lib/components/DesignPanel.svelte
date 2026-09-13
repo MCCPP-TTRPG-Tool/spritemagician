@@ -19,7 +19,7 @@
 		'Whimsical, surreal, vibrant, spec art 1980s fantasy oil painting, unified shadow masses, midtone-dominant value structure, soft form transitions, restrained highlights, matte surface rendering, simplified detail grouping, painterly background mass, selective high-chroma accents only on magical elements';
 
 	const CONTENT_PRESETS = {
-		character: 'Create a game-ready character design with a clear silhouette and strong identity.',
+		character: 'Create a game-ready chest-up character bust, centered and isolated, with the top of the head and shoulders fully visible. Use a calm closed-mouth expression, a simple readable silhouette, and enough clean background around the bust for stable animation. Do not make a full-body character or an action pose.',
 		building: 'Create a game-ready building design with readable structure and architectural detail.',
 		item: 'Create a game-ready item design with clear shape language and material readability.',
 		asset: 'Create a reusable game asset concept with practical visual clarity and modularity.',
