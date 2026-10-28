@@ -36,3 +36,6 @@ __pycache__/
 
 # Editor
 .cursor/
+
+# Local run config
+.claude/launch.json
