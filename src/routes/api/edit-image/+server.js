@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { env } from '$lib/server/env.js';
 import { extractFirstImageDataUrl, extractFirstImageUrl } from '$lib/server/runpod.js';
@@ -616,7 +617,7 @@ export async function POST({ request, locals }) {
 			promptSpec = null,
 			imgWidth,
 			imgHeight
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const selectedEditModel = normalizeEditModel(editModel);
 		const payload = {
 			image,

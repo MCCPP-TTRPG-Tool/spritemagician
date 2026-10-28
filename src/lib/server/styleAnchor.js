@@ -13,6 +13,7 @@ import fs from 'fs';
 import path from 'path';
 import * as db from './db.js';
 import { saveBuffer, readLocalUrl, extForMime } from './localFiles.js';
+import { getExampleImagesDir } from './resources.js';
 
 const CONFIG_COLLECTION = 'config';
 const CONFIG_ID = 'styleAnchor';
@@ -71,7 +72,7 @@ export async function getStyleConfig() {
 			source: 'user'
 		};
 	}
-	const dir = path.resolve('static/Example images');
+	const dir = getExampleImagesDir();
 	try {
 		const files = fs.readdirSync(dir).filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f));
 		if (files.length > 0) return { name: files[0], source: 'local' };
@@ -105,7 +106,7 @@ function tryUserStyle() {
 }
 
 function loadLocalStyle() {
-	const dir = path.resolve('static/Example images');
+	const dir = getExampleImagesDir();
 	try {
 		const files = fs.readdirSync(dir).filter((f) => /\.(jpg|jpeg|png|webp)$/i.test(f)).sort();
 		if (files.length === 0) return null;

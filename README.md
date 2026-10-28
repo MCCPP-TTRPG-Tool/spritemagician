@@ -17,7 +17,7 @@ your own API keys.
 Download the installer for your OS from the Releases page, install, launch, then open
 **Settings** (top right) and paste your Replicate API token.
 
-Your data lives in `Documents/SpriteMagician` (or wherever `SPRITEMAGICIAN_DATA_DIR` points).
+Your data lives in `~/SpriteMagician` (your home folder) or wherever `SPRITEMAGICIAN_DATA_DIR` points.
 
 ## Run from source
 
@@ -31,7 +31,7 @@ npm run dev
 ```
 
 Open http://localhost:5173, click **Settings** and enter your keys.
-Data is stored in `~/SpriteMagician` when running from source.
+Data is stored in `~/SpriteMagician` in both modes.
 
 Other scripts:
 

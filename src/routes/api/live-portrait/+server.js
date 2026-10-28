@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { env } from '$lib/server/env.js';
 
 const MODEL_VERSION = '15430b300f8c044e8f9e3567fd6daadf6d62e9bb0cee23fdb7969d3b26542f40';
@@ -15,7 +16,7 @@ export async function POST({ request }) {
 	}
 
 	try {
-		const body = await request.json();
+		const body = inlineLocalInputs(await request.json());
 		const characterImage = typeof body.characterImage === 'string' ? body.characterImage : '';
 		const drivingVideo = typeof body.drivingVideo === 'string' ? body.drivingVideo : '';
 

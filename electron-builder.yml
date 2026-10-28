@@ -6,8 +6,11 @@ directories:
 files:
   - electron/**
   - build/**
-  - static/Example images/**
   - package.json
+  - "!electron/resources/**"
+extraResources:
+  - from: static/Example images
+    to: example-images
 asar: true
 asarUnpack:
   - build/**

@@ -7,6 +7,7 @@
  */
 
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import {
 	generateWithCascade,
 	extractImage,
@@ -15,7 +16,7 @@ import {
 } from '$lib/server/gemini.js';
 import { getMasterStyle } from '$lib/server/styleAnchor.js';
 import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isDataUrl, normalizeBoundedInt } from '$lib/server/validation.js';
 import {
 	beginIdempotentRequest,
@@ -41,7 +42,7 @@ export async function POST({ request, locals }) {
 			characterName,
 			characterPixels,
 			canvasPixels,
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const safeName = String(characterName || '').trim().slice(0, 120);
 		const charPx = normalizeBoundedInt(characterPixels, 160, 32, 512);
 		const canvasPx = normalizeBoundedInt(canvasPixels, 224, 64, 1024);
@@ -128,9 +129,6 @@ export async function POST({ request, locals }) {
 			if (!img) return null;
 			// If it's a URL, fetch and convert to base64
 			if (typeof img === 'string' && (img.startsWith('http://') || img.startsWith('https://'))) {
-				if (!isAllowedUpstreamUrl(img)) {
-					throw new Error('Reference image URL domain not allowed');
-				}
 				const res = await fetch(img);
 				if (!res.ok) throw new Error(`Failed to fetch image: ${res.status}`);
 				const buf = Buffer.from(await res.arrayBuffer());

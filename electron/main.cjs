@@ -2,30 +2,39 @@
  * Electron shell for Sprite Magician.
  *
  * Starts the SvelteKit Node server (build/index.js) inside the main process
- * on a free localhost port, then opens a window pointing at it.
- * All data is stored under the OS "user data" folder unless
- * SPRITEMAGICIAN_DATA_DIR is set.
+ * on a free loopback port, then opens a window pointing at it.
+ *
+ * Data lives in ~/SpriteMagician unless SPRITEMAGICIAN_DATA_DIR is set
+ * (same default as running from a terminal).
  */
 const { app, BrowserWindow, shell, Menu, dialog } = require('electron');
 const path = require('node:path');
+const os = require('node:os');
 const net = require('node:net');
 const fs = require('node:fs');
 
-const isDev = !app.isPackaged;
+// Only one copy of the app may run: two servers writing the same index would corrupt it.
+if (!app.requestSingleInstanceLock()) {
+	app.quit();
+	return;
+}
 
-// Keep Electron's own cache/profile next to the app data so everything lives in one place.
 function resolveDataDir() {
 	if (!process.env.SPRITEMAGICIAN_DATA_DIR) {
-		process.env.SPRITEMAGICIAN_DATA_DIR = path.join(app.getPath("documents"), "SpriteMagician");
+		process.env.SPRITEMAGICIAN_DATA_DIR = path.join(os.homedir(), 'SpriteMagician');
 	}
 	fs.mkdirSync(process.env.SPRITEMAGICIAN_DATA_DIR, { recursive: true });
 	return process.env.SPRITEMAGICIAN_DATA_DIR;
 }
 const DATA_DIR = resolveDataDir();
-app.setPath("userData", path.join(DATA_DIR, ".electron"));
-app.setPath("sessionData", path.join(DATA_DIR, ".electron", "session"));
+
+// Bundled read-only resources (example images, workflow templates).
+process.env.SPRITEMAGICIAN_RESOURCES_DIR = app.isPackaged
+	? process.resourcesPath
+	: path.join(__dirname, '..', 'static');
+
 let mainWindow = null;
-let serverStarted = false;
+let serverOrigin = null;
 
 function getFreePort() {
 	return new Promise((resolve, reject) => {
@@ -39,7 +48,7 @@ function getFreePort() {
 }
 
 async function startServer() {
-	if (serverStarted) return;
+	if (serverOrigin) return serverOrigin;
 	const port = await getFreePort();
 
 	process.env.PORT = String(port);
@@ -47,16 +56,13 @@ async function startServer() {
 	process.env.ORIGIN = `http://127.0.0.1:${port}`;
 	process.env.BODY_SIZE_LIMIT = process.env.BODY_SIZE_LIMIT || '512M';
 
-	// Keep the style-anchor fallback (static/Example images) resolvable.
-	process.chdir(path.join(__dirname, '..'));
-
 	const serverEntry = path.join(__dirname, '..', 'build', 'index.js');
 	if (!fs.existsSync(serverEntry)) {
 		throw new Error(`Server build not found at ${serverEntry}. Run "npm run build" first.`);
 	}
 	await import(`file://${serverEntry.replace(/\\/g, '/')}`);
-	serverStarted = true;
-	return `http://127.0.0.1:${port}`;
+	serverOrigin = process.env.ORIGIN;
+	return serverOrigin;
 }
 
 function createWindow(url) {
@@ -75,13 +81,21 @@ function createWindow(url) {
 		}
 	});
 
-	// Open external links in the system browser.
+	const isAppUrl = (target) => target.startsWith(url);
+
+	// New windows: open http(s) links in the system browser, deny everything else.
 	mainWindow.webContents.setWindowOpenHandler(({ url: target }) => {
-		if (/^https?:\/\//i.test(target) && !target.startsWith(url)) {
-			shell.openExternal(target);
-			return { action: 'deny' };
+		if (isAppUrl(target)) return { action: 'allow' };
+		if (/^https?:\/\//i.test(target)) shell.openExternal(target);
+		return { action: 'deny' };
+	});
+
+	// In-window navigation must stay on the app origin.
+	mainWindow.webContents.on('will-navigate', (event, target) => {
+		if (!isAppUrl(target)) {
+			event.preventDefault();
+			if (/^https?:\/\//i.test(target)) shell.openExternal(target);
 		}
-		return { action: 'allow' };
 	});
 
 	mainWindow.loadURL(url);
@@ -90,15 +104,12 @@ function createWindow(url) {
 	});
 }
 
-function buildMenu(dataDir) {
+function buildMenu() {
 	const template = [
 		{
 			label: 'File',
 			submenu: [
-				{
-					label: 'Open Data Folder',
-					click: () => shell.openPath(dataDir)
-				},
+				{ label: 'Open Data Folder', click: () => shell.openPath(DATA_DIR) },
 				{ type: 'separator' },
 				{ role: 'quit' }
 			]
@@ -122,10 +133,17 @@ function buildMenu(dataDir) {
 	Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+app.on('second-instance', () => {
+	if (mainWindow) {
+		if (mainWindow.isMinimized()) mainWindow.restore();
+		mainWindow.focus();
+	}
+});
+
 app.whenReady().then(async () => {
 	try {
 		const url = await startServer();
-		buildMenu(DATA_DIR);
+		buildMenu();
 		createWindow(url);
 		app.on('activate', () => {
 			if (BrowserWindow.getAllWindows().length === 0) createWindow(url);
@@ -140,6 +158,4 @@ app.on('window-all-closed', () => {
 	if (process.platform !== 'darwin') app.quit();
 });
 
-if (isDev) {
-	process.on('unhandledRejection', (err) => console.error('[electron] unhandled rejection', err));
-}
+process.on('unhandledRejection', (err) => console.error('[electron] unhandled rejection', err));

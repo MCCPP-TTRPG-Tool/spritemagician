@@ -243,3 +243,28 @@ export async function fetchLocalOrRemote(url) {
 	}
 	return fetch(url);
 }
+
+/**
+ * Walk a parsed request body and replace every /local URL string with the
+ * file's data URL, so provider routes never have to know about local storage.
+ * Walks plain objects and arrays up to a small depth; skips keys whose name
+ * suggests a 3D model (those stay as URLs and are handled per route).
+ */
+export function inlineLocalInputs(value, depth = 0) {
+	if (depth > 4 || value === null || value === undefined) return value;
+	if (typeof value === 'string') {
+		if (!isLocalUrl(value)) return value;
+		const dataUrl = localUrlToDataUrl(value);
+		if (!dataUrl) throw new Error(`Local file not found: ${value}`);
+		return dataUrl;
+	}
+	if (Array.isArray(value)) return value.map((v) => inlineLocalInputs(v, depth + 1));
+	if (typeof value === 'object') {
+		const out = {};
+		for (const [k, v] of Object.entries(value)) {
+			out[k] = /model/i.test(k) ? v : inlineLocalInputs(v, depth + 1);
+		}
+		return out;
+	}
+	return value;
+}

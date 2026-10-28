@@ -26,7 +26,7 @@ export async function GET({ params, request }) {
 			'Content-Length': String(stat.size),
 			'Cache-Control': 'no-cache',
 			ETag: etag,
-			'Access-Control-Allow-Origin': '*'
+			'X-Content-Type-Options': 'nosniff',
 		}
 	});
 }

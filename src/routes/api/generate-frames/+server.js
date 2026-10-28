@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
@@ -199,7 +200,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
-		const { firstFrame, lastFrame, prompt, frameCount, mode } = await request.json();
+		const { firstFrame, lastFrame, prompt, frameCount, mode } = inlineLocalInputs(await request.json());
 		const payload = { firstFrame, lastFrame, prompt, frameCount, mode };
 		payloadBytes = approxJsonBytes(payload);
 		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;

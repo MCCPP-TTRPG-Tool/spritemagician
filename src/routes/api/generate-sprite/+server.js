@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { env } from '$lib/server/env.js';
 import { getMasterStyle } from '$lib/server/styleAnchor.js';
 import { CHROMA_KEY_PROMPT_RULES } from '$lib/constants/chromaKey.js';
@@ -29,7 +30,7 @@ export async function POST({ request, locals }) {
 			useMasterStyleAnchor = false,
 			generationNonce = null,
 			generationModel = 'nano_banana'
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const selectedModel =
 			generationModel === 'gpt4' || generationModel === 'dalle' ? generationModel : 'nano_banana';
 		const payload = {
