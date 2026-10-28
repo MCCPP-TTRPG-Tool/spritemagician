@@ -671,9 +671,9 @@ export async function POST({ request, locals }) {
 			routeKey: 'generate-animation',
 			provider: 'replicate',
 			statusCode: 200,
-			metadata: { modelId: String(modelId || 'wan22') },
 			requestBytes: payloadBytes,
 			metadata: {
+				modelId: String(modelId || 'wan22'),
 				interpolate: !!isInterpolation,
 				frameCount: Number(numFrames) || 0
 			}
