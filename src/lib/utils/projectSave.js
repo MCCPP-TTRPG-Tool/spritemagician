@@ -1,6 +1,6 @@
 /**
- * Saves project data to Firebase Storage
- * Includes all frames - stored in Firebase Storage, not localStorage
+ * Saves project data to the local data directory
+ * Includes all frames - stored on disk, not localStorage
  */
 export async function saveProject(project) {
 	try {
@@ -32,7 +32,7 @@ export async function saveProject(project) {
 }
 
 /**
- * Loads project data from Firebase Storage
+ * Loads project data from the local data directory
  * @param {string} projectId - Optional project ID. If not provided, loads the last saved project.
  */
 export async function loadProject(projectId = null) {
@@ -65,7 +65,7 @@ export async function loadProject(projectId = null) {
 }
 
 /**
- * Lists all saved projects from Firebase
+ * Lists all saved projects on disk
  */
 export async function listProjects() {
 	try {

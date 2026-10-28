@@ -24,7 +24,8 @@ vite.config.ts.timestamp-*
 .env*.local
 
 # Secrets
-*firebase-adminsdk*.json
+*-adminsdk*.json
+*service-account*.json
 *.pem
 
 # Electron

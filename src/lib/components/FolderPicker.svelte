@@ -89,7 +89,7 @@
 			newFolderName = '';
 			showNewFolder = false;
 
-			// Also refresh from Firestore in background (in case of inconsistencies)
+			// Also refresh from the library API in background (in case of inconsistencies)
 			setTimeout(() => loadFolders(parentId), 600);
 		} catch (e) {
 			console.error('[FolderPicker] Create folder error:', e);

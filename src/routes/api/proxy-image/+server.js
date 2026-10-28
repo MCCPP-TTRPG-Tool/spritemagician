@@ -1,6 +1,6 @@
 /**
  * Proxy endpoint to fetch images and return as base64
- * Bypasses CORS issues with Firebase Storage
+ * Lets the browser load local and remote images uniformly
  *
  * Domain allowlist prevents SSRF — only trusted origins are fetched.
  */

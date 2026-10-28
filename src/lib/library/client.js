@@ -1,7 +1,7 @@
 /**
  * Client-side library API.
  *
- * Same function names the UI used with Firestore, now backed by
+ * Library client for the UI, backed by
  * /api/library and /api/jobs. The `uid` argument is accepted and ignored
  * so call sites did not have to change.
  *

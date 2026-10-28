@@ -1,12 +1,12 @@
 /**
- * The user's asset library — replaces the Firestore `files` collection.
+ * The user's asset library: a folder tree on disk plus a JSON index.
  *
  * Items live in <dataDir>/db/files.json and mirror real folders and files
  * under <dataDir>/library, so the tree you see in the app is the tree you
  * see in Explorer / Finder. Each item records its on-disk `relPath`, and
  * rescanLibrary() reconciles the index with whatever is on disk.
  *
- * Item shape (same fields the UI already used with Firestore):
+ * Item shape:
  *   { id, name, parentId, isFolder, url, thumbnailUrl, fileType,
  *     metadata, size, relPath, createdAt, updatedAt }
  */

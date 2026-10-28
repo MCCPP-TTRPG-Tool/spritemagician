@@ -1,7 +1,7 @@
 /**
  * GET /api/load-animation?url=<local or http(s) url>
  *
- * Proxy endpoint that fetches an .anim.json file from Firebase Storage
+ * Endpoint that reads an .anim.json file from the library
  * and returns its contents. This avoids CORS issues when loading
  * animation files from the client.
  */
@@ -56,7 +56,7 @@ export async function GET({ url, locals }) {
 		await recordUsageEvent({
 			uid: locals.user.uid,
 			routeKey: 'load-animation',
-			provider: 'firebase',
+			provider: 'local',
 			statusCode: 200,
 			requestBytes,
 			metadata: { frameCount: data.frames.length || 0 }
@@ -68,7 +68,7 @@ export async function GET({ url, locals }) {
 		await recordUsageEvent({
 			uid: locals.user.uid,
 			routeKey: 'load-animation',
-			provider: 'firebase',
+			provider: 'local',
 			success: false,
 			statusCode: 500,
 			requestBytes,

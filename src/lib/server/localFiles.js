@@ -1,5 +1,5 @@
 /**
- * Local file storage — replaces Firebase Storage.
+ * Local file storage under the data directory.
  *
  * Files are written under <dataDir>/library and served by the
  * /local/[...path] route, so a stored file's URL looks like
@@ -211,10 +211,10 @@ export async function fetchImageBuffer(ref) {
 	};
 }
 
-// ── Compatibility shims for the old Firebase helper names ──────────────
+// ── Convenience wrappers used by the API routes ──────────────
 
 /**
- * Old signature: uploadImageToFirebase(imageData, filename) -> public URL.
+ * uploadImage(imageData, filename) -> /local URL.
  * Paths like `users/<uid>/x/y.png` are flattened to `.uploads/x/y.png`.
  */
 export async function uploadImage(imageData, filename = null) {

@@ -1,5 +1,5 @@
 /**
- * Library REST API — the client-side replacement for Firestore.
+ * Library REST API used by the file tree and panels.
  *
  * GET    /api/library?parentId=<id|null>   → { items }
  * GET    /api/library?id=<id>              → { item }

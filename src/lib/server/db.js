@@ -1,5 +1,5 @@
 /**
- * Tiny JSON document store — replaces Firestore for small records
+ * Tiny JSON document store for small records
  * (jobs, rig jobs, edit clusters, config documents).
  *
  * Layout: <dataDir>/db/<collection>.json  → { [id]: doc }

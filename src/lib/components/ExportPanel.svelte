@@ -398,7 +398,7 @@
 			}
 			const { url, frameCount, thumbnailUrl } = await res.json();
 
-			// Create a Firestore file entry so it appears in the file tree
+			// Create a library entry so it appears in the file tree
 			const fname = `${sanitizedName}.anim.json`;
 			await createFile(uid, saveFolderId, fname, url, 'animation', {
 				sourceType: 'animation',

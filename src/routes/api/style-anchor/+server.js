@@ -44,7 +44,7 @@ export async function GET({ locals }) {
 	await recordUsageEvent({
 		uid: locals.user.uid,
 		routeKey: 'style-anchor:get',
-		provider: 'firebase',
+		provider: 'local',
 		statusCode: 200,
 		requestBytes: 0
 	});
@@ -159,7 +159,7 @@ export async function PUT({ request, locals }) {
 		await recordUsageEvent({
 			uid: locals.user.uid,
 			routeKey: 'style-anchor:put',
-			provider: 'firebase',
+			provider: 'local',
 			statusCode: 200,
 			requestBytes: payloadBytes,
 			metadata: { mimeType: resolvedMime }
@@ -185,7 +185,7 @@ export async function PUT({ request, locals }) {
 			await recordUsageEvent({
 				uid: locals.user.uid,
 				routeKey: 'style-anchor:put',
-				provider: 'firebase',
+				provider: 'local',
 				success: false,
 				statusCode: 500,
 				requestBytes: payloadBytes,
@@ -221,7 +221,7 @@ export async function DELETE({ locals }) {
 	await recordUsageEvent({
 		uid: locals.user.uid,
 		routeKey: 'style-anchor:delete',
-		provider: 'firebase',
+		provider: 'local',
 		statusCode: 200,
 		requestBytes: 0
 	});

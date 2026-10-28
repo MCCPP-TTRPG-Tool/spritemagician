@@ -2,7 +2,7 @@
  * Request bookkeeping for a single local user.
  *
  * The hosted version stored idempotency records and a usage ledger in
- * Firestore. Locally we keep idempotency in memory (it only needs to survive
+ * a database. Locally we keep idempotency in memory (it only needs to survive
  * a double-click) and skip the ledger entirely.
  */
 import { createHash } from 'node:crypto';

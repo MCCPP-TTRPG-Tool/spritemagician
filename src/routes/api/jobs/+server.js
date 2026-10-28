@@ -1,5 +1,5 @@
 /**
- * Job log + edit cluster persistence (was Firestore `jobs` / `edit_clusters`).
+ * Job log + edit cluster persistence (local JSON collections).
  *
  * GET  /api/jobs                       → { jobs } newest first
  * POST /api/jobs { action, ... }

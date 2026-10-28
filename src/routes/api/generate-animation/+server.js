@@ -148,7 +148,7 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 	console.log('[FLF] Parameters:', { durationSeconds, numInferenceSteps, guidanceScale, guidanceScale2, shift, seed: seed ?? 'random' });
 
 	// Replicate accepts HTTP URLs and data URLs for file inputs. Keeping the
-	// data URLs avoids requiring Firebase Admin credentials for local animation.
+	// data URLs keeps everything local until the provider request.
 	const startUrl = startImageDataUrl;
 	const endUrl = endImageDataUrl;
 
@@ -373,7 +373,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		}
 
 		// Replicate accepts data URLs directly, so local animation does not need
-		// a Firebase Admin upload before submitting the prediction.
+		// an extra upload before submitting the prediction.
 		setProgress(jobId, {
 			currentFrame: 0,
 			totalFrames: frameCount,

@@ -395,7 +395,7 @@
 		if (!item.url) return;
 		menuItemId = null;
 		try {
-			// Use server-side proxy to avoid CORS issues with Firebase Storage
+			// Use server-side proxy so remote and local URLs load the same way
 			const res = await fetch(`/api/load-animation?url=${encodeURIComponent(item.url)}`);
 			if (!res.ok) {
 				const errData = await res.json().catch(() => ({}));
@@ -428,7 +428,7 @@
 		if (!item.url) return;
 		menuItemId = null;
 		try {
-			// Use server-side proxy to avoid CORS issues with Firebase Storage
+			// Use server-side proxy so remote and local URLs load the same way
 			const res = await fetch(`/api/load-animation?url=${encodeURIComponent(item.url)}`);
 			if (!res.ok) {
 				const errData = await res.json().catch(() => ({}));
@@ -510,7 +510,7 @@
 				throw new Error('Background cleanup failed - invalid image data');
 			}
 			
-			// Replace the existing file in Firebase Storage (overwrite instead of creating new)
+			// Replace the existing file on disk (overwrite instead of creating new)
 			bgRemovalProgress = { status: 'processing', message: 'Uploading updated file...', progress: 80 };
 			const replaceRes = await fetch('/api/replace-file', {
 				method: 'POST',
@@ -528,7 +528,7 @@
 			
 			const { url: newUrl } = await replaceRes.json();
 			
-			// Update the file in Firestore with the new URL (should be same URL, but update timestamp)
+			// Update the library entry with the new URL (should be same URL, but update timestamp)
 			bgRemovalProgress = { status: 'processing', message: 'Updating file record...', progress: 90 };
 			await updateItem(fs.uid, item.id, { url: newUrl });
 			

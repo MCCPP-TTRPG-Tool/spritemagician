@@ -66,7 +66,7 @@ let generationSummaryText = $derived.by(() => {
 	// ── Event bridges ──────────────────────────────────────
 	// Keep lightweight listeners that other panels dispatch so we
 	// react appropriately (e.g. switch to frames tab after animation finishes,
-	// auto-save sprites to Firebase file tree, etc.)
+	// auto-save sprites to the local library, etc.)
 
 	if (browser) {
 		// When an animation completes, flip to the Frames tab

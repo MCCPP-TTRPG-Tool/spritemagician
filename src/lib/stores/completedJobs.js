@@ -267,7 +267,7 @@ const createCompletedJobsStore = () => {
 				try {
 					await saveEditClusterJob(sprite.uid, job.editClusterId, job);
 				} catch (e) {
-					console.warn('Failed to sync edit cluster job to Firestore:', e?.message || e);
+					console.warn('Failed to sync edit cluster job:', e?.message || e);
 				}
 			}
 

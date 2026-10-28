@@ -3,7 +3,7 @@
  * 
  * Flow:
  *   1. Client sends: styled character image + text prompt + optional pose reference
- *   2. We upload images to Firebase for URLs
+ *   2. We resolve images to provider-readable URLs
  *   3. RunPod handler:
  *      - IP-Adapter locks character identity from the styled image
  *      - If pose reference provided: DWPose extracts skeleton → ControlNet enforces pose
@@ -138,7 +138,7 @@ export async function POST({ request, locals }) {
 		console.log(`[Pose Gen] Prompt: ${safePrompt || '(none)'}`);
 		console.log(`[Pose Gen] Has pose reference: ${!!poseReference}`);
 
-		// ── Upload images to Firebase for URLs ──
+		// ── Resolve images to provider-readable URLs ──
 		console.log('[Pose Gen] Uploading character image...');
 		const characterUrl = await resolveForProvider(characterImage);
 
