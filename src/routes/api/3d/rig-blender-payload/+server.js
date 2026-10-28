@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { getAdminDb } from '$lib/firebase/admin.js';
+import * as db from '$lib/server/db.js';
 import { enforceRateLimit } from '$lib/server/security.js';
 
 export async function GET({ url, locals }) {
@@ -24,17 +24,12 @@ export async function GET({ url, locals }) {
 		return json({ error: 'Valid jobId is required' }, { status: 400 });
 	}
 
-	const snap = await getAdminDb()
-		.collection('users')
-		.doc(locals.user.uid)
-		.collection('rig_jobs')
-		.doc(jobId)
-		.get();
-	if (!snap.exists) {
+	const data = db.getDoc('rig_jobs', jobId);
+	if (!data) {
 		return json({ error: 'Rig job not found' }, { status: 404 });
 	}
 
-	const data = snap.data() || {};
+
 	if (!data.blenderPayload || typeof data.blenderPayload !== 'object') {
 		return json({ error: 'Blender payload not available for this rig job' }, { status: 404 });
 	}

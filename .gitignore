@@ -22,3 +22,10 @@ Thumbs.db
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .env*.local
+
+# Secrets
+*firebase-adminsdk*.json
+*.pem
+
+# Electron
+/dist

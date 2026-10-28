@@ -1,5 +1,5 @@
 <script>
-	import { getChildren } from '$lib/firebase/firestore.js';
+	import { getChildren } from '$lib/library/client.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
 
 	let {

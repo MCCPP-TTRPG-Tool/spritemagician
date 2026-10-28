@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {

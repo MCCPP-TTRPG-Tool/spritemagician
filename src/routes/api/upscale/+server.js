@@ -3,8 +3,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { env } from '$lib/server/env.js';
+import { resolveForProvider } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isImageInput, normalizeBoundedInt } from '$lib/server/validation.js';
 import {
@@ -83,13 +83,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Replicate API token not configured' }, { status: 500 });
 		}
 
-		// Upload image to Firebase for public URL
-		let imageUrl;
-		if (image.startsWith('data:')) {
-			imageUrl = await uploadImageToFirebase(image, `upscale-input-${Date.now()}.png`);
-		} else {
-			imageUrl = image;
-		}
+		const imageUrl = await resolveForProvider(image);
 
 		console.log('Upscaling image:', imageUrl);
 

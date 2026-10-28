@@ -4,7 +4,7 @@
 	import { generateGif } from '$lib/utils/gifEncoder.js';
 	import { generateMp4 } from '$lib/utils/mp4Encoder.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	

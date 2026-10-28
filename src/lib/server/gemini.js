@@ -9,7 +9,7 @@
  */
 
 import { GoogleGenAI, HarmCategory, HarmBlockThreshold } from '@google/genai';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 
 // ─── Singleton ───────────────────────────────────────────────
 let client = null;

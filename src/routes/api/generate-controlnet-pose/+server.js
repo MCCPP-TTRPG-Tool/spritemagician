@@ -13,8 +13,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { env } from '$lib/server/env.js';
+import { resolveForProvider } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isDataUrl, normalizeBoundedInt } from '$lib/server/validation.js';
 import {
@@ -140,18 +140,12 @@ export async function POST({ request, locals }) {
 
 		// ── Upload images to Firebase for URLs ──
 		console.log('[Pose Gen] Uploading character image...');
-		const characterUrl = await uploadImageToFirebase(
-			characterImage,
-			`pose-character-${Date.now()}.png`
-		);
+		const characterUrl = await resolveForProvider(characterImage);
 
 		let poseReferenceUrl = null;
 		if (poseReference) {
 			console.log('[Pose Gen] Uploading pose reference...');
-			poseReferenceUrl = await uploadImageToFirebase(
-				poseReference,
-				`pose-reference-${Date.now()}.png`
-			);
+			poseReferenceUrl = await resolveForProvider(poseReference);
 		}
 
 		// ── Build prompt ──────────────────────────

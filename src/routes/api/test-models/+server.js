@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 
 /**
  * List available image-to-video models on Replicate

@@ -4,8 +4,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { env } from '$lib/server/env.js';
+import { resolveForProvider } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { validateImageArray } from '$lib/server/validation.js';
 import {
@@ -146,10 +146,7 @@ export async function POST({ request, locals }) {
 		const processImage = async (image, index) => {
 			let imageUrl = image;
 			
-			// If base64, upload to Firebase first
-			if (imageUrl.startsWith('data:')) {
-				imageUrl = await uploadImageToFirebase(imageUrl, `rembg-input-${Date.now()}-${index}.png`);
-			}
+			imageUrl = await resolveForProvider(imageUrl);
 
 			try {
 				const transparentUrl = await removeBackground(imageUrl);

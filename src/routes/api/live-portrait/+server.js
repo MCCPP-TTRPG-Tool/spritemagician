@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 
 const MODEL_VERSION = '15430b300f8c044e8f9e3567fd6daadf6d62e9bb0cee23fdb7969d3b26542f40';
 

@@ -1,37 +1,28 @@
-import { verifySessionCookie } from '$lib/firebase/admin.js';
+import { ensureDefaultFolders } from '$lib/server/library.js';
 
 /**
- * Server hook — runs on every request
- * Verifies session cookie and attaches user to event.locals
+ * Sprite Magician runs as a single-user local app. There is no login:
+ * every request is the local user. Routes that used to check
+ * `locals.user` keep working unchanged.
  */
+export const LOCAL_USER = {
+	uid: 'local',
+	email: null,
+	displayName: 'Local user',
+	photoURL: null
+};
+
+let bootstrapped = false;
+
 export async function handle({ event, resolve }) {
-	try {
-		const sessionCookie = event.cookies.get('__session');
-
-		if (sessionCookie) {
-			const decodedClaims = await verifySessionCookie(sessionCookie);
-
-			if (decodedClaims) {
-				event.locals.user = {
-					uid: decodedClaims.uid,
-					email: decodedClaims.email || null,
-					displayName: decodedClaims.name || null,
-					photoURL: decodedClaims.picture || null
-				};
-			} else {
-				// Invalid/expired cookie — clear it
-				event.cookies.delete('__session', { path: '/' });
-				event.locals.user = null;
-			}
-		} else {
-			event.locals.user = null;
+	if (!bootstrapped) {
+		bootstrapped = true;
+		try {
+			ensureDefaultFolders();
+		} catch (err) {
+			console.warn('[hooks.server] could not create default folders:', err?.message);
 		}
-	} catch (error) {
-		console.error('[hooks.server] Error verifying session:', error);
-		// On error, clear cookie and set user to null
-		event.cookies.delete('__session', { path: '/' });
-		event.locals.user = null;
 	}
-
+	event.locals.user = LOCAL_USER;
 	return resolve(event);
 }

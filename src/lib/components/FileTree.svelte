@@ -8,8 +8,9 @@
 		deleteItem,
 		deleteFolderRecursive,
 		moveItem,
+		updateItem,
 		getChildren
-	} from '$lib/firebase/firestore.js';
+	} from '$lib/library/client.js';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -527,10 +528,7 @@
 			
 			// Update the file in Firestore with the new URL (should be same URL, but update timestamp)
 			bgRemovalProgress = { status: 'processing', message: 'Updating file record...', progress: 90 };
-			const { updateDoc, doc, serverTimestamp } = await import('firebase/firestore');
-			const { db } = await import('$lib/firebase/client.js');
-			const fileRef = doc(db, 'users', fs.uid, 'files', item.id);
-			await updateDoc(fileRef, { url: newUrl, updatedAt: serverTimestamp() });
+			await updateItem(fs.uid, item.id, { url: newUrl });
 			
 			// Refresh the file tree
 			bgRemovalProgress = { status: 'processing', message: 'Refreshing...', progress: 95 };

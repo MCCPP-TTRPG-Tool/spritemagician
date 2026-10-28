@@ -8,6 +8,7 @@
 import { json } from '@sveltejs/kit';
 import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
 import { isHttpUrl } from '$lib/server/validation.js';
+import { isLocalUrl, fetchLocalOrRemote } from '$lib/server/localFiles.js';
 import { recordUsageEvent } from '$lib/server/requestTracking.js';
 
 const ALLOWED_STORAGE_DOMAINS = [
@@ -40,21 +41,17 @@ export async function GET({ url, locals }) {
 	if (!animUrl) {
 		return json({ error: 'url parameter is required' }, { status: 400 });
 	}
-	if (!isHttpUrl(animUrl)) {
+	if (!isLocalUrl(animUrl) && !isHttpUrl(animUrl)) {
 		return json({ error: 'url must be an http(s) URL' }, { status: 400 });
 	}
 
 	// Only allow fetching from our Firebase Storage bucket
-	if (!isAllowedUpstreamUrl(animUrl, ALLOWED_STORAGE_DOMAINS)) {
-		return json({ error: 'Invalid URL — only Firebase Storage URLs allowed' }, { status: 403 });
-	}
-	const uidNeedle = `/users/${locals.user.uid}/`;
-	if (!animUrl.includes(uidNeedle)) {
-		return json({ error: 'You can only load your own animation files' }, { status: 403 });
+	if (!isLocalUrl(animUrl) && !isAllowedUpstreamUrl(animUrl, ALLOWED_STORAGE_DOMAINS)) {
+		return json({ error: 'URL not allowed' }, { status: 403 });
 	}
 
 	try {
-		const res = await fetch(animUrl);
+		const res = await fetchLocalOrRemote(animUrl);
 		if (!res.ok) {
 			throw new Error(`Upstream fetch failed: ${res.status} ${res.statusText}`);
 		}

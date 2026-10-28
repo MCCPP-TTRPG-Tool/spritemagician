@@ -13,10 +13,10 @@
 	import RigAnimation3DPanel from '$lib/components/RigAnimation3DPanel.svelte';
 	import { designStore } from '$lib/stores/design.js';
 	import { authStore } from '$lib/stores/auth.js';
-	import { auth } from '$lib/firebase/client.js';
+	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	
@@ -28,7 +28,7 @@
 	let threeDLeftTab = $state('generate'); // 'generate' | 'rigging' | 'animation'
 	let threeDMiddleTab = $state('viewport'); // viewport-only for now
 	let showUserMenu = $state(false);
-	let showBillingModal = $state(false);
+	let showSettingsModal = $state(false);
 	let showNewProjectModal = $state(false);
 	let showDesignConversationsInCenter = $state(false);
 	let isSavingStill = $state(false);
@@ -616,7 +616,7 @@
 		}
 		const uid = userFiles.getUid();
 		if (!uid) {
-			rightPanelNote = 'You must be logged in to save files.';
+			rightPanelNote = 'Library is not ready yet.';
 			return;
 		}
 
@@ -678,20 +678,8 @@
 	}
 
 
-	async function logout() {
-		try {
-			// Sign out client-side Firebase (clears onAuthStateChanged -> userFiles store)
-			await auth.signOut();
-			// Clear server-side session cookie
-			await fetch('/api/session', { method: 'DELETE' });
-			goto('/login', { replaceState: true, invalidateAll: true });
-		} catch (err) {
-			console.error('Logout error:', err);
-		}
-	}
-
-	function openBillingModal() {
-		showBillingModal = true;
+	function openSettingsModal() {
+		showSettingsModal = true;
 		showUserMenu = false;
 	}
 </script>
@@ -729,59 +717,12 @@
 		</div>
 		<div class="flex-1 flex items-center justify-end gap-3">
 			<button
-				class="px-2 py-1.5 text-xs rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-				onclick={openBillingModal}
+				class="px-2 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+				onclick={openSettingsModal}
+				title="API keys and storage location"
 			>
-				💳 Billing
+				⚙️ Settings
 			</button>
-			<!-- User Menu -->
-			{#if $authStore.isLoggedIn && $authStore.user}
-				<div class="relative">
-					<button
-						class="flex items-center gap-2 text-sm text-gray-700 hover:text-gray-900"
-						onclick={() => showUserMenu = !showUserMenu}
-					>
-						{#if $authStore.user.photoURL}
-							<img
-								src={$authStore.user.photoURL}
-								alt="Avatar"
-								class="w-7 h-7 rounded-full"
-								referrerpolicy="no-referrer"
-							/>
-						{:else}
-							<div class="w-7 h-7 rounded-full bg-gray-300 flex items-center justify-center text-xs font-medium">
-								{($authStore.user.displayName || $authStore.user.email || '?')[0].toUpperCase()}
-							</div>
-						{/if}
-					</button>
-
-					{#if showUserMenu}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div
-							class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border py-1 z-50"
-							onmouseleave={() => showUserMenu = false}
-						>
-							<div class="px-3 py-2 border-b">
-								<p class="text-sm font-medium text-gray-900 truncate">{$authStore.user.displayName || 'User'}</p>
-								<p class="text-xs text-gray-500 truncate">{$authStore.user.email}</p>
-							</div>
-							<button
-								class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-								onclick={logout}
-							>
-								Sign out
-							</button>
-						</div>
-					{/if}
-				</div>
-			{:else}
-				<button
-					class="px-2 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-					onclick={() => goto('/login')}
-				>
-					Sign In
-				</button>
-			{/if}
 		</div>
 	</header>
 
@@ -901,27 +842,8 @@
 				</div>
 				<div class="p-3 flex-1 min-h-0 overflow-y-auto">
 					{#if homeCenterTab === 'home'}
-						{#if !$authStore.isLoggedIn}
-							<div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
-								<p class="text-sm font-semibold text-gray-900">Welcome to Sprite Magician</p>
-								<p class="text-xs text-gray-600 mt-1">
-									Sign in to access your projects, saved outputs, and workspace progress.
-								</p>
-								<div class="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2">
-									<p class="text-xs text-blue-700">Login information</p>
-									<p class="text-xs text-blue-600 mt-1">Use your existing Firebase account to continue.</p>
-									<button
-										class="mt-2 px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
-										onclick={() => goto('/login')}
-									>
-										Sign In / Create Account
-									</button>
-								</div>
-								<p class="text-xs text-gray-500 mt-3">
-									Sprite Magician is a unified 2D/3D creative workspace for generation, editing, and animation workflows.
-								</p>
-							</div>
-						{:else}
+						{#if false}
+{:else}
 							<div class="space-y-3">
 								<div class="rounded-lg border border-gray-200 p-3">
 									<p class="text-sm font-semibold text-gray-900">Your Current Projects</p>
@@ -959,10 +881,7 @@
 							</div>
 						{/if}
 					{:else}
-						<div class="rounded border border-gray-200 bg-gray-50 p-3">
-							<p class="text-xs font-medium text-gray-700">Settings Placeholder</p>
-							<p class="text-xs text-gray-500 mt-1">Under construction.</p>
-						</div>
+						<SettingsPanel />
 					{/if}
 				</div>
 			{:else if appMode === '2d'}
@@ -1077,26 +996,18 @@
 			{#if appMode === 'home'}
 				<div class="p-3 flex-1 min-h-0 overflow-y-auto space-y-3">
 					<div class="rounded-lg border border-gray-200 p-3">
-						<p class="text-xs font-semibold text-gray-800">Subscription Plans</p>
-						<div class="mt-2 space-y-2">
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Starter</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Pro</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Studio</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-						</div>
+						<p class="text-xs font-semibold text-gray-800">Getting started</p>
+						<ol class="mt-2 space-y-2 text-[11px] text-gray-600 list-decimal pl-4">
+							<li>Open <button class="text-blue-600 underline" onclick={openSettingsModal}>Settings</button> and paste your Replicate API token. Gemini and OpenAI keys are optional.</li>
+							<li>Switch to <button class="text-blue-600 underline" onclick={() => appMode = '2d'}>2D</button> to generate, edit and animate sprites.</li>
+							<li>Everything you save lands in your library folder on this computer. Open it from the Settings screen.</li>
+						</ol>
 					</div>
 					<div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-						<p class="text-xs font-semibold text-emerald-800">Wallet</p>
-						<p class="text-sm font-bold text-emerald-900 mt-1">Balance: $0.00</p>
-						<p class="text-[11px] text-emerald-700 mt-1">Subscription status placeholder.</p>
+						<p class="text-xs font-semibold text-emerald-800">Local &amp; open source</p>
+						<p class="text-[11px] text-emerald-700 mt-1">
+							No account, no cloud storage. You pay the AI providers directly with your own keys.
+						</p>
 					</div>
 				</div>
 			{:else if showDesignConversationsInCenter}
@@ -1125,79 +1036,31 @@
 	onSubmit={onUnifiedSaveSubmit}
 />
 
-{#if showBillingModal}
+{#if showSettingsModal}
 	<div
 		class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-		onclick={() => showBillingModal = false}
-		onkeydown={(e) => { if (e.key === 'Escape') showBillingModal = false; }}
+		onclick={() => showSettingsModal = false}
+		onkeydown={(e) => { if (e.key === 'Escape') showSettingsModal = false; }}
 		role="dialog"
 		aria-modal="true"
 		tabindex="0"
 	>
-		<div class="w-full max-w-2xl bg-white rounded-xl shadow-xl border p-4 md:p-5" onclick={(e) => e.stopPropagation()}>
+		<div class="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-xl border p-4 md:p-5" onclick={(e) => e.stopPropagation()}>
 			<div class="flex items-start justify-between gap-3">
 				<div>
-					<h2 class="text-base md:text-lg font-semibold text-gray-900">Billing & Usage</h2>
-					<p class="text-xs text-gray-500 mt-1">Recommended setup for generation-heavy workloads.</p>
+					<h2 class="text-base md:text-lg font-semibold text-gray-900">Settings</h2>
+					<p class="text-xs text-gray-500 mt-1">API keys and where your files are stored.</p>
 				</div>
 				<button
 					class="text-gray-500 hover:text-gray-800 text-xl leading-none"
-					onclick={() => showBillingModal = false}
-					aria-label="Close billing modal"
+					onclick={() => showSettingsModal = false}
+					aria-label="Close settings"
 				>
 					×
 				</button>
 			</div>
-
-			<div class="mt-4 space-y-3 text-sm text-gray-700">
-				<div class="rounded-lg border border-blue-100 bg-blue-50 p-3">
-					<p class="font-medium text-blue-900">Hybrid model (safest)</p>
-					<p class="text-xs text-blue-800 mt-1">
-						Monthly plans include a fixed credit bundle. Extra usage is prepaid via top-ups.
-						This avoids runaway costs if a user hammers generations.
-					</p>
-				</div>
-
-				<div class="grid md:grid-cols-3 gap-2">
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Starter</p>
-						<p class="text-[11px] text-gray-500 mt-1">Free trial credits only</p>
-					</div>
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Pro Monthly</p>
-						<p class="text-[11px] text-gray-500 mt-1">Bundled credits + lower top-up rate</p>
-					</div>
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Studio</p>
-						<p class="text-[11px] text-gray-500 mt-1">Shared pool + higher limits</p>
-					</div>
-				</div>
-
-				<div class="rounded-lg border p-3">
-					<p class="font-medium text-gray-900 text-xs">Guardrails to prevent abuse</p>
-					<ul class="mt-2 text-xs text-gray-600 list-disc pl-4 space-y-1">
-						<li>Hard monthly credit cap by plan.</li>
-						<li>Per-user rate limits and queue concurrency limits.</li>
-						<li>No auto-overages unless explicitly enabled.</li>
-						<li>Require top-up before more generations when credits hit zero.</li>
-					</ul>
-				</div>
-
-				<div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-					<p class="text-xs text-amber-900">
-						Implementation flow: Stripe subscription for monthly bundles, Stripe checkout for one-time credit packs,
-						then server-side credit checks before each generation endpoint.
-					</p>
-				</div>
-			</div>
-
-			<div class="mt-4 flex justify-end">
-				<button
-					class="px-3 py-1.5 text-xs rounded bg-gray-900 text-white hover:bg-black"
-					onclick={() => showBillingModal = false}
-				>
-					Close
-				</button>
+			<div class="mt-4">
+				<SettingsPanel />
 			</div>
 		</div>
 	</div>

@@ -1,8 +1,6 @@
 import { writable } from 'svelte/store';
 import { browser } from '$app/environment';
-import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '$lib/firebase/client.js';
-import { upsertJobLog, deleteJobLog } from '$lib/firebase/firestore.js';
+import { upsertJobLog, deleteJobLog } from '$lib/library/client.js';
 
 const JOB_QUEUE_KEY = 'spritemagician_job_queue_v1';
 const JOB_LOG_OPS_KEY = 'spritemagician_job_log_ops_v1';
@@ -121,7 +119,7 @@ const createJobQueueStore = () => {
 	async function flushPendingOps() {
 		if (!browser || isFlushingOps) return;
 		if (typeof navigator !== 'undefined' && !navigator.onLine) return;
-		const uid = auth.currentUser?.uid || null;
+		const uid = 'local';
 		if (!uid) return;
 
 		isFlushingOps = true;
@@ -148,9 +146,6 @@ const createJobQueueStore = () => {
 		set(hydrated);
 		persistQueue(hydrated);
 		window.addEventListener('online', () => {
-			void flushPendingOps();
-		});
-		onAuthStateChanged(auth, () => {
 			void flushPendingOps();
 		});
 	}

@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 import { getMasterStyle } from '$lib/server/styleAnchor.js';
 import { CHROMA_KEY_PROMPT_RULES } from '$lib/constants/chromaKey.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';

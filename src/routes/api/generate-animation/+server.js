@@ -17,9 +17,9 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { resolveForProvider } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -319,11 +319,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				message: 'Uploading image for SVD...'
 			});
 
-			let imageUrl = referenceImage;
-			if (referenceImage.startsWith('data:image/')) {
-				imageUrl = await uploadImageToFirebase(referenceImage, `svd-input-${jobId}`);
-				console.log('Uploaded input image:', imageUrl);
-			}
+			const imageUrl = await resolveForProvider(referenceImage);
 
 			setProgress(jobId, {
 				currentFrame: 0,

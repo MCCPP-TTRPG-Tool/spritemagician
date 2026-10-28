@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 
 function getRunpodConfig() {
 	const apiKey = env.RUNPOD_API_KEY || process.env.RUNPOD_API_KEY;

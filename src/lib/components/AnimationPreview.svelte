@@ -1,7 +1,7 @@
 <script>
 	import { projectStore, removeFrame } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import AnimationQueueBar from './AnimationQueueBar.svelte';
 	import { CHROMA_KEY_HEX } from '$lib/constants/chromaKey.js';
@@ -520,7 +520,7 @@ import { activeAssetStore } from '$lib/stores/activeAsset.js';
 		try {
 			const uid = userFiles.getUid();
 			if (!uid) {
-				saveFrameNote = 'You must be logged in to save files.';
+				saveFrameNote = 'Library is not ready yet.';
 				return;
 			}
 

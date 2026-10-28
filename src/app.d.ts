@@ -24,7 +24,7 @@ declare global {
 		name?: string;
 		updatedAt?: string;
 		updatedBy?: string;
-		source: 'firestore' | 'storage' | 'local';
+		source: 'user' | 'local';
 	}
 
 	// ── Generation Request / Response ────────────────
