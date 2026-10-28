@@ -70,8 +70,8 @@ each provider.
   db/                  Small JSON indexes (files.json, jobs.json, projects.json, ...)
 ```
 
-Files you drop into `library/` by hand are not indexed automatically yet. Use the upload
-button in the app, or delete `db/files.json` to rebuild the default folders.
+Files you drop into `library/` by hand are picked up automatically when the app regains focus,
+and any file you delete in Explorer disappears from the tree. Right-click a file → Show in folder.
 
 ## Project layout
 

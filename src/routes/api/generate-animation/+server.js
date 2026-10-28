@@ -20,6 +20,7 @@ import { json } from '@sveltejs/kit';
 import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { resolveForProvider } from '$lib/server/localFiles.js';
+import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -90,14 +91,10 @@ async function runReplicateWan27(jobId, firstFrame, lastFrame, prompt, frameCoun
 	});
 	if (!submit.ok) throw new Error(`Wan 2.7 API error: ${await submit.text()}`);
 	let result = await submit.json();
-	for (let attempt = 0; (result.status === 'starting' || result.status === 'processing') && attempt < 240; attempt++) {
-		await new Promise((resolve) => setTimeout(resolve, 2000));
-		const poll = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, { headers: { Authorization: `Token ${env.REPLICATE_API_TOKEN}` } });
-		if (!poll.ok) continue;
-		result = await poll.json();
-		setProgress(jobId, { currentFrame: Math.min(Math.floor(attempt / 4), frameCount - 1), totalFrames: frameCount, status: 'processing', message: `Wan 2.7: ${result.status}...` });
-	}
-	if (result.status !== 'succeeded') throw new Error(result.error || 'Wan 2.7 generation timed out');
+	result = await waitForPrediction(result, {
+		maxMs: 480_000,
+		onTick: (p, ms) => setProgress(jobId, { currentFrame: Math.min(Math.floor(ms / 8000), frameCount - 1), totalFrames: frameCount, status: 'processing', message: `Wan 2.7: ${p.status}... (${Math.round(ms / 1000)}s)` })
+	});
 	return result.output;
 }
 
@@ -126,7 +123,7 @@ function requireRawPrompt(value) {
 async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataUrl, prompt, frameCount, fps, flfOptions = {}) {
 	const REPLICATE_API_TOKEN = env.REPLICATE_API_TOKEN;
 	if (!REPLICATE_API_TOKEN) {
-		throw new Error('REPLICATE_API_TOKEN not set in .env');
+		throw new Error('Replicate is not configured. Add your REPLICATE_API_TOKEN in Settings.');
 	}
 
 	const rawPrompt = requireRawPrompt(prompt);
@@ -195,55 +192,22 @@ async function runReplicateInterpolation(jobId, startImageDataUrl, endImageDataU
 	// 3. Poll for completion
 	setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Replicate FLF: Queued...' });
 
-	let attempts = 0;
-	const pollInterval = 2000;
-	const maxAttempts = 150; // ~5 minutes
-
-	while (attempts < maxAttempts) {
-		await new Promise(r => setTimeout(r, pollInterval));
-		attempts++;
-
-		const statusRes = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-			headers: { 'Authorization': `Token ${REPLICATE_API_TOKEN}` }
-		});
-
-		if (!statusRes.ok) {
-			console.warn('[FLF] Status poll error:', statusRes.status);
-			continue;
-		}
-
-		const result = await statusRes.json();
-		const elapsed = Math.round(attempts * pollInterval / 1000);
-
-		setProgress(jobId, {
-			currentFrame: Math.min(Math.floor(attempts / 3), frameCount - 1),
+	const result = await waitForPrediction(prediction, {
+		maxMs: 300_000,
+		onTick: (p, ms) => setProgress(jobId, {
+			currentFrame: Math.min(Math.floor(ms / 6000), frameCount - 1),
 			totalFrames: frameCount,
 			status: 'processing',
-			message: `Replicate FLF: ${result.status}... (${elapsed}s)`
-		});
-
-		if (result.status === 'succeeded') {
-			const videoUrl = result.output;
-			if (!videoUrl) {
-				console.error('[FLF] No output in result:', JSON.stringify(result).substring(0, 500));
-				throw new Error('Replicate FLF returned no output');
-			}
-			console.log('[FLF] Completed, video URL:', videoUrl);
-			return videoUrl;
-		}
-
-		if (result.status === 'failed') {
-			const errMsg = result.error || 'Replicate FLF generation failed';
-			console.error('[FLF] Failed:', errMsg);
-			throw new Error(errMsg);
-		}
-
-		if (result.status === 'canceled') {
-			throw new Error('Replicate FLF prediction was canceled');
-		}
+			message: `Replicate FLF: ${p.status}... (${Math.round(ms / 1000)}s)`
+		})
+	});
+	const videoUrl = result.output;
+	if (!videoUrl) {
+		console.error('[FLF] No output in result:', JSON.stringify(result).substring(0, 500));
+		throw new Error('Replicate FLF returned no output');
 	}
-
-	throw new Error('Replicate FLF generation timed out after 5 minutes');
+	console.log('[FLF] Completed, video URL:', videoUrl);
+	return videoUrl;
 }
 
 
@@ -319,7 +283,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				message: 'Uploading image for SVD...'
 			});
 
-			const imageUrl = await resolveForProvider(referenceImage);
+			const imageUrl = await toReplicateInput(referenceImage);
 
 			setProgress(jobId, {
 				currentFrame: 0,
@@ -361,41 +325,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			const prediction = await response.json();
 			console.log('SVD prediction started:', prediction.id);
 
-			let videoUrl = null;
-			let attempts = 0;
-			const maxAttempts = 300;
-
-			while (attempts < maxAttempts) {
-				await new Promise(resolve => setTimeout(resolve, 2000));
-
-				const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-					headers: { 'Authorization': `Token ${env.REPLICATE_API_TOKEN}` }
-				});
-
-				const status = await statusResponse.json();
-
-				if (status.status === 'succeeded') {
-					videoUrl = status.output;
-					break;
-				}
-
-				if (status.status === 'failed') {
-					throw new Error(status.error || 'SVD generation failed');
-				}
-
-				setProgress(jobId, {
-					currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
+			const svdResult = await waitForPrediction(prediction, {
+				maxMs: 600_000,
+				onTick: (p, ms) => setProgress(jobId, {
+					currentFrame: Math.min(Math.floor(ms / 10000), frameCount - 1),
 					totalFrames: frameCount,
 					status: 'processing',
-					message: `SVD generating... (${attempts * 2}s)`
-				});
-
-				attempts++;
-			}
-
-			if (!videoUrl) {
-				throw new Error('SVD generation timed out');
-			}
+					message: `SVD generating... (${Math.round(ms / 1000)}s)`
+				})
+			});
+			const videoUrl = svdResult.output;
 
 			setProgress(jobId, {
 				currentFrame: frameCount,
@@ -523,40 +462,16 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 		const prediction = await response.json();
 		console.log(`${model.name} prediction started:`, prediction.id);
 		
-		let result = prediction;
-		let attempts = 0;
-		const pollInterval = model.speed === 'fast' ? 1500 : 2000;
-		const maxAttempts = model.speed === 'fast' ? 120 : 300;
-
-		while ((result.status === 'starting' || result.status === 'processing') && attempts < maxAttempts) {
-			await new Promise(resolve => setTimeout(resolve, pollInterval));
-			
-			const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
-				headers: {
-					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
-				}
-			});
-			
-			result = await statusResponse.json();
-			attempts++;
-
-			const elapsedSeconds = Math.round(attempts * pollInterval / 1000);
-			setProgress(jobId, {
-				currentFrame: Math.min(Math.floor(attempts / 5), frameCount - 1),
+		const result = await waitForPrediction(prediction, {
+			intervalMs: model.speed === 'fast' ? 1500 : 2000,
+			maxMs: model.speed === 'fast' ? 180_000 : 600_000,
+			onTick: (p, ms) => setProgress(jobId, {
+				currentFrame: Math.min(Math.floor(ms / 10000), frameCount - 1),
 				totalFrames: frameCount,
 				status: 'processing',
-				message: `${model.name}: ${result.status}... (${elapsedSeconds}s)`
-			});
-		}
-
-		if (result.status === 'failed') {
-			console.error(`${model.name} failed:`, result.error);
-			throw new Error(result.error || `${model.name} generation failed`);
-		}
-
-		if (result.status !== 'succeeded') {
-			throw new Error(`${model.name} generation timed out`);
-		}
+				message: `${model.name}: ${p.status}... (${Math.round(ms / 1000)}s)`
+			})
+		});
 
 		const videoUrl = result.output;
 		console.log(`${model.name} completed, video URL:`, videoUrl);
@@ -666,7 +581,7 @@ export async function POST({ request, locals }) {
 
 		// All modes require Replicate
 		if (!env.REPLICATE_API_TOKEN) {
-			return json({ error: 'Replicate API token not configured. Set REPLICATE_API_TOKEN in .env' }, { status: 500 });
+			return json({ error: 'Replicate is not configured. Add your REPLICATE_API_TOKEN in Settings.', code: 'MISSING_KEY', key: 'REPLICATE_API_TOKEN' }, { status: 412 });
 		}
 
 		const displayName = selectedModel.name;

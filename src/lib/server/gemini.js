@@ -19,7 +19,7 @@ export function getClient() {
 	if (!client) {
 		const apiKey = env.GEMINI_API_KEY;
 		if (!apiKey) {
-			throw new Error('GEMINI_API_KEY not set in environment');
+			throw new Error('Gemini is not configured. Add your GEMINI_API_KEY in Settings.');
 		}
 		client = new GoogleGenAI({ apiKey });
 	}

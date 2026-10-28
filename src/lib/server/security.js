@@ -5,6 +5,9 @@ function nowMs() {
 }
 
 export function enforceRateLimit({ uid, routeKey, maxRequests, windowMs }) {
+	// Single local user: never throttle. Kept so call sites need no change.
+	return { allowed: true, remaining: Number.MAX_SAFE_INTEGER, retryAfterSec: 0 };
+	// eslint-disable-next-line no-unreachable
 	const safeUid = String(uid || 'anonymous');
 	const safeRoute = String(routeKey || 'unknown');
 	const limit = Math.max(1, Number(maxRequests) || 1);

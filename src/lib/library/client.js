@@ -6,8 +6,9 @@
  * so call sites did not have to change.
  *
  * Change notifications: every mutation emits `libraryChanged`; the
- * userFiles store listens and refetches. A slow poll covers edits made
- * outside the app (e.g. dropping files into the folder).
+ * userFiles store listens and refetches. A slow poll (paused while the
+ * window is hidden) covers edits made outside the app, and a rescan runs
+ * when the window regains focus so files dropped into the folder appear.
  */
 import { browser } from '$app/environment';
 
@@ -24,28 +25,24 @@ function emitChange() {
 	}
 }
 
-async function call(action, payload = {}) {
-	const res = await fetch('/api/library', {
+async function post(endpoint, action, payload = {}) {
+	const res = await fetch(endpoint, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
 		body: JSON.stringify({ action, ...payload })
 	});
 	const data = await res.json().catch(() => ({}));
-	if (!res.ok) throw new Error(data.error || `Library ${action} failed`);
+	if (!res.ok) throw new Error(data.error || `${action} failed`);
+	return data;
+}
+
+async function call(action, payload) {
+	const data = await post('/api/library', action, payload);
 	emitChange();
 	return data;
 }
 
-async function jobsCall(action, payload = {}) {
-	const res = await fetch('/api/jobs', {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ action, ...payload })
-	});
-	const data = await res.json().catch(() => ({}));
-	if (!res.ok) throw new Error(data.error || `Jobs ${action} failed`);
-	return data;
-}
+const jobsCall = (action, payload) => post('/api/jobs', action, payload);
 
 // ═══════════════════════ FILE TREE ═══════════════════════
 
@@ -67,6 +64,7 @@ export async function upsertFileByName(_uid, parentId, name, url, fileType = 'im
 
 export async function getChildren(_uid, parentId = null) {
 	const res = await fetch(`/api/library?parentId=${encodeURIComponent(parentId ?? 'null')}`);
+	if (!res.ok) throw new Error(`Library request failed (${res.status})`);
 	const data = await res.json();
 	return data.items || [];
 }
@@ -79,13 +77,15 @@ export async function getAllItems() {
 
 /**
  * Pseudo real-time listener: fetch now, refetch on local changes and on a
- * slow poll. Returns an unsubscribe function.
+ * slow poll while the window is visible. Returns an unsubscribe function.
+ * On a failed fetch the last good list is kept and `onError` is called.
  */
-export function subscribeToChildren(_uid, parentId, callback, { pollMs = 4000 } = {}) {
+export function subscribeToChildren(_uid, parentId, callback, { pollMs = 5000, onError } = {}) {
 	if (!browser) { callback([]); return () => {}; }
 	let alive = true;
-	let lastJson = '';
+	let lastJson = null;
 	const refresh = async () => {
+		if (!alive) return;
 		try {
 			const items = await getChildren(null, parentId);
 			if (!alive) return;
@@ -95,13 +95,17 @@ export function subscribeToChildren(_uid, parentId, callback, { pollMs = 4000 } 
 				callback(items);
 			}
 		} catch (err) {
-			console.error('[library] subscribeToChildren error:', err);
-			if (alive) callback([]);
+			console.error('[library] refresh failed:', err);
+			onError?.(err);
 		}
+	};
+	const tick = () => {
+		if (typeof document !== 'undefined' && document.hidden) return;
+		refresh();
 	};
 	refresh();
 	const off = onLibraryChanged(refresh);
-	const timer = setInterval(refresh, pollMs);
+	const timer = setInterval(tick, pollMs);
 	return () => {
 		alive = false;
 		off();
@@ -141,6 +145,16 @@ export async function getItem(_uid, fileId) {
 
 export async function initializeDefaultFolders() {
 	await call('ensureDefaults');
+}
+
+/** Reconcile the index with files added or removed outside the app. */
+export async function rescanLibrary() {
+	return call('rescan');
+}
+
+/** Open the file or folder in Explorer / Finder. */
+export async function revealItem(_uid, fileId) {
+	await post('/api/library', 'reveal', { id: fileId });
 }
 
 export function notifyLibraryChanged() {

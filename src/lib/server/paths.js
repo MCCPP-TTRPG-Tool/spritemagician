@@ -43,18 +43,42 @@ export function getScratchDir() {
 	return dir;
 }
 
-/** Write JSON atomically (tmp file + rename). */
+/**
+ * Write JSON atomically (tmp file + rename). On Windows the rename can fail
+ * transiently while an antivirus or Explorer preview holds the file, so retry.
+ */
 export function writeJsonAtomic(filePath, value) {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
 	fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
-	fs.renameSync(tmp, filePath);
+	let lastErr;
+	for (let attempt = 0; attempt < 5; attempt += 1) {
+		try {
+			fs.renameSync(tmp, filePath);
+			return;
+		} catch (err) {
+			lastErr = err;
+			if (!['EPERM', 'EBUSY', 'EACCES'].includes(err.code)) break;
+			const until = Date.now() + 50 * (attempt + 1);
+			while (Date.now() < until) { /* short blocking backoff */ }
+		}
+	}
+	try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+	throw lastErr;
 }
 
+/**
+ * Read JSON. A corrupt file is moved aside as *.corrupt-<time> instead of
+ * being silently treated as empty, so an index is never wiped by accident.
+ */
 export function readJson(filePath, fallback = null) {
+	if (!fs.existsSync(filePath)) return fallback;
 	try {
 		return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-	} catch {
+	} catch (err) {
+		const backup = `${filePath}.corrupt-${Date.now()}`;
+		console.error(`[paths] ${filePath} is not valid JSON (${err.message}); moved to ${backup}`);
+		try { fs.renameSync(filePath, backup); } catch { /* ignore */ }
 		return fallback;
 	}
 }

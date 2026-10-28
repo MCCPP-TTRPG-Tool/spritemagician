@@ -7,6 +7,27 @@
  */
 import { json } from '@sveltejs/kit';
 import * as library from '$lib/server/library.js';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+/** Open Explorer / Finder / the file manager with the item selected. */
+function revealInFileManager(abs) {
+	const isDir = fs.existsSync(abs) && fs.statSync(abs).isDirectory();
+	let cmd;
+	let args;
+	if (process.platform === 'win32') {
+		cmd = 'explorer.exe';
+		args = isDir ? [abs] : [`/select,${abs}`];
+	} else if (process.platform === 'darwin') {
+		cmd = 'open';
+		args = isDir ? [abs] : ['-R', abs];
+	} else {
+		cmd = 'xdg-open';
+		args = [isDir ? abs : path.dirname(abs)];
+	}
+	spawn(cmd, args, { detached: true, stdio: 'ignore' }).unref();
+}
 
 function normId(v) {
 	if (v === null || v === undefined || v === '' || v === 'null') return null;
@@ -63,6 +84,14 @@ export async function POST({ request }) {
 			case 'ensureDefaults':
 				library.ensureDefaultFolders();
 				return json({ ok: true });
+			case 'rescan':
+				return json(library.rescanLibrary());
+			case 'reveal': {
+				const abs = library.absolutePathOf(String(body.id));
+				if (!abs) return json({ error: 'Not found' }, { status: 404 });
+				revealInFileManager(abs);
+				return json({ ok: true, path: abs });
+			}
 			default:
 				return json({ error: `Unknown action: ${action}` }, { status: 400 });
 		}

@@ -10,7 +10,8 @@
 		"start": "cross-env BODY_SIZE_LIMIT=512M node build",
 		"electron:dev": "npm run build && electron .",
 		"electron:build": "npm run build && electron-builder",
-		"prepare": "svelte-kit sync || echo \"\""
+		"prepare": "svelte-kit sync || echo \"\"",
+		"check": "svelte-kit sync && svelte-check"
 	},
 	"devDependencies": {
 		"@sveltejs/kit": "^2.50.1",
@@ -29,5 +30,8 @@
 	},
 	"description": "Local-first AI sprite and animation workstation",
 	"license": "MIT",
-	"main": "electron/main.cjs"
+	"main": "electron/main.cjs",
+	"engines": {
+		"node": ">=20.19"
+	}
 }

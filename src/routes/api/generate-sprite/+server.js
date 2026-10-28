@@ -197,12 +197,12 @@ function extractGeneratedImage(result) {
 async function generateImageByModel({ selectedModel, finalPrompt, referenceImage, useMasterStyleAnchor }) {
 	if (selectedModel === 'nano_banana') {
 		if (!env.GEMINI_API_KEY) {
-			throw new Error('Gemini API key not configured. Set GEMINI_API_KEY in .env');
+			throw new Error('Gemini is not configured. Add your GEMINI_API_KEY in Settings.');
 		}
 		return generateWithGeminiNanoBanana({ finalPrompt, referenceImage, useMasterStyleAnchor });
 	}
 	if (!env.OPENAI_API_KEY) {
-		throw new Error('OpenAI API key not configured. Set OPENAI_API_KEY in .env');
+		throw new Error('OpenAI is not configured. Add your OPENAI_API_KEY in Settings.');
 	}
 	if (selectedModel === 'gpt4') {
 		const refinedPrompt = await refineOpenAIPrompt(finalPrompt);
@@ -353,10 +353,10 @@ async function generateWithGeminiNanoBanana({ finalPrompt, referenceImage, useMa
 	});
 
 	const response = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`,
+		`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`,
 		{
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
 			body: JSON.stringify({
 				contents: [{ parts }],
 				generationConfig: {

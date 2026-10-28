@@ -6,7 +6,7 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isHttpUrl, normalizeBoundedInt } from '$lib/server/validation.js';
 import { isLocalUrl, fetchLocalOrRemote } from '$lib/server/localFiles.js';
 import {
@@ -19,16 +19,6 @@ import {
 
 // Maximum video size for base64 mode (10MB)
 const MAX_BASE64_SIZE = 10 * 1024 * 1024;
-const ALLOWED_DOMAINS = [
-	'firebasestorage.googleapis.com',
-	'storage.googleapis.com',
-	'replicate.delivery',
-	'pbxt.replicate.delivery',
-	'runpod.net',
-	'runpod.io',
-	'runpodusercontent.com',
-	'firebasestorage.app'
-];
 
 export async function POST({ request, locals }) {
 	let payloadBytes = 0;
@@ -92,9 +82,6 @@ export async function POST({ request, locals }) {
 			return json({ error: 'videoUrl must be an http(s) URL' }, { status: 400 });
 		}
 
-		if (!isLocalUrl(videoUrl) && !isAllowedUpstreamUrl(videoUrl, ALLOWED_DOMAINS)) {
-			return json({ error: 'Domain not allowed' }, { status: 403 });
-		}
 		
 		console.log(`[extract-frames] Fetching video: ${videoUrl.substring(0, 80)}...`);
 		

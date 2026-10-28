@@ -128,7 +128,7 @@ export async function POST({ request, locals }) {
 		const POSE_ENDPOINT_ID = env.POSE_ENDPOINT_ID;
 
 		if (!RUNPOD_API_KEY) {
-			return json({ error: 'RUNPOD_API_KEY not configured' }, { status: 500 });
+			return json({ error: 'Pose generation needs a self-hosted RunPod pose endpoint. Add RUNPOD_API_KEY and POSE_ENDPOINT_ID in Settings (advanced).', code: 'MISSING_KEY', key: 'RUNPOD_API_KEY' }, { status: 412 });
 		}
 		if (!POSE_ENDPOINT_ID) {
 			return json({ error: 'POSE_ENDPOINT_ID not configured. Deploy the pose handler to RunPod first.' }, { status: 500 });

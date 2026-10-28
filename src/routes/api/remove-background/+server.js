@@ -5,7 +5,7 @@
 
 import { json } from '@sveltejs/kit';
 import { env } from '$lib/server/env.js';
-import { resolveForProvider } from '$lib/server/localFiles.js';
+import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { validateImageArray } from '$lib/server/validation.js';
 import {
@@ -44,31 +44,7 @@ async function removeBackground(imageUrl) {
 
 	const prediction = await response.json();
 	
-	// Poll for completion
-	let result = prediction;
-	let attempts = 0;
-	const maxAttempts = 60;
-
-	while ((result.status === 'starting' || result.status === 'processing') && attempts < maxAttempts) {
-		await new Promise(resolve => setTimeout(resolve, 1000));
-		
-		const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
-			headers: {
-				'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
-			}
-		});
-		
-		result = await statusResponse.json();
-		attempts++;
-	}
-
-	if (result.status === 'failed') {
-		throw new Error(result.error || 'Background removal failed');
-	}
-
-	if (result.status !== 'succeeded') {
-		throw new Error('Background removal timed out');
-	}
+	const result = await waitForPrediction(prediction, { intervalMs: 1000, maxMs: 180_000 });
 
 	return result.output;
 }
@@ -139,14 +115,14 @@ export async function POST({ request, locals }) {
 		}
 
 		if (!env.REPLICATE_API_TOKEN) {
-			return json({ error: 'Replicate API token not configured' }, { status: 500 });
+			return json({ error: 'Replicate is not configured. Add your REPLICATE_API_TOKEN in Settings.', code: 'MISSING_KEY', key: 'REPLICATE_API_TOKEN' }, { status: 412 });
 		}
 
 		// Process images in parallel for speed
 		const processImage = async (image, index) => {
 			let imageUrl = image;
 			
-			imageUrl = await resolveForProvider(imageUrl);
+			imageUrl = await toReplicateInput(imageUrl);
 
 			try {
 				const transparentUrl = await removeBackground(imageUrl);

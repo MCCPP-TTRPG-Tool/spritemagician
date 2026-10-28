@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
 import { inlineLocalInputs } from '$lib/server/localFiles.js';
+import { toReplicateInput } from '$lib/server/replicate.js';
 import { env } from '$lib/server/env.js';
 
 const MODEL_VERSION = '15430b300f8c044e8f9e3567fd6daadf6d62e9bb0cee23fdb7969d3b26542f40';
@@ -28,8 +29,8 @@ export async function POST({ request }) {
 		}
 
 		const input = {
-			image: characterImage,
-			video: drivingVideo,
+			image: await toReplicateInput(characterImage),
+			video: await toReplicateInput(drivingVideo),
 			prompt: 'Transfer the performer motion to the character. Preserve the character identity, framing, clothing, and background.',
 			mode: 'std',
 			character_orientation: 'image',
@@ -60,7 +61,7 @@ export async function POST({ request }) {
 
 export async function GET({ url }) {
 	if (!env.REPLICATE_API_TOKEN) {
-		return json({ error: 'REPLICATE_API_TOKEN is missing.' }, { status: 500 });
+		return json({ error: 'Replicate is not configured. Add your REPLICATE_API_TOKEN in Settings.', code: 'MISSING_KEY', key: 'REPLICATE_API_TOKEN' }, { status: 412 });
 	}
 
 	const predictionId = url.searchParams.get('id') || '';

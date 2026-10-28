@@ -29,3 +29,10 @@ vite.config.ts.timestamp-*
 
 # Electron
 /dist
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor
+.cursor/

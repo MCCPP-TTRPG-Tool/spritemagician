@@ -1,21 +1,16 @@
 /**
- * GET /api/load-animation?url=<firebase-storage-url>
+ * GET /api/load-animation?url=<local or http(s) url>
  *
  * Proxy endpoint that fetches an .anim.json file from Firebase Storage
  * and returns its contents. This avoids CORS issues when loading
  * animation files from the client.
  */
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isHttpUrl } from '$lib/server/validation.js';
 import { isLocalUrl, fetchLocalOrRemote } from '$lib/server/localFiles.js';
 import { recordUsageEvent } from '$lib/server/requestTracking.js';
 
-const ALLOWED_STORAGE_DOMAINS = [
-	'storage.googleapis.com',
-	'firebasestorage.googleapis.com',
-	'firebasestorage.app'
-];
 
 export async function GET({ url, locals }) {
 	let requestBytes = 0;
@@ -45,10 +40,6 @@ export async function GET({ url, locals }) {
 		return json({ error: 'url must be an http(s) URL' }, { status: 400 });
 	}
 
-	// Only allow fetching from our Firebase Storage bucket
-	if (!isLocalUrl(animUrl) && !isAllowedUpstreamUrl(animUrl, ALLOWED_STORAGE_DOMAINS)) {
-		return json({ error: 'URL not allowed' }, { status: 403 });
-	}
 
 	try {
 		const res = await fetchLocalOrRemote(animUrl);

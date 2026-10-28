@@ -4,7 +4,7 @@
 
 import { json } from '@sveltejs/kit';
 import { env } from '$lib/server/env.js';
-import { resolveForProvider } from '$lib/server/localFiles.js';
+import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isImageInput, normalizeBoundedInt } from '$lib/server/validation.js';
 import {
@@ -80,10 +80,10 @@ export async function POST({ request, locals }) {
 		}
 
 		if (!env.REPLICATE_API_TOKEN) {
-			return json({ error: 'Replicate API token not configured' }, { status: 500 });
+			return json({ error: 'Replicate is not configured. Add your REPLICATE_API_TOKEN in Settings.', code: 'MISSING_KEY', key: 'REPLICATE_API_TOKEN' }, { status: 412 });
 		}
 
-		const imageUrl = await resolveForProvider(image);
+		const imageUrl = await toReplicateInput(image);
 
 		console.log('Upscaling image:', imageUrl);
 
@@ -112,30 +112,11 @@ export async function POST({ request, locals }) {
 
 		const prediction = await response.json();
 
-		// Poll for completion
-		let result = prediction;
-		let attempts = 0;
-		const maxAttempts = 60;
-
-		while ((result.status === 'starting' || result.status === 'processing') && attempts < maxAttempts) {
-			await new Promise(resolve => setTimeout(resolve, 1000));
-			
-			const statusResponse = await fetch(`https://api.replicate.com/v1/predictions/${result.id}`, {
-				headers: {
-					'Authorization': `Token ${env.REPLICATE_API_TOKEN}`
-				}
-			});
-			
-			result = await statusResponse.json();
-			attempts++;
-		}
-
-		if (result.status === 'failed') {
-			return json({ error: result.error || 'Upscale failed' }, { status: 500 });
-		}
-
-		if (result.status !== 'succeeded') {
-			return json({ error: 'Upscale timed out' }, { status: 500 });
+		let result;
+		try {
+			result = await waitForPrediction(prediction, { intervalMs: 1000, maxMs: 180_000 });
+		} catch (err) {
+			return json({ error: err.message || 'Upscale failed' }, { status: 500 });
 		}
 
 		const outputUrl = result.output;
