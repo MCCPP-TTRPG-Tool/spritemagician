@@ -6,8 +6,9 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isHttpUrl, normalizeBoundedInt } from '$lib/server/validation.js';
+import { isLocalUrl, fetchLocalOrRemote } from '$lib/server/localFiles.js';
 import {
 	beginIdempotentRequest,
 	completeIdempotentRequest,
@@ -18,16 +19,6 @@ import {
 
 // Maximum video size for base64 mode (10MB)
 const MAX_BASE64_SIZE = 10 * 1024 * 1024;
-const ALLOWED_DOMAINS = [
-	'firebasestorage.googleapis.com',
-	'storage.googleapis.com',
-	'replicate.delivery',
-	'pbxt.replicate.delivery',
-	'runpod.net',
-	'runpod.io',
-	'runpodusercontent.com',
-	'firebasestorage.app'
-];
 
 export async function POST({ request, locals }) {
 	let payloadBytes = 0;
@@ -87,18 +78,15 @@ export async function POST({ request, locals }) {
 		if (!videoUrl) {
 			return json({ error: 'videoUrl required' }, { status: 400 });
 		}
-		if (!isHttpUrl(videoUrl)) {
+		if (!isLocalUrl(videoUrl) && !isHttpUrl(videoUrl)) {
 			return json({ error: 'videoUrl must be an http(s) URL' }, { status: 400 });
 		}
 
-		if (!isAllowedUpstreamUrl(videoUrl, ALLOWED_DOMAINS)) {
-			return json({ error: 'Domain not allowed' }, { status: 403 });
-		}
 		
 		console.log(`[extract-frames] Fetching video: ${videoUrl.substring(0, 80)}...`);
 		
 		// Fetch video
-		const response = await fetch(videoUrl);
+		const response = await fetchLocalOrRemote(videoUrl);
 		if (!response.ok) {
 			throw new Error(`Failed to fetch video: ${response.status}`);
 		}

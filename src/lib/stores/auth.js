@@ -1,15 +1,19 @@
-import { writable } from 'svelte/store';
+import { readable } from 'svelte/store';
 
 /**
- * Auth store — holds the current user session info
- * Populated from server-side layout load (session cookie verification)
- * Updated client-side after login/logout
+ * Sprite Magician is a local, single-user app: there is no sign-in.
+ * This store is kept so existing components keep working; it always
+ * reports a logged-in local user.
  */
-export const authStore = writable({
-	/** @type {boolean} */
-	isLoggedIn: false,
-	/** @type {boolean} */
-	isLoading: true,
-	/** @type {{ uid: string, email: string, displayName: string, photoURL: string } | null} */
-	user: null
+export const LOCAL_USER = {
+	uid: 'local',
+	email: null,
+	displayName: 'Local user',
+	photoURL: null
+};
+
+export const authStore = readable({
+	isLoggedIn: true,
+	isLoading: false,
+	user: LOCAL_USER
 });

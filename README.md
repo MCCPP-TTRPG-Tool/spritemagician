@@ -1,73 +1,94 @@
 # Sprite Magician
 
-AI-powered sprite animation workflow tool for game development. Generate, edit, and export sprite animations with AI assistance.
+A local-first desktop app for generating, editing and animating game sprites with AI models.
+No account, no cloud database. Your sprites live in a folder on your own disk and you bring
+your own API keys.
 
 ## Features
 
-- **AI Frame Generation**: Generate animation frames sequentially using Replicate API
-  - Prompt-based: Upload first frame + text prompt
-  - Interpolation: Upload first and last frame for smooth transitions
-- **Frame Editing**: Drag-and-drop reordering, add/remove frames
-- **Animation Preview**: Play/pause controls with adjustable FPS
-- **Export Options**: 
-  - Individual PNG frames
-  - Grid-based sprite sheets (perfect for Godot)
-- **Project Management**: Save/load projects in browser or export as JSON
+- **Generate** sprites and character sheets from prompts and reference images
+- **Edit** with AI inpainting, background removal, upscaling and pixelation
+- **Animate** stills into frame sequences and sprite sheets, with GIF / MP4 / sprite-sheet export
+- **3D pipeline** (experimental): generate a model, place rig markers, export a Blender payload
+- **Local library**: a real folder tree on disk, visible in Explorer / Finder and in the app
 
-## Setup
+## Quick start (desktop app)
 
-1. **Install dependencies**:
+Download the installer for your OS from the Releases page, install, launch, then open
+**Settings** (top right) and paste your Replicate API token.
+
+Your data lives in `~/SpriteMagician` (your home folder) or wherever `SPRITEMAGICIAN_DATA_DIR` points.
+
+## Run from source
+
+Requires Node.js 20 or newer.
+
 ```bash
+git clone https://github.com/rustfan1987/spritemagician.git
+cd spritemagician
 npm install
-```
-
-2. **Configure APIs**:
-   - **Replicate API**: Get your API token from [Replicate](https://replicate.com/account/api-tokens)
-   - **Firebase**: Set up Firebase Storage for image hosting:
-     1. Go to [Firebase Console](https://console.firebase.google.com/)
-     2. Create a new project or use an existing one
-     3. Enable Storage and create a bucket
-     4. Go to Project Settings > Service Accounts
-     5. Generate a new private key (JSON file)
-     6. Extract the following from the JSON:
-        - `project_id`
-        - `client_email`
-        - `private_key`
-   
-   Create a `.env` file in the root directory:
-```
-REPLICATE_API_TOKEN=your_replicate_token_here
-FIREBASE_PROJECT_ID=your_firebase_project_id
-FIREBASE_CLIENT_EMAIL=your_service_account_email@project-id.iam.gserviceaccount.com
-FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here\n-----END PRIVATE KEY-----\n"
-```
-
-   **Note**: For `FIREBASE_PRIVATE_KEY`, copy the entire private key from the JSON file, including the `-----BEGIN PRIVATE KEY-----` and `-----END PRIVATE KEY-----` lines, and replace newlines with `\n`.
-
-3. **Run development server**:
-```bash
 npm run dev
 ```
 
-## Usage
+Open http://localhost:5173, click **Settings** and enter your keys.
+Data is stored in `~/SpriteMagician` in both modes.
 
-1. **Upload Frames**: Upload your first frame (and optionally last frame for interpolation)
-2. **Generate**: Choose generation mode (prompt or interpolation), set frame count and FPS
-3. **Edit**: Reorder frames by dragging, remove unwanted frames
-4. **Preview**: Test your animation with play/pause controls
-5. **Export**: Download individual frames or a complete sprite sheet
+Other scripts:
 
-## Technical Details
+| Command | What it does |
+| --- | --- |
+| `npm run build` | Production build of the SvelteKit app into `build/` |
+| `npm start` | Run the production build as a plain local web server |
+| `npm run electron:dev` | Build, then launch the Electron desktop window |
+| `npm run electron:build` | Build installers into `dist/` with electron-builder |
 
-- **Framework**: SvelteKit 5
-- **Styling**: Tailwind CSS
-- **AI Service**: Replicate (Stable Diffusion Image-to-Image)
-- **Image Hosting**: Firebase Storage (for temporary image URLs required by Replicate)
-- **Frame Size**: 300x300 pixels (configurable)
-- **Export Format**: PNG with transparent backgrounds
+## API keys
 
-## Notes
+| Key | Needed for |
+| --- | --- |
+| `REPLICATE_API_TOKEN` | **Required.** Sprite generation, upscaling, background removal, video models |
+| `GEMINI_API_KEY` | Optional. Design chat, character sheets, image edits |
+| `OPENAI_API_KEY` | Optional. Alternative image editor and prompt helpers |
+| `RUNPOD_API_KEY` + endpoint IDs | Optional, advanced. Only if you deploy the custom workers in `runpod/` |
 
-- The Replicate API integration uses sequential frame generation - each frame is generated from the previous one
-- For best results, use clear, well-defined sprites as your first frame
-- Frame generation may take 1-2 minutes depending on frame count and API load
+Keys entered in Settings are saved to `<data dir>/settings.json` on your machine. Environment
+variables (see `.env.example`) work as a fallback for terminal use. You are billed directly by
+each provider.
+
+## How data is stored
+
+```
+<data dir>/
+  settings.json        API keys and preferences
+  library/             Your asset tree (what you see in the app)
+    Characters/
+    Creatures/
+    ...
+    .projects/         Animation project frames
+    .animations/       Raw .anim.json files before they are filed
+    .thumbs/           Thumbnails
+  db/                  Small JSON indexes (files.json, jobs.json, projects.json, ...)
+```
+
+Files you drop into `library/` by hand are picked up automatically when the app regains focus,
+and any file you delete in Explorer disappears from the tree. Right-click a file → Show in folder.
+
+## Project layout
+
+```
+src/routes/            SvelteKit pages and /api endpoints
+src/lib/components/    UI panels (generation, edit, animation, file tree, settings, ...)
+src/lib/server/        Local storage (library.js, localFiles.js, db.js), settings, providers
+src/lib/library/       Client-side library API used by the UI
+electron/              Desktop shell (main.cjs)
+runpod/                Optional self-hosted GPU workers
+BlenderSpriteSheetTool/ Blender add-on and Godot importer for sprite sheets
+```
+
+## Contributing
+
+Issues and pull requests are welcome. Please do not commit API keys or service-account files.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

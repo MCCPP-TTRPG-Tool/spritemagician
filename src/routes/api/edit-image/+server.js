@@ -1,6 +1,7 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
 import { extractFirstImageDataUrl, extractFirstImageUrl } from '$lib/server/runpod.js';
 import { isHttpUrl } from '$lib/server/validation.js';
 import { getClient } from '$lib/server/gemini.js';
@@ -515,7 +516,7 @@ async function generateWithNanoBananaEdit({
 	imgHeight = 0
 }) {
 	if (!env.GEMINI_API_KEY) {
-		throw new Error('Gemini API key not configured. Set GEMINI_API_KEY in .env');
+		throw new Error('Gemini is not configured. Add your GEMINI_API_KEY in Settings.');
 	}
 	let mimeType = 'image/png';
 	let base64Data = '';
@@ -563,10 +564,10 @@ async function generateWithNanoBananaEdit({
 	const outputAspectRatio = computeAspectRatio(imgWidth, imgHeight);
 
 	const response = await fetch(
-		`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`,
+		`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`,
 		{
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', 'x-goog-api-key': env.GEMINI_API_KEY },
 			body: JSON.stringify({
 				contents: [
 					{
@@ -616,7 +617,7 @@ export async function POST({ request, locals }) {
 			promptSpec = null,
 			imgWidth,
 			imgHeight
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const selectedEditModel = normalizeEditModel(editModel);
 		const payload = {
 			image,

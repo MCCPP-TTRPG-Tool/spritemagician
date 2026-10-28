@@ -1,4 +1,5 @@
-﻿import { json } from '@sveltejs/kit';
+import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { getClient } from '$lib/server/gemini.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
@@ -74,7 +75,7 @@ export async function POST({ request, locals }) {
 			finalPrompt = '',
 			contentPreset = 'character',
 			stylePreset = 'default'
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const safeMode = mode === 'draft_prompt' ? 'draft_prompt' : 'chat';
 		const safeMessages = Array.isArray(messages) ? messages.slice(-50) : [];
 		const safeUserMessage = String(userMessage || '').slice(0, 4000);

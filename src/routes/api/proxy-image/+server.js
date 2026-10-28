@@ -6,8 +6,9 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isHttpUrl } from '$lib/server/validation.js';
+import { isLocalUrl, fetchLocalOrRemote } from '$lib/server/localFiles.js';
 import {
 	beginIdempotentRequest,
 	completeIdempotentRequest,
@@ -16,15 +17,6 @@ import {
 	recordUsageEvent
 } from '$lib/server/requestTracking.js';
 
-const ALLOWED_DOMAINS = [
-	'firebasestorage.googleapis.com',
-	'storage.googleapis.com',
-	'replicate.delivery',
-	'pbxt.replicate.delivery',
-	'runpod.net',
-	'runpod.io',
-	'runpodusercontent.com'
-];
 
 export async function POST({ request, locals }) {
 	let payloadBytes = 0;
@@ -82,16 +74,13 @@ export async function POST({ request, locals }) {
 		if (!url) {
 			return json({ error: 'URL required' }, { status: 400 });
 		}
-		if (!isHttpUrl(url)) {
+		if (!isLocalUrl(url) && !isHttpUrl(url)) {
 			return json({ error: 'url must be an http(s) URL' }, { status: 400 });
 		}
 
-		if (!isAllowedUpstreamUrl(url, ALLOWED_DOMAINS)) {
-			return json({ error: 'Domain not allowed' }, { status: 403 });
-		}
 
 		// Fetch the image
-		const response = await fetch(url);
+		const response = await fetchLocalOrRemote(url);
 		
 		if (!response.ok) {
 			return json({ error: `Failed to fetch image: ${response.status}` }, { status: 500 });

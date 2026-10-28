@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
+import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
@@ -88,10 +89,11 @@ CRITICAL RULES:
 
 At ${progressPercent}% through a "${prompt}" animation, the character should be in the ${phase}.`;
 
-					const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key=${env.GEMINI_API_KEY}`, {
+					const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent`, {
 						method: 'POST',
 						headers: {
-							'Content-Type': 'application/json'
+							'Content-Type': 'application/json',
+							'x-goog-api-key': env.GEMINI_API_KEY
 						},
 						body: JSON.stringify({
 							contents: [{
@@ -199,7 +201,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
-		const { firstFrame, lastFrame, prompt, frameCount, mode } = await request.json();
+		const { firstFrame, lastFrame, prompt, frameCount, mode } = inlineLocalInputs(await request.json());
 		const payload = { firstFrame, lastFrame, prompt, frameCount, mode };
 		payloadBytes = approxJsonBytes(payload);
 		idempotencyKey = request.headers.get('Idempotency-Key')?.trim() || null;
@@ -256,7 +258,7 @@ export async function POST({ request, locals }) {
 		}
 
 		if (!env.GEMINI_API_KEY) {
-			return json({ error: 'Gemini API key not configured. Set GEMINI_API_KEY in .env' }, { status: 500 });
+			return json({ error: 'Gemini is not configured. Add your GEMINI_API_KEY in Settings.', code: 'MISSING_KEY', key: 'GEMINI_API_KEY' }, { status: 412 });
 		}
 		setProgressOwner(jobId, locals.user.uid);
 

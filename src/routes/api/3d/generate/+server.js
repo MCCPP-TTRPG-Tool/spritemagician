@@ -1,5 +1,7 @@
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { isDataUrl, isHttpUrl, isLocalUrl } from '$lib/server/validation.js';
 import {
 	beginIdempotentRequest,
 	completeIdempotentRequest,
@@ -17,7 +19,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
-		const { inputType, prompt, referenceImageUrl } = await request.json();
+		const { inputType, prompt, referenceImageUrl } = inlineLocalInputs(await request.json());
 		const safeInputType = inputType === 'text' ? 'text' : 'image';
 		const safePrompt = String(prompt || '').trim().slice(0, 4000);
 		const safeReferenceImageUrl = String(referenceImageUrl || '').trim();
@@ -71,7 +73,7 @@ export async function POST({ request, locals }) {
 		if (!safePrompt && !safeReferenceImageUrl) {
 			return json({ error: 'Provide a prompt or reference image URL.' }, { status: 400 });
 		}
-		if (safeReferenceImageUrl && !isAllowedUpstreamUrl(safeReferenceImageUrl)) {
+		if (safeReferenceImageUrl && !isDataUrl(safeReferenceImageUrl) && !isHttpUrl(safeReferenceImageUrl)) {
 			return json({ error: 'Reference image URL domain not allowed.' }, { status: 400 });
 		}
 

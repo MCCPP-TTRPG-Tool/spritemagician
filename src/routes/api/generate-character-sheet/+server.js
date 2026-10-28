@@ -6,6 +6,7 @@
  */
 
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import {
 	generateWithCascade,
 	extractImage,
@@ -31,7 +32,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Authentication required' }, { status: 401 });
 		}
 
-		const { referenceImage, characterName } = await request.json();
+		const { referenceImage, characterName } = inlineLocalInputs(await request.json());
 		const safeCharacterName = String(characterName || '').trim().slice(0, 120);
 		const payload = {
 			referenceImage,

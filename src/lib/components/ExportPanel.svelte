@@ -4,9 +4,10 @@
 	import { generateGif } from '$lib/utils/gifEncoder.js';
 	import { generateMp4 } from '$lib/utils/mp4Encoder.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
+	import { buildGameSheet, packReadme } from '$lib/utils/gameExport.js';
 	
 	let project = $state({ frames: [], fps: 12 });
 	
@@ -28,6 +29,87 @@
 	let frameSize = $state(128);
 	let showFullSize = $state(false);
 	let previewFrameIndex = $state(0);
+
+	// Game-ready pack
+	let gameName = $state('sprite');
+	let gameTrim = $state(true);
+	let gamePadding = $state(1);
+	let gamePot = $state(true);
+	let gameLoop = $state(true);
+	let isBuildingPack = $state(false);
+	let gamePackNote = $state('');
+
+	function safeBaseName(name) {
+		return String(name || 'sprite').trim().replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'sprite';
+	}
+
+	function textToDataUrl(text, mime = 'application/json') {
+		return `data:${mime};base64,${btoa(unescape(encodeURIComponent(text)))}`;
+	}
+
+	async function buildPack() {
+		const name = safeBaseName(gameName);
+		const sheet = await buildGameSheet(project.frames, {
+			name, fps: project.fps || 12, trim: gameTrim, padding: Number(gamePadding) || 0, pot: gamePot, loop: gameLoop
+		});
+		return { name, sheet };
+	}
+
+	async function downloadGamePack() {
+		if (!project.frames.length) return;
+		isBuildingPack = true;
+		gamePackNote = '';
+		try {
+			const { name, sheet } = await buildPack();
+			downloadBlob(sheet.blob, `${name}.png`);
+			const files = [
+				[`${name}.json`, JSON.stringify(sheet.aseprite, null, 2), 'application/json'],
+				[`${name}.tres`, sheet.godot, 'text/plain'],
+				[`${name}.unity.json`, JSON.stringify(sheet.unity, null, 2), 'application/json'],
+				[`${name}.README.txt`, packReadme(name, sheet), 'text/plain']
+			];
+			for (const [fname, text, mime] of files) {
+				await new Promise((r) => setTimeout(r, 250));
+				downloadBlob(new Blob([text], { type: mime }), fname);
+			}
+			gamePackNote = `Downloaded ${name}.png + Aseprite/Godot/Unity metadata (${sheet.width}×${sheet.height}, ${sheet.frames.length} frames).`;
+		} catch (err) {
+			gamePackNote = err.message || 'Export failed';
+		} finally {
+			isBuildingPack = false;
+		}
+	}
+
+	async function saveGamePackToLibrary() {
+		if (!project.frames.length) return;
+		const folderId = saveFolderId || $activeAssetStore.folderId || $userFiles.currentFolderId || null;
+		isBuildingPack = true;
+		gamePackNote = '';
+		try {
+			const { name, sheet } = await buildPack();
+			const pngDataUrl = await new Promise((resolve) => {
+				const reader = new FileReader();
+				reader.onload = () => resolve(reader.result);
+				reader.readAsDataURL(sheet.blob);
+			});
+			const upload = await fetch('/api/upload-file', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ imageData: pngDataUrl, filename: `${name}.png`, folder: folderId })
+			});
+			const uploaded = await upload.json();
+			if (!upload.ok) throw new Error(uploaded.error || 'Upload failed');
+			await createFile('local', folderId, `${name}.png`, uploaded.url, 'image', { source: 'game-pack', frameCount: sheet.frames.length, cell: sheet.cell });
+			await createFile('local', folderId, `${name}.json`, textToDataUrl(JSON.stringify(sheet.aseprite, null, 2)), 'file', { source: 'game-pack' });
+			await createFile('local', folderId, `${name}.tres`, textToDataUrl(sheet.godot, 'text/plain'), 'file', { source: 'game-pack' });
+			await createFile('local', folderId, `${name}.unity.json`, textToDataUrl(JSON.stringify(sheet.unity, null, 2)), 'file', { source: 'game-pack' });
+			gamePackNote = `Saved ${name}.png + metadata to your library folder.`;
+		} catch (err) {
+			gamePackNote = err.message || 'Save failed';
+		} finally {
+			isBuildingPack = false;
+		}
+	}
 
 	$effect(() => {
 		const frameCount = project.frames.length;
@@ -394,6 +476,34 @@
 					<option value={512}>512px</option>
 				</select>
 			</div>
+		</div>
+
+		<!-- Game-ready pack -->
+		<div class="bg-emerald-50 border border-emerald-200 rounded p-2 space-y-2">
+			<div class="flex items-center justify-between">
+				<p class="text-xs font-semibold text-emerald-900">🎮 Game-ready pack</p>
+				<p class="text-[10px] text-emerald-700">Aseprite · Godot 4 · Unity</p>
+			</div>
+			<div class="grid grid-cols-2 gap-2 text-[11px]">
+				<label class="col-span-2">Name
+					<input type="text" bind:value={gameName} class="w-full px-2 py-1 border rounded text-xs" placeholder="hero_idle" />
+				</label>
+				<label class="flex items-center gap-1"><input type="checkbox" bind:checked={gameTrim} class="w-3 h-3" /> Trim common border</label>
+				<label class="flex items-center gap-1"><input type="checkbox" bind:checked={gamePot} class="w-3 h-3" /> Power-of-two sheet</label>
+				<label class="flex items-center gap-1"><input type="checkbox" bind:checked={gameLoop} class="w-3 h-3" /> Loop flag</label>
+				<label class="flex items-center gap-1">Padding
+					<input type="number" min="0" max="16" bind:value={gamePadding} class="w-12 px-1 py-0.5 border rounded text-[11px]" /> px
+				</label>
+			</div>
+			<div class="flex gap-2">
+				<button class="flex-1 px-2 py-1.5 text-xs rounded bg-emerald-600 text-white hover:bg-emerald-700 disabled:bg-gray-400" onclick={downloadGamePack} disabled={isBuildingPack || !project.frames.length}>
+					{isBuildingPack ? '⏳ Building…' : '⬇ Download pack'}
+				</button>
+				<button class="flex-1 px-2 py-1.5 text-xs rounded border border-emerald-600 text-emerald-800 hover:bg-emerald-100 disabled:text-gray-400" onclick={saveGamePackToLibrary} disabled={isBuildingPack || !project.frames.length}>
+					💾 Save to library
+				</button>
+			</div>
+			{#if gamePackNote}<p class="text-[10px] text-emerald-800">{gamePackNote}</p>{/if}
 		</div>
 
 		<!-- Live Animation Preview -->

@@ -1,4 +1,5 @@
 import { json } from '@sveltejs/kit';
+import { inlineLocalInputs } from '$lib/server/localFiles.js';
 import { createHash } from 'node:crypto';
 import {
 	loadWorkflowTemplate,
@@ -40,7 +41,7 @@ export async function POST({ request, locals }) {
 			seed = 0,
 			width = 1024,
 			height = 1024
-		} = await request.json();
+		} = inlineLocalInputs(await request.json());
 		const safeWidth = normalizeBoundedInt(width, 1024, 256, 2048);
 		const safeHeight = normalizeBoundedInt(height, 1024, 256, 2048);
 		const safePrompt = String(prompt || '').slice(0, 8000);

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { env } from '$env/dynamic/private';
+import { env } from '$lib/server/env.js';
+import { getStaticDir } from '$lib/server/resources.js';
 
 function getRunpodConfig() {
 	const apiKey = env.RUNPOD_API_KEY || process.env.RUNPOD_API_KEY;
@@ -111,7 +112,7 @@ export function resolveWorkflowTemplatePath(workflowPathOverride = '') {
 	const customPath =
 		env.RUNPOD_WORKFLOW_FILE ||
 		process.env.RUNPOD_WORKFLOW_FILE ||
-		'static/keyframe_sdxl_openpose_depth_ipadapter.json';
+		path.join(getStaticDir(), 'keyframe_sdxl_openpose_depth_ipadapter.json');
 	return path.isAbsolute(customPath) ? customPath : path.resolve(process.cwd(), customPath);
 }
 

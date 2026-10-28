@@ -8,8 +8,11 @@
 		deleteItem,
 		deleteFolderRecursive,
 		moveItem,
+		updateItem,
+		revealItem,
+		rescanLibrary,
 		getChildren
-	} from '$lib/firebase/firestore.js';
+	} from '$lib/library/client.js';
 	import { cleanupBackground } from '$lib/utils/backgroundCleanup.js';
 	import { addToQueue, resetInitialState } from '$lib/stores/animationQueue.js';
 	import FolderPicker from './FolderPicker.svelte';
@@ -527,10 +530,7 @@
 			
 			// Update the file in Firestore with the new URL (should be same URL, but update timestamp)
 			bgRemovalProgress = { status: 'processing', message: 'Updating file record...', progress: 90 };
-			const { updateDoc, doc, serverTimestamp } = await import('firebase/firestore');
-			const { db } = await import('$lib/firebase/client.js');
-			const fileRef = doc(db, 'users', fs.uid, 'files', item.id);
-			await updateDoc(fileRef, { url: newUrl, updatedAt: serverTimestamp() });
+			await updateItem(fs.uid, item.id, { url: newUrl });
 			
 			// Refresh the file tree
 			bgRemovalProgress = { status: 'processing', message: 'Refreshing...', progress: 95 };
@@ -836,6 +836,11 @@
 								class="absolute top-8 left-1 z-50 w-36 bg-white rounded-lg shadow-xl border py-1 text-[11px]"
 								onclick={(e) => e.stopPropagation()}
 							>
+								<button class="w-full text-left px-3 py-1.5 hover:bg-gray-50 text-gray-700 flex items-center gap-2"
+									onclick={() => { revealItem(fs.uid, item.id); menuItemId = null; }}>
+									📂 <span>Show in folder</span>
+								</button>
+								<div class="border-t my-0.5"></div>
 								{#if isAnimFile(item)}
 									<button class="w-full text-left px-3 py-1.5 hover:bg-green-50 text-gray-700 flex items-center gap-2"
 										onclick={() => loadAnimation(item)}>

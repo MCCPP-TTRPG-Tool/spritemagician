@@ -1,0 +1,31 @@
+appId: com.spritemagician.app
+productName: Sprite Magician
+directories:
+  output: dist
+  buildResources: electron/resources
+files:
+  - electron/**
+  - build/**
+  - package.json
+  - "!electron/resources/**"
+extraResources:
+  - from: static/Example images
+    to: example-images
+asar: true
+asarUnpack:
+  - build/**
+win:
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+mac:
+  target:
+    - dmg
+  category: public.app-category.graphics-design
+linux:
+  target:
+    - AppImage
+  category: Graphics

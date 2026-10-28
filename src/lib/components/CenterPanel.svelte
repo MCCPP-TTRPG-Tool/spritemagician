@@ -2,6 +2,7 @@
 	import FileTree from './FileTree.svelte';
 	import JobsPanel from './JobsPanel.svelte';
 	import FramesPanel from './FramesPanel.svelte';
+	import CharactersPanel from './CharactersPanel.svelte';
 	import FolderPicker from './FolderPicker.svelte';
 	import { browser } from '$app/environment';
 import { userFiles } from '$lib/stores/userFiles.js';
@@ -139,6 +140,15 @@ let generationSummaryText = $derived.by(() => {
 		>
 			🎞️ Frames
 		</button>
+		<button
+			class="flex-1 px-2 py-2.5 text-xs font-semibold tracking-wide transition-colors
+				{activeTab === 'characters'
+					? 'bg-amber-50 text-amber-700 border-b-2 border-amber-600'
+					: 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'}"
+			onclick={() => activeTab = 'characters'}
+		>
+			🧙 Characters
+		</button>
 	</div>
 
 	{#if $activeAssetStore.folderId}
@@ -177,6 +187,8 @@ let generationSummaryText = $derived.by(() => {
 			<JobsPanel />
 		{:else if activeTab === 'frames'}
 			<FramesPanel />
+		{:else if activeTab === 'characters'}
+			<CharactersPanel />
 		{/if}
 	</div>
 

@@ -7,7 +7,7 @@
 	import { setActiveAssetContext } from '$lib/stores/activeAsset.js';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import {
 		appendDesignMessage,
 		designStore,
@@ -714,7 +714,7 @@
 
 		const uid = userFiles.getUid();
 		if (!uid) {
-			uiNote = '\u26A0\uFE0F You must be logged in to save files.';
+			uiNote = '\u26A0\uFE0F Library is not ready yet.';
 			return;
 		}
 

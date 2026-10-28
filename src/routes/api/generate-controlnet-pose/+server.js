@@ -13,8 +13,8 @@
  */
 
 import { json } from '@sveltejs/kit';
-import { env } from '$env/dynamic/private';
-import { uploadImageToFirebase } from '$lib/utils/firebaseStorage.js';
+import { env } from '$lib/server/env.js';
+import { resolveForProvider } from '$lib/server/localFiles.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { isDataUrl, normalizeBoundedInt } from '$lib/server/validation.js';
 import {
@@ -128,7 +128,7 @@ export async function POST({ request, locals }) {
 		const POSE_ENDPOINT_ID = env.POSE_ENDPOINT_ID;
 
 		if (!RUNPOD_API_KEY) {
-			return json({ error: 'RUNPOD_API_KEY not configured' }, { status: 500 });
+			return json({ error: 'Pose generation needs a self-hosted RunPod pose endpoint. Add RUNPOD_API_KEY and POSE_ENDPOINT_ID in Settings (advanced).', code: 'MISSING_KEY', key: 'RUNPOD_API_KEY' }, { status: 412 });
 		}
 		if (!POSE_ENDPOINT_ID) {
 			return json({ error: 'POSE_ENDPOINT_ID not configured. Deploy the pose handler to RunPod first.' }, { status: 500 });
@@ -140,18 +140,12 @@ export async function POST({ request, locals }) {
 
 		// ── Upload images to Firebase for URLs ──
 		console.log('[Pose Gen] Uploading character image...');
-		const characterUrl = await uploadImageToFirebase(
-			characterImage,
-			`pose-character-${Date.now()}.png`
-		);
+		const characterUrl = await resolveForProvider(characterImage);
 
 		let poseReferenceUrl = null;
 		if (poseReference) {
 			console.log('[Pose Gen] Uploading pose reference...');
-			poseReferenceUrl = await uploadImageToFirebase(
-				poseReference,
-				`pose-reference-${Date.now()}.png`
-			);
+			poseReferenceUrl = await resolveForProvider(poseReference);
 		}
 
 		// ── Build prompt ──────────────────────────

@@ -1,5 +1,6 @@
 import { json } from '@sveltejs/kit';
-import { approxJsonBytes, enforceRateLimit, isAllowedUpstreamUrl } from '$lib/server/security.js';
+import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
+import { isDataUrl, isHttpUrl, isLocalUrl } from '$lib/server/validation.js';
 import {
 	beginIdempotentRequest,
 	completeIdempotentRequest,
@@ -67,7 +68,7 @@ export async function POST({ request, locals }) {
 		if (!safeModelUrl) {
 			return json({ error: 'Model URL is required for animation.' }, { status: 400 });
 		}
-		if (!isAllowedUpstreamUrl(safeModelUrl)) {
+		if (!isLocalUrl(safeModelUrl) && !isHttpUrl(safeModelUrl)) {
 			return json({ error: 'Model URL domain not allowed.' }, { status: 400 });
 		}
 		if (!safePreset) {

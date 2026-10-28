@@ -4,7 +4,7 @@
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile } from '$lib/library/client.js';
 	import FolderPicker from './FolderPicker.svelte';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
 
@@ -1135,7 +1135,7 @@ let sourceMetaText = $derived.by(() => {
 		try {
 			const uid = userFiles.getUid();
 			if (!uid) {
-				alert('You must be logged in to save files');
+				alert('Library is not ready yet');
 				return;
 			}
 

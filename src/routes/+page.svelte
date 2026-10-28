@@ -12,11 +12,10 @@
 	import ModelGeneration3DPanel from '$lib/components/ModelGeneration3DPanel.svelte';
 	import RigAnimation3DPanel from '$lib/components/RigAnimation3DPanel.svelte';
 	import { designStore } from '$lib/stores/design.js';
-	import { authStore } from '$lib/stores/auth.js';
-	import { auth } from '$lib/firebase/client.js';
+	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import { projectStore } from '$lib/stores/project.js';
 	import { userFiles } from '$lib/stores/userFiles.js';
-	import { createFile } from '$lib/firebase/firestore.js';
+	import { createFile, getAllItems } from '$lib/library/client.js';
 	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	
@@ -27,9 +26,11 @@
 	let homeCenterTab = $state('home'); // 'home' | 'settings'
 	let threeDLeftTab = $state('generate'); // 'generate' | 'rigging' | 'animation'
 	let threeDMiddleTab = $state('viewport'); // viewport-only for now
-	let showUserMenu = $state(false);
-	let showBillingModal = $state(false);
-	let showNewProjectModal = $state(false);
+	let showSettingsModal = $state(false);
+	let recentFiles = $state([]);
+	let replicateConfigured = $state(true);
+	let prefs = $state({});
+	let spentUsd = $state(0);
 	let showDesignConversationsInCenter = $state(false);
 	let isSavingStill = $state(false);
 	let rightPanelNote = $state('');
@@ -497,23 +498,47 @@
 		}
 	});
 
-	const homeProjectThumbnails = [
-		{ id: 'new-project', name: 'Create New Project', isCreateNew: true },
-		{ id: 'proj-1', name: 'Hero Sprite Pack', emoji: '🧙' },
-		{ id: 'proj-2', name: 'Boss Enemy Set', emoji: '🐉' },
-		{ id: 'proj-3', name: 'Town NPC Batch', emoji: '🧑' },
-		{ id: 'proj-4', name: 'Sci-Fi Props', emoji: '🚀' },
-		{ id: 'proj-5', name: 'Forest Creatures', emoji: '🌲' }
-	];
+	async function loadHome() {
+		try {
+			const items = await getAllItems();
+			recentFiles = items
+				.filter((i) => !i.isFolder && i.fileType !== 'file')
+				.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))
+				.slice(0, 12);
+		} catch { /* library not ready */ }
+		try {
+			const res = await fetch('/api/settings');
+			const data = await res.json();
+			const rep = data.keys?.find((k) => k.name === 'REPLICATE_API_TOKEN');
+			replicateConfigured = !!rep?.configured;
+			prefs = data.preferences || {};
+			if (appMode === '3d' && !prefs.show3D) appMode = 'home';
+			try {
+				const u = await (await fetch('/api/usage')).json();
+				spentUsd = Number(u.spentUsd) || 0;
+			} catch { /* ignore */ }
+			if (!replicateConfigured && !localStorage.getItem('spritemagician_settings_prompted')) {
+				localStorage.setItem('spritemagician_settings_prompted', '1');
+				showSettingsModal = true;
+			}
+		} catch { /* ignore */ }
+	}
+	onMount(() => {
+		loadHome();
+		window.addEventListener('smPreferencesChanged', (e) => { prefs = e.detail || {}; });
+		window.addEventListener('animationCompleted', loadHome);
+	});
+	$effect(() => {
+		if (!showSettingsModal) loadHome();
+	});
 
-	const homeProjectList = [
-		{ id: 'list-1', name: 'Hero Sprite Pack', emoji: '🧙' },
-		{ id: 'list-2', name: 'Boss Enemy Set', emoji: '🐉' },
-		{ id: 'list-3', name: 'Town NPC Batch', emoji: '🧑' },
-		{ id: 'list-4', name: 'Sci-Fi Props', emoji: '🚀' },
-		{ id: 'list-5', name: 'Forest Creatures', emoji: '🌲' },
-		{ id: 'list-6', name: 'Retro UI Kit', emoji: '🎮' }
-	];
+	function openRecentFile(item) {
+		appMode = '2d';
+		if (item.fileType === 'image') {
+			jobsPreviewImage = item.url;
+			jobsPreviewLabel = item.name;
+		}
+	}
 
 	let quickSaveFolderId = $derived.by(() => $userFiles?.currentFolderId || null);
 	let quickSaveFolderPath = $derived.by(() => {
@@ -616,7 +641,7 @@
 		}
 		const uid = userFiles.getUid();
 		if (!uid) {
-			rightPanelNote = 'You must be logged in to save files.';
+			rightPanelNote = 'Library is not ready yet.';
 			return;
 		}
 
@@ -678,21 +703,8 @@
 	}
 
 
-	async function logout() {
-		try {
-			// Sign out client-side Firebase (clears onAuthStateChanged -> userFiles store)
-			await auth.signOut();
-			// Clear server-side session cookie
-			await fetch('/api/session', { method: 'DELETE' });
-			goto('/login', { replaceState: true, invalidateAll: true });
-		} catch (err) {
-			console.error('Logout error:', err);
-		}
-	}
-
-	function openBillingModal() {
-		showBillingModal = true;
-		showUserMenu = false;
+	function openSettingsModal() {
+		showSettingsModal = true;
 	}
 </script>
 
@@ -715,7 +727,7 @@
 				2D
 			</button>
 			<button
-				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === '3d' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'}"
+				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === '3d' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'} {prefs.show3D ? '' : 'hidden'}"
 				onclick={() => appMode = '3d'}
 			>
 				3D
@@ -729,59 +741,12 @@
 		</div>
 		<div class="flex-1 flex items-center justify-end gap-3">
 			<button
-				class="px-2 py-1.5 text-xs rounded border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
-				onclick={openBillingModal}
+				class="px-2 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+				onclick={openSettingsModal}
+				title="API keys and storage location"
 			>
-				💳 Billing
+				⚙️ Settings{#if spentUsd > 0}<span class="ml-1 text-[10px] text-gray-500" title="Estimated spend this period">≈${spentUsd.toFixed(2)}</span>{/if}{#if !replicateConfigured}<span class="ml-1 inline-block w-2 h-2 rounded-full bg-amber-500 align-middle" title="No Replicate token yet"></span>{/if}
 			</button>
-			<!-- User Menu -->
-			{#if $authStore.isLoggedIn && $authStore.user}
-				<div class="relative">
-					<button
-						class="flex items-center gap-2 text-sm text-gray-700 hover:text-gray-900"
-						onclick={() => showUserMenu = !showUserMenu}
-					>
-						{#if $authStore.user.photoURL}
-							<img
-								src={$authStore.user.photoURL}
-								alt="Avatar"
-								class="w-7 h-7 rounded-full"
-								referrerpolicy="no-referrer"
-							/>
-						{:else}
-							<div class="w-7 h-7 rounded-full bg-gray-300 flex items-center justify-center text-xs font-medium">
-								{($authStore.user.displayName || $authStore.user.email || '?')[0].toUpperCase()}
-							</div>
-						{/if}
-					</button>
-
-					{#if showUserMenu}
-						<!-- svelte-ignore a11y_no_static_element_interactions -->
-						<div
-							class="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border py-1 z-50"
-							onmouseleave={() => showUserMenu = false}
-						>
-							<div class="px-3 py-2 border-b">
-								<p class="text-sm font-medium text-gray-900 truncate">{$authStore.user.displayName || 'User'}</p>
-								<p class="text-xs text-gray-500 truncate">{$authStore.user.email}</p>
-							</div>
-							<button
-								class="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50"
-								onclick={logout}
-							>
-								Sign out
-							</button>
-						</div>
-					{/if}
-				</div>
-			{:else}
-				<button
-					class="px-2 py-1.5 text-xs rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
-					onclick={() => goto('/login')}
-				>
-					Sign In
-				</button>
-			{/if}
 		</div>
 	</header>
 
@@ -805,14 +770,34 @@
 				</div>
 				<div class="p-3 flex-1 min-h-0 overflow-y-auto">
 					{#if homeLeftTab === 'docs'}
-						<div class="rounded border border-gray-200 bg-gray-50 p-3">
-							<p class="text-xs font-medium text-gray-700">Docs Placeholder</p>
-							<p class="text-xs text-gray-500 mt-1">Documentation links will be added in a later phase.</p>
+						<div class="space-y-2 text-xs text-gray-700">
+							<a class="block rounded border border-gray-200 bg-gray-50 p-3 hover:bg-gray-100" href="https://github.com/rustfan1987/spritemagician#readme" target="_blank" rel="noreferrer">
+								<p class="font-medium">README &amp; setup</p>
+								<p class="text-[11px] text-gray-500 mt-1">Installing, API keys, where files are stored.</p>
+							</a>
+							<a class="block rounded border border-gray-200 bg-gray-50 p-3 hover:bg-gray-100" href="https://github.com/rustfan1987/spritemagician/issues" target="_blank" rel="noreferrer">
+								<p class="font-medium">Report a bug / request a feature</p>
+								<p class="text-[11px] text-gray-500 mt-1">GitHub issues for this project.</p>
+							</a>
+							<a class="block rounded border border-gray-200 bg-gray-50 p-3 hover:bg-gray-100" href="https://replicate.com/account/api-tokens" target="_blank" rel="noreferrer">
+								<p class="font-medium">Get a Replicate token</p>
+								<p class="text-[11px] text-gray-500 mt-1">Required for generation. Billed per run by Replicate.</p>
+							</a>
 						</div>
 					{:else}
-						<div class="rounded border border-gray-200 bg-gray-50 p-3">
-							<p class="text-xs font-medium text-gray-700">Tutorials Placeholder</p>
-							<p class="text-xs text-gray-500 mt-1">Tutorial links and onboarding flows will be added in a later phase.</p>
+						<div class="space-y-2 text-xs text-gray-700">
+							<div class="rounded border border-gray-200 bg-gray-50 p-3">
+								<p class="font-medium">1. Make a character</p>
+								<p class="text-[11px] text-gray-500 mt-1">2D → Design: describe the character or drop a reference image, then save it into a folder.</p>
+							</div>
+							<div class="rounded border border-gray-200 bg-gray-50 p-3">
+								<p class="font-medium">2. Clean it up</p>
+								<p class="text-[11px] text-gray-500 mt-1">Right-click the file → Remove Background, or open Edit for upscaling and pixelation.</p>
+							</div>
+							<div class="rounded border border-gray-200 bg-gray-50 p-3">
+								<p class="font-medium">3. Animate and export</p>
+								<p class="text-[11px] text-gray-500 mt-1">Animate turns a still into a loop; Export writes a sprite sheet, GIF or MP4 into your library folder.</p>
+							</div>
 						</div>
 					{/if}
 				</div>
@@ -901,68 +886,43 @@
 				</div>
 				<div class="p-3 flex-1 min-h-0 overflow-y-auto">
 					{#if homeCenterTab === 'home'}
-						{#if !$authStore.isLoggedIn}
-							<div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
-								<p class="text-sm font-semibold text-gray-900">Welcome to Sprite Magician</p>
-								<p class="text-xs text-gray-600 mt-1">
-									Sign in to access your projects, saved outputs, and workspace progress.
-								</p>
-								<div class="mt-3 rounded border border-blue-200 bg-blue-50 px-3 py-2">
-									<p class="text-xs text-blue-700">Login information</p>
-									<p class="text-xs text-blue-600 mt-1">Use your existing Firebase account to continue.</p>
-									<button
-										class="mt-2 px-2 py-1 text-xs rounded bg-blue-600 text-white hover:bg-blue-700"
-										onclick={() => goto('/login')}
-									>
-										Sign In / Create Account
-									</button>
+						<div class="space-y-3">
+							{#if !replicateConfigured}
+								<div class="rounded-lg border border-amber-300 bg-amber-50 p-3 flex items-center justify-between gap-3">
+									<div>
+										<p class="text-sm font-semibold text-amber-900">Add your Replicate API token to start generating</p>
+										<p class="text-[11px] text-amber-800 mt-1">Everything else works without it, but generation, upscaling and background removal need Replicate.</p>
+									</div>
+									<button class="px-3 py-1.5 text-xs rounded bg-amber-600 text-white hover:bg-amber-700 whitespace-nowrap" onclick={openSettingsModal}>Open Settings</button>
 								</div>
-								<p class="text-xs text-gray-500 mt-3">
-									Sprite Magician is a unified 2D/3D creative workspace for generation, editing, and animation workflows.
-								</p>
-							</div>
-						{:else}
-							<div class="space-y-3">
-								<div class="rounded-lg border border-gray-200 p-3">
-									<p class="text-sm font-semibold text-gray-900">Your Current Projects</p>
-									<div class="mt-3 grid grid-cols-2 md:grid-cols-3 gap-2">
-										{#each homeProjectThumbnails as project}
-											{#if project.isCreateNew}
-												<button
-													class="rounded border-2 border-dashed border-blue-300 bg-blue-50 p-2 text-left hover:bg-blue-100 transition-colors"
-													onclick={() => showNewProjectModal = true}
-												>
-													<div class="h-16 rounded bg-white/70 flex items-center justify-center text-xl">➕</div>
-													<p class="text-[11px] text-blue-700 mt-2 font-medium">{project.name}</p>
-												</button>
-											{:else}
-												<div class="rounded border border-gray-200 bg-gray-50 p-2">
-													<div class="h-16 rounded bg-white flex items-center justify-center text-xl">{project.emoji}</div>
-													<p class="text-[11px] text-gray-700 mt-2 font-medium truncate">{project.name}</p>
+							{/if}
+							<div class="rounded-lg border border-gray-200 p-3">
+								<div class="flex items-center justify-between">
+									<p class="text-sm font-semibold text-gray-900">Recent files</p>
+									<button class="text-[11px] text-blue-600 hover:underline" onclick={() => appMode = '2d'}>Open library →</button>
+								</div>
+								{#if recentFiles.length === 0}
+									<p class="text-xs text-gray-500 mt-2">Nothing yet. Generate a sprite in 2D mode or drop images into your library folder.</p>
+								{:else}
+									<div class="mt-3 grid grid-cols-3 md:grid-cols-4 gap-2">
+										{#each recentFiles as item (item.id)}
+											<button class="rounded border border-gray-200 bg-gray-50 p-1.5 text-left hover:bg-gray-100" onclick={() => openRecentFile(item)} title={item.name}>
+												<div class="h-16 rounded bg-white flex items-center justify-center overflow-hidden">
+													{#if item.thumbnailUrl || item.fileType === 'image'}
+														<img src={item.thumbnailUrl || item.url} alt={item.name} class="max-h-full max-w-full object-contain" loading="lazy" />
+													{:else}
+														<span class="text-xl">{item.fileType === 'animation' ? '🎬' : item.fileType === 'video' ? '🎥' : '📄'}</span>
+													{/if}
 												</div>
-											{/if}
+												<p class="text-[10px] text-gray-700 mt-1 truncate">{item.name}</p>
+											</button>
 										{/each}
 									</div>
-								</div>
-								<div class="rounded-lg border border-gray-200 p-3">
-									<p class="text-xs font-semibold text-gray-800">Project List</p>
-									<div class="mt-2 grid grid-cols-2 md:grid-cols-3 gap-2">
-										{#each homeProjectList as project}
-											<div class="rounded border border-gray-200 bg-gray-50 p-2 text-center">
-												<div class="text-lg">{project.emoji}</div>
-												<p class="text-[11px] text-gray-700 mt-1 truncate">{project.name}</p>
-											</div>
-										{/each}
-									</div>
-									<p class="text-[10px] text-gray-500 mt-2">Asset/file-system integration placeholder for later refactor.</p>
-								</div>
+								{/if}
 							</div>
-						{/if}
-					{:else}
-						<div class="rounded border border-gray-200 bg-gray-50 p-3">
-							<p class="text-xs font-medium text-gray-700">Settings Placeholder</p>
-							<p class="text-xs text-gray-500 mt-1">Under construction.</p>
 						</div>
+					{:else}
+						<SettingsPanel />
 					{/if}
 				</div>
 			{:else if appMode === '2d'}
@@ -1077,26 +1037,18 @@
 			{#if appMode === 'home'}
 				<div class="p-3 flex-1 min-h-0 overflow-y-auto space-y-3">
 					<div class="rounded-lg border border-gray-200 p-3">
-						<p class="text-xs font-semibold text-gray-800">Subscription Plans</p>
-						<div class="mt-2 space-y-2">
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Starter</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Pro</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-							<div class="rounded border border-gray-200 bg-gray-50 p-2">
-								<p class="text-xs font-medium text-gray-700">Studio</p>
-								<p class="text-[11px] text-gray-500">Placeholder plan details</p>
-							</div>
-						</div>
+						<p class="text-xs font-semibold text-gray-800">Getting started</p>
+						<ol class="mt-2 space-y-2 text-[11px] text-gray-600 list-decimal pl-4">
+							<li>Open <button class="text-blue-600 underline" onclick={openSettingsModal}>Settings</button> and paste your Replicate API token. Gemini and OpenAI keys are optional.</li>
+							<li>Switch to <button class="text-blue-600 underline" onclick={() => appMode = '2d'}>2D</button> to generate, edit and animate sprites.</li>
+							<li>Everything you save lands in your library folder on this computer. Open it from the Settings screen.</li>
+						</ol>
 					</div>
 					<div class="rounded-lg border border-emerald-200 bg-emerald-50 p-3">
-						<p class="text-xs font-semibold text-emerald-800">Wallet</p>
-						<p class="text-sm font-bold text-emerald-900 mt-1">Balance: $0.00</p>
-						<p class="text-[11px] text-emerald-700 mt-1">Subscription status placeholder.</p>
+						<p class="text-xs font-semibold text-emerald-800">Local &amp; open source</p>
+						<p class="text-[11px] text-emerald-700 mt-1">
+							No account, no cloud storage. You pay the AI providers directly with your own keys.
+						</p>
 					</div>
 				</div>
 			{:else if showDesignConversationsInCenter}
@@ -1125,123 +1077,36 @@
 	onSubmit={onUnifiedSaveSubmit}
 />
 
-{#if showBillingModal}
+{#if showSettingsModal}
 	<div
 		class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-		onclick={() => showBillingModal = false}
-		onkeydown={(e) => { if (e.key === 'Escape') showBillingModal = false; }}
+		onclick={() => showSettingsModal = false}
+		onkeydown={(e) => { if (e.key === 'Escape') showSettingsModal = false; }}
 		role="dialog"
 		aria-modal="true"
 		tabindex="0"
 	>
-		<div class="w-full max-w-2xl bg-white rounded-xl shadow-xl border p-4 md:p-5" onclick={(e) => e.stopPropagation()}>
+		<div class="w-full max-w-2xl max-h-[90vh] overflow-y-auto bg-white rounded-xl shadow-xl border p-4 md:p-5" onclick={(e) => e.stopPropagation()}>
 			<div class="flex items-start justify-between gap-3">
 				<div>
-					<h2 class="text-base md:text-lg font-semibold text-gray-900">Billing & Usage</h2>
-					<p class="text-xs text-gray-500 mt-1">Recommended setup for generation-heavy workloads.</p>
+					<h2 class="text-base md:text-lg font-semibold text-gray-900">Settings</h2>
+					<p class="text-xs text-gray-500 mt-1">API keys and where your files are stored.</p>
 				</div>
 				<button
 					class="text-gray-500 hover:text-gray-800 text-xl leading-none"
-					onclick={() => showBillingModal = false}
-					aria-label="Close billing modal"
+					onclick={() => showSettingsModal = false}
+					aria-label="Close settings"
 				>
 					×
 				</button>
 			</div>
-
-			<div class="mt-4 space-y-3 text-sm text-gray-700">
-				<div class="rounded-lg border border-blue-100 bg-blue-50 p-3">
-					<p class="font-medium text-blue-900">Hybrid model (safest)</p>
-					<p class="text-xs text-blue-800 mt-1">
-						Monthly plans include a fixed credit bundle. Extra usage is prepaid via top-ups.
-						This avoids runaway costs if a user hammers generations.
-					</p>
-				</div>
-
-				<div class="grid md:grid-cols-3 gap-2">
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Starter</p>
-						<p class="text-[11px] text-gray-500 mt-1">Free trial credits only</p>
-					</div>
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Pro Monthly</p>
-						<p class="text-[11px] text-gray-500 mt-1">Bundled credits + lower top-up rate</p>
-					</div>
-					<div class="rounded-lg border p-3">
-						<p class="text-xs font-semibold text-gray-800">Studio</p>
-						<p class="text-[11px] text-gray-500 mt-1">Shared pool + higher limits</p>
-					</div>
-				</div>
-
-				<div class="rounded-lg border p-3">
-					<p class="font-medium text-gray-900 text-xs">Guardrails to prevent abuse</p>
-					<ul class="mt-2 text-xs text-gray-600 list-disc pl-4 space-y-1">
-						<li>Hard monthly credit cap by plan.</li>
-						<li>Per-user rate limits and queue concurrency limits.</li>
-						<li>No auto-overages unless explicitly enabled.</li>
-						<li>Require top-up before more generations when credits hit zero.</li>
-					</ul>
-				</div>
-
-				<div class="rounded-lg border border-amber-200 bg-amber-50 p-3">
-					<p class="text-xs text-amber-900">
-						Implementation flow: Stripe subscription for monthly bundles, Stripe checkout for one-time credit packs,
-						then server-side credit checks before each generation endpoint.
-					</p>
-				</div>
-			</div>
-
-			<div class="mt-4 flex justify-end">
-				<button
-					class="px-3 py-1.5 text-xs rounded bg-gray-900 text-white hover:bg-black"
-					onclick={() => showBillingModal = false}
-				>
-					Close
-				</button>
+			<div class="mt-4">
+				<SettingsPanel />
 			</div>
 		</div>
 	</div>
 {/if}
 
-{#if showNewProjectModal}
-	<div
-		class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4"
-		onclick={() => showNewProjectModal = false}
-		onkeydown={(e) => { if (e.key === 'Escape') showNewProjectModal = false; }}
-		role="dialog"
-		aria-modal="true"
-		tabindex="0"
-	>
-		<div class="w-full max-w-md bg-white rounded-xl shadow-xl border p-4" onclick={(e) => e.stopPropagation()}>
-			<div class="flex items-start justify-between gap-3">
-				<div>
-					<h2 class="text-base font-semibold text-gray-900">Create New Project</h2>
-					<p class="text-xs text-gray-500 mt-1">Project creation flow placeholder.</p>
-				</div>
-				<button
-					class="text-gray-500 hover:text-gray-800 text-xl leading-none"
-					onclick={() => showNewProjectModal = false}
-					aria-label="Close new project modal"
-				>
-					×
-				</button>
-			</div>
-			<div class="mt-4 rounded border border-gray-200 bg-gray-50 p-3">
-				<p class="text-xs text-gray-600">
-					This modal will be connected to the project creation workflow in a later phase.
-				</p>
-			</div>
-			<div class="mt-4 flex justify-end">
-				<button
-					class="px-3 py-1.5 text-xs rounded bg-gray-900 text-white hover:bg-black"
-					onclick={() => showNewProjectModal = false}
-				>
-					Close
-				</button>
-			</div>
-		</div>
-	</div>
-{/if}
 
 <style>
 	.mobile-panels {

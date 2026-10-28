@@ -1,5 +1,5 @@
 import { json } from '@sveltejs/kit';
-import { getAdminDb } from '$lib/firebase/admin.js';
+import * as db from '$lib/server/db.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import { buildBlenderRigPayload } from '$lib/server/blenderRigPayload.js';
 import {
@@ -129,9 +129,7 @@ export async function POST({ request, locals }) {
 			return json({ error: 'Place at least 8 rig markers before submitting.' }, { status: 400 });
 		}
 
-		const db = getAdminDb();
-		const rigJobRef = db.collection('users').doc(locals.user.uid).collection('rig_jobs').doc();
-		const rigJobId = rigJobRef.id;
+		const rigJobId = db.newId();
 		const blenderPayload = buildBlenderRigPayload({
 			jobId: rigJobId,
 			modelUrl: safeModelUrl,
@@ -139,7 +137,7 @@ export async function POST({ request, locals }) {
 			options: safeRigSpec?.options || {},
 			preflight: modelPreflight && typeof modelPreflight === 'object' ? modelPreflight : null
 		});
-		await rigJobRef.set({
+		db.setDoc('rig_jobs', rigJobId, {
 			jobId: rigJobId,
 			type: 'rig_from_markers',
 			status: 'queued',
@@ -156,8 +154,7 @@ export async function POST({ request, locals }) {
 			blenderPayload,
 			progress: 0,
 			message: 'Queued with Blender-ready rig payload.',
-			createdAt: new Date(),
-			updatedAt: new Date()
+			createdAt: new Date().toISOString()
 		});
 
 		const responseBody = {

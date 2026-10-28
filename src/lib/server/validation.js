@@ -12,8 +12,12 @@ export function isDataUrl(value) {
 	return typeof value === 'string' && value.startsWith('data:');
 }
 
+export function isLocalUrl(value) {
+	return typeof value === 'string' && value.startsWith('/local/');
+}
+
 export function isImageInput(value) {
-	return isDataUrl(value) || isHttpUrl(value);
+	return isDataUrl(value) || isHttpUrl(value) || isLocalUrl(value);
 }
 
 export function normalizeBoundedInt(value, fallback, min, max) {
@@ -33,7 +37,7 @@ export function validateImageArray(images, { minItems = 1, maxItems = 32, maxIte
 			return { ok: false, error: `images[${i}] must be a string` };
 		}
 		if (!isImageInput(image)) {
-			return { ok: false, error: `images[${i}] must be a data URL or http(s) URL` };
+			return { ok: false, error: `images[${i}] must be a data URL, http(s) URL or local library URL` };
 		}
 		if (image.length > maxItemChars) {
 			return { ok: false, error: `images[${i}] is too large` };

@@ -1,53 +1,43 @@
-import { enforceRateLimit } from '$lib/server/security.js';
+/**
+ * GET /api/3d/model-proxy?url=…
+ * Serves a 3D model from the local library, or proxies a remote one so the
+ * viewer never hits CORS problems.
+ */
+import { isLocalUrl, readLocalUrl } from '$lib/server/localFiles.js';
 
-const ALLOWED_HOSTS = new Set([
-	'firebasestorage.googleapis.com',
-	'storage.googleapis.com'
-]);
-
-function isAllowedRemoteUrl(raw) {
+function isRemoteHttp(raw) {
 	try {
 		const u = new URL(String(raw || ''));
-		if (u.protocol !== 'https:' && u.protocol !== 'http:') return false;
-		return ALLOWED_HOSTS.has(u.hostname);
+		return u.protocol === 'https:' || u.protocol === 'http:';
 	} catch {
 		return false;
 	}
 }
 
-export async function GET({ url, locals, fetch }) {
-	if (!locals.user) {
-		return new Response('Authentication required', { status: 401 });
-	}
-	const rate = enforceRateLimit({
-		uid: locals.user.uid,
-		routeKey: '3d-model-proxy',
-		maxRequests: 240,
-		windowMs: 60_000
-	});
-	if (!rate.allowed) {
-		return new Response('Rate limit exceeded', {
-			status: 429,
-			headers: { 'Retry-After': String(rate.retryAfterSec) }
+export async function GET({ url, fetch }) {
+	const remote = url.searchParams.get('url')?.trim() || '';
+
+	if (isLocalUrl(remote)) {
+		const file = readLocalUrl(remote);
+		if (!file) return new Response('Model not found', { status: 404 });
+		return new Response(file.buffer, {
+			status: 200,
+			headers: { 'Content-Type': file.mimeType, 'Cache-Control': 'no-cache' }
 		});
 	}
 
-	const remote = url.searchParams.get('url')?.trim() || '';
-	if (!isAllowedRemoteUrl(remote)) {
-		return new Response('Invalid or disallowed model URL', { status: 400 });
+	if (!isRemoteHttp(remote)) {
+		return new Response('Invalid model URL', { status: 400 });
 	}
-
 	const upstream = await fetch(remote);
 	if (!upstream.ok) {
 		return new Response(`Upstream fetch failed (${upstream.status})`, { status: 502 });
 	}
 	const body = await upstream.arrayBuffer();
-	const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
-
 	return new Response(body, {
 		status: 200,
 		headers: {
-			'Content-Type': contentType,
+			'Content-Type': upstream.headers.get('content-type') || 'application/octet-stream',
 			'Cache-Control': 'public, max-age=300'
 		}
 	});
