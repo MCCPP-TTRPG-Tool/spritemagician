@@ -5,10 +5,10 @@
 	import { jobQueue } from '$lib/stores/jobQueue.js';
 	import { completedJobs } from '$lib/stores/completedJobs.js';
 	import FrameUpload from './FrameUpload.svelte';
-	import { extractFrames } from '$lib/utils/videoFrameExtractor.js';
-	import { pixelateFrames } from '$lib/utils/pixelate.js';
-	import { addCanvasPadding } from '$lib/utils/canvasPadding.js';
-	import { cleanupBackgrounds, detectGreenArtifacts } from '$lib/utils/backgroundCleanup.js';
+	import { finalizeVideo, waitForJob, buildWanPrompt } from '$lib/animation/pipeline.js';
+	import { prepareWanInput } from '$lib/animation/wanCanvas.js';
+	import { POSE_PRESETS } from '$lib/animation/presets.js';
+	import { onMount } from 'svelte';
 	import { clampImageLongEdge } from '$lib/utils/imagePrep.js';
 	import { CHROMA_KEY_HEX, CHROMA_KEY_TOLERANCE } from '$lib/constants/chromaKey.js';
 	import { activeAssetStore } from '$lib/stores/activeAsset.js';
@@ -69,7 +69,6 @@
 	let frameTargetMode = $state('auto'); // 'auto' | 'manual'
 	let manualFrameCount = $state(16);
 	let inputLongEdge = $state(1024); // Cap source image long edge before video generation
-	const USE_HYBRID_BG_REMOVAL = false; // Forced rollback: always use full rembg pass
 	
 	function handleEndFrameUpload(dataUrl) {
 		endFrame = dataUrl;
@@ -90,165 +89,20 @@
 		}
 	});
 	
-	// HoMM3 pixel art style animation prompts
-	// CRITICAL: Maintain pixel art style, no smoothing, preserve crisp pixels
-	const HOMM3_STYLE = `Heroes of Might and Magic 3 pixel art style, high quality pixelated sprite, crisp pixels, no smoothing, no anti-aliasing blur, maintain pixel art aesthetic, solid chroma key lime background (${CHROMA_KEY_HEX}), isolated character, reserve ${CHROMA_KEY_HEX} for background only and never on the subject`;
-	const WAN_MOTION_STABILITY = 'stable camera framing, stable exposure, constant white balance, smooth temporal coherence, no frame-to-frame pose popping, consistent character proportions and costume details';
-	const WAN_NOISE_SUPPRESSION = 'no flicker, no brightness pulsing, no color shift, no temporal jitter, no texture shimmer, no crawling noise, no ghosting, no double edges, no random morphing, no explosions, no random fire bursts, no particle storms, no dramatic lens flare, no screen-wide energy effects';
-	const withWanPreset = (directive) => `${HOMM3_STYLE}, ${directive}, ${WAN_MOTION_STABILITY}, ${WAN_NOISE_SUPPRESSION}`;
-	
-	const posePresets = [
-		{
-			id: 'bust_idle_peaceful',
-			name: 'Bust - Peaceful Idle (Locked)',
-			description: withWanPreset('CHEST-UP CHARACTER BUST ONLY. Single locked-off shot. The character remains peaceful and silent, with a closed relaxed mouth throughout. Motion is limited to one very gentle breathing cycle in the upper chest and shoulders, one slow natural blink, and imperceptible head balance correction. Keep head position, face, shoulders, crop, and silhouette fixed. No speech, no lip motion, no expression change, no head turn, no body sway, no camera movement, no zoom, no reframing')
-		},
-		{ 
-			id: 'idle', 
-			name: 'Idle - Classic', 
-			description: withWanPreset('idle loop, feet planted, micro knee flex and release only (very small amplitude), tiny up/down body bob, micro breathing in chest and shoulders, slight hip weight shift, tiny head balance corrections, occasional soft blink, no mouth motion, no crouching, no pose drift, exact same character scale throughout')
-		},
-		{
-			id: 'idle_soft_breath',
-			name: 'Idle - Soft Breath',
-			description: withWanPreset('very subtle idle breathing loop, gentle chest rise/fall at low amplitude, minimal knee flex and extension, tiny vertical settle each cycle, tiny shoulder settling, rare natural blink, no stepping, no camera movement, no crouch posture, smooth loop seam')
-		},
-		{
-			id: 'idle_alive_hero',
-			name: 'Idle - Alive Hero',
-			description: withWanPreset('alive idle loop, breathing plus slight torso sway left-right, shallow knee bend and rise, restrained up/down rhythm in pelvis and torso, tiny hand and finger micro-adjustments, subtle head counterbalance, no stepping, no body translation, avoid exaggerated crouch, loopable')
-		},
-		{
-			id: 'idle_lantern_sway',
-			name: 'Idle - Lantern Sway',
-			description: withWanPreset('idle while holding lantern, gentle breathing and body sway, very small knee dip and recover to drive subtle body bounce, lantern performs subtle delayed pendulum swing, secondary motion is restrained, feet stay planted, no silhouette drift, no crouching')
-		},
-		{
-			id: 'idle_battle_ready',
-			name: 'Idle - Battle Ready',
-			description: withWanPreset('combat idle with controlled motion, shallow compression and release cycle, knees bend and extend slightly each beat, torso rises and drops subtly, shoulders and guard arms perform active micro-adjustments, feet remain planted, avoid deep squat posture, do not animate only lantern glow or lighting effects, loopable')
-		},
-		{ 
-			id: 'cast', 
-			name: 'Cast Spell - Classic', 
-			description: withWanPreset('spellcasting loop, clear hand and arm casting gesture, controlled anticipation and release beats, maintain stable silhouette, keep any glow local to hands only, no large VFX')
-		},
-		{
-			id: 'cast_charge_release',
-			name: 'Cast Spell - Charge + Release',
-			description: withWanPreset('spell cast sequence, hands gather near chest, brief anticipation, deliberate release motion, controlled recovery to ready stance, no shockwave or explosion effects')
-		},
-		{
-			id: 'cast_channel_loop',
-			name: 'Cast Spell - Channel Loop',
-			description: withWanPreset('continuous channeling loop using repeated hand and torso rhythm, restrained recoil pulses, restrained cloth and hair secondary motion, keep visual effects minimal and local, no pose drift over loop')
-		},
-		{
-			id: 'cast_one_hand_sigil',
-			name: 'Cast Spell - One-Hand Sigil',
-			description: withWanPreset('one-hand casting motion, character traces a compact sigil with clear hand arc, quick snap release, clean recovery, readable silhouette, no large flashes')
-		},
-		{ 
-			id: 'attack', 
-			name: 'Attack - Classic', 
-			description: withWanPreset('single attack cycle, short anticipation, decisive weapon swing, clean follow-through, quick return to guard')
-		},
-		{
-			id: 'attack_quick_slash',
-			name: 'Attack - Quick Slash',
-			description: withWanPreset('fast slash attack, minimal wind-up, rapid strike arc, crisp impact beat, immediate reset, no motion smearing artifacts')
-		},
-		{
-			id: 'attack_heavy_strike',
-			name: 'Attack - Heavy Strike',
-			description: withWanPreset('heavy strike attack, deep wind-up, strong body torque and weight transfer, committed hit with heavier follow-through, then recover stance')
-		},
-		{
-			id: 'attack_combo_two_hit',
-			name: 'Attack - Combo 2-Hit',
-			description: withWanPreset('two-hit combo attack, first strike fast and sharp, second strike broader and heavier, distinct timing between hits, recover to ready pose')
-		},
-		{ 
-			id: 'walk', 
-			name: 'Walking - Classic', 
-			description: withWanPreset('walking cycle side view facing right, legs alternate stride, arms counter-swing naturally, smooth repeatable loop')
-		},
-		{
-			id: 'walk_in_place_clean',
-			name: 'Walking - In Place Clean',
-			description: withWanPreset('clean in-place walk cycle, stable torso rhythm, consistent cadence, centered framing, no translation drift, smooth loop')
-		},
-		{
-			id: 'walk_sneak',
-			name: 'Walking - Sneak',
-			description: withWanPreset('stealth in-place walk, short careful steps, lowered center of mass, restrained arm movement, alert head motion, controlled pacing')
-		},
-		{
-			id: 'walk_heavy_march',
-			name: 'Walking - Heavy March',
-			description: withWanPreset('heavy in-place march cycle, grounded footfall cadence, slight upper-body recoil on each step, firm arm swing, strong readable rhythm')
-		},
-		{
-			id: 'run_in_place_clean',
-			name: 'Running - In Place Clean',
-			description: withWanPreset('clean in-place run cycle, controlled alternating leg cadence, clear left-right contact order, arms counter-swing opposite legs, slight forward lean, stable torso and head, avoid erratic limb teleporting or frame-to-frame pose jumps, no translation drift')
-		},
-		{
-			id: 'run_sprint',
-			name: 'Running - Sprint',
-			description: withWanPreset('high-energy sprint in place with disciplined rhythm, powerful knee drive and leg extension, aggressive but repeatable arm pump, compact torso control, smooth frame continuity, no disjointed timing spikes, no chaotic limb jitter')
-		},
-		{
-			id: 'run_heavy_charge',
-			name: 'Running - Heavy Charge',
-			description: withWanPreset('heavy charge run cycle in place, strong grounded footfalls, visible recoil on each step with consistent beat timing, armored-weight momentum, upper-body stabilization, avoid random twitching and pose popping')
-		},
-		{ 
-			id: 'hit', 
-			name: 'Take Damage - Classic', 
-			description: withWanPreset('hit reaction, body recoils backward from impact, torso arches slightly, head snaps back, defensive arm raise, feet planted, quick recover to stance')
-		},
-		{
-			id: 'hit_light_flinch',
-			name: 'Take Damage - Light Flinch',
-			description: withWanPreset('light damage reaction, short torso and shoulder flinch, quick recoil and immediate regain of balance, short crisp timing')
-		},
-		{
-			id: 'hit_heavy_stagger',
-			name: 'Take Damage - Heavy Stagger',
-			description: withWanPreset('heavy damage reaction, strong backward recoil through chest and hips, brief unstable stagger, delayed recovery to ready pose')
-		},
-		{
-			id: 'hit_magic_shock',
-			name: 'Take Damage - Magic Shock',
-			description: withWanPreset('magic-shock hit reaction expressed through body movement, sudden jerk then brief limb tremor, subtle aftershock shake, recover while preserving silhouette consistency, no external blast effects')
-		},
-		{ 
-			id: 'death', 
-			name: 'Death - Classic', 
-			description: withWanPreset('death sequence, knees weaken, body collapses to ground with weighted timing, final still pose after impact, clear readability and no chaotic morphing')
-		},
-		{
-			id: 'death_forward_collapse',
-			name: 'Death - Forward Collapse',
-			description: withWanPreset('death animation with forward collapse, posture folds under loss of strength, controlled fall to ground, settles motionless')
-		},
-		{
-			id: 'death_backward_fall',
-			name: 'Death - Backward Fall',
-			description: withWanPreset('death with backward recoil, stagger, then full backward fall and final stillness, maintain clean silhouette and consistent scale')
-		},
-		{
-			id: 'death_arcane_dissolve',
-			name: 'Death - Arcane Dissolve',
-			description: withWanPreset('arcane death with brief freeze and controlled dissolve while posture collapses, subtle localized effect only, smooth temporal transition without bursts or popping artifacts')
-		},
-		{ 
-			id: 'custom', 
-			name: 'Custom', 
-			description: '' 
-		}
-	];
+	const posePresets = POSE_PRESETS;
+
+	// Batch + canvas options
+	let seedCount = $state(1); // 1 | 2 | 4 parallel seeds
+	let useWanCanvas = $state(true); // paint sprite on a 832×480 chroma canvas, crop back after
+	let costPerClipUsd = $state(0.05);
+	let batchErrors = $state([]);
+	onMount(async () => {
+		try {
+			const res = await fetch('/api/usage');
+			const data = await res.json();
+			costPerClipUsd = data?.models?.wan22?.costUsd ?? 0.05;
+		} catch { /* ignore */ }
+	});
 	
 	const ACTIVE_MODEL_ID = 'wan22';
 	
@@ -269,6 +123,8 @@
 				if (typeof parsed?.motionAmount === 'number') motionAmount = parsed.motionAmount;
 				if (typeof parsed?.shouldLoop === 'boolean') shouldLoop = parsed.shouldLoop;
 				if (typeof parsed?.perfectLoop === 'boolean') perfectLoop = parsed.perfectLoop;
+				if ([1, 2, 4].includes(Number(parsed?.seedCount))) seedCount = Number(parsed.seedCount);
+				if (typeof parsed?.useWanCanvas === 'boolean') useWanCanvas = parsed.useWanCanvas;
 				if (typeof parsed?.staticAssetLock === 'boolean') staticAssetLock = parsed.staticAssetLock;
 				if (typeof parsed?.selectedPose === 'string') selectedPose = parsed.selectedPose;
 				if (typeof parsed?.showAdvanced === 'boolean') showAdvanced = parsed.showAdvanced;
@@ -317,41 +173,6 @@
 		});
 	}
 
-	async function blendFrameDataUrls(baseDataUrl, targetDataUrl, alpha) {
-		const [a, b] = await Promise.all([loadImageDataUrl(baseDataUrl), loadImageDataUrl(targetDataUrl)]);
-		const width = a.naturalWidth || a.width;
-		const height = a.naturalHeight || a.height;
-		if (!width || !height) return baseDataUrl;
-
-		const canvas = document.createElement('canvas');
-		canvas.width = width;
-		canvas.height = height;
-		const ctx = canvas.getContext('2d');
-		if (!ctx) return baseDataUrl;
-
-		ctx.clearRect(0, 0, width, height);
-		ctx.globalAlpha = 1;
-		ctx.drawImage(a, 0, 0, width, height);
-		ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
-		ctx.drawImage(b, 0, 0, width, height);
-		ctx.globalAlpha = 1;
-		return canvas.toDataURL('image/png');
-	}
-
-	async function enforcePerfectLoop(frames) {
-		if (!frames || frames.length < 4) return frames || [];
-		const out = [...frames];
-		const seamWindow = Math.min(4, Math.max(2, Math.floor(out.length / 6)));
-		const startSlice = out.slice(0, seamWindow);
-		for (let i = 0; i < seamWindow; i++) {
-			const tailIndex = out.length - seamWindow + i;
-			const alpha = (i + 1) / (seamWindow + 1);
-			out[tailIndex] = await blendFrameDataUrls(out[tailIndex], startSlice[i], alpha);
-		}
-		// Hard-close the loop for guaranteed end->start continuity.
-		out[out.length - 1] = out[0];
-		return out;
-	}
 
 	$effect(() => {
 		if (perfectLoop && !shouldLoop) {
@@ -392,7 +213,9 @@
 					pixelateOutput,
 					pixelSize,
 					colorLevels,
-					canvasPadding
+					canvasPadding,
+					seedCount,
+					useWanCanvas
 				})
 			);
 		} catch {
@@ -427,291 +250,99 @@
 		}
 	}
 
-	async function pollProgress() {
-		if (!jobId) return;
-		
-		try {
-			const response = await fetch(`/api/generation-progress?jobId=${jobId}`);
-			if (response.ok) {
-				const data = await response.json();
-				progress = data;
-				
-				// Update job queue
-				if (queueJobId) {
-					jobQueue.updateJob(queueJobId, {
-						progress: data.totalFrames > 0 ? Math.round((data.currentFrame / data.totalFrames) * 100) : 0,
-						message: data.message || `Frame ${data.currentFrame}/${data.totalFrames}`
-					});
-				}
-				
-				// If video URL is returned, extract frames and remove backgrounds
-				if (data.status === 'completed' && data.videoUrl) {
-					if (progressPollInterval) {
-						clearInterval(progressPollInterval);
-						progressPollInterval = null;
-					}
-					
-					try {
-						// Step 1: Extract frames from video
-						progress = { ...progress, message: 'Extracting frames from video...' };
-						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: 'Extracting frames from video...' });
-						}
-						
-						console.log('Starting frame extraction from:', data.videoUrl);
-						let rawFrames = await extractFrames(data.videoUrl, targetFrameCount);
-						console.log(`Extracted ${rawFrames.length} frames`);
-						
-						if (!rawFrames || rawFrames.length === 0) {
-							throw new Error('No frames extracted from video');
-						}
-						
-					// Step 2: Loop shaping (standard ping-pong or strict perfect loop seam pass)
-					if (perfectLoop && rawFrames.length > 3) {
-						progress = { ...progress, message: 'Forcing perfect loop seam...' };
-						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: 'Forcing perfect loop seam...' });
-						}
-						rawFrames = await enforcePerfectLoop(rawFrames);
-						console.log(`Perfect loop enforced: ${rawFrames.length} frames`);
-					} else if (shouldLoop && rawFrames.length > 2) {
-						progress = { ...progress, message: 'Creating seamless loop...' };
-						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: 'Creating seamless loop...' });
-						}
-						// Take first half, then reverse for smooth loop back
-						const halfLength = Math.ceil(rawFrames.length / 2);
-						const firstHalf = rawFrames.slice(0, halfLength);
-						const secondHalf = rawFrames.slice(1, halfLength - 1).reverse();
-						rawFrames = [...firstHalf, ...secondHalf];
-						console.log(`Loop created: ${rawFrames.length} frames`);
-					}
-					
-					// Step 3: Remove backgrounds (if enabled)
-					let finalFrames = rawFrames;
-					
-					if (removeBackground) {
-						const totalFrames = rawFrames.length;
-						progress = {
-							...progress,
-							message: USE_HYBRID_BG_REMOVAL
-								? `Running chroma cleanup (${totalFrames} frames)...`
-								: `Removing background with rembg (${totalFrames} frames)...`
-						};
-						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, {
-								message: USE_HYBRID_BG_REMOVAL
-									? 'Running chroma cleanup + artifact scan...'
-									: 'Running rembg background removal...'
-							});
-						}
-						
-						const cleanedFrames = await removeBackgroundWithRembg(
-							rawFrames,
-							(done, total, phase) => {
-								if (phase === 'chroma') {
-									progress = { ...progress, message: `Chroma cleanup (${done}/${total})...` };
-									return;
-								}
-								progress = {
-									...progress,
-									message: USE_HYBRID_BG_REMOVAL
-										? `rembg fallback (${done}/${total})...`
-										: `rembg cleanup (${done}/${total})...`
-								};
-							}
-						);
-						
-						finalFrames = cleanedFrames;
-					}
-					
-				// Step 4: Pixelate frames (if enabled) - force pixel art look
-				if (pixelateOutput && finalFrames.length > 0) {
-						const totalFrames = finalFrames.length;
-						progress = { ...progress, message: `Pixelating frames (0/${totalFrames})...` };
-						
-						if (queueJobId) {
-							jobQueue.updateJob(queueJobId, { message: `Pixelating frames...` });
-						}
-						
-						finalFrames = await pixelateFrames(finalFrames, pixelSize, colorLevels, (done, total) => {
-							progress = { ...progress, message: `Pixelating frames (${done}/${total})...` };
-						});
-						
-						console.log(`Pixelated ${finalFrames.length} frames with pixel size ${pixelSize}, ${colorLevels} colors`);
-					}
-						
-					// Add to completed jobs for user to review
-					const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
-					console.log(`Adding animation to completed jobs: ${poseName} with ${finalFrames.length} frames`);
-					
-					const completedJobId = await completedJobs.addAnimation({
-						name: poseName,
-						frames: finalFrames,
-						pose: selectedPose,
-						fps: project.fps
-					});
-					
-					// AUTO-SAVE: Add frames directly to the project
-					projectStore.update(p => ({
-						...p,
-						frames: finalFrames,
-						prompt: poseName
-					}));
-					console.log(`Auto-saved ${finalFrames.length} frames to project`);
-					
-					progress = { ...progress, status: 'completed', message: `Done! ${finalFrames.length} frames ready.` };
-					
-					// Mark job as complete
-					if (queueJobId) {
-						jobQueue.completeJob(queueJobId, { frameCount: finalFrames.length });
-					}
-
-					// Broadcast completion directly from generation flow so UI tab changes
-					// still happen even when JobsPanel is not mounted.
-					if (typeof window !== 'undefined') {
-						window.dispatchEvent(new CustomEvent('animationCompleted'));
-						window.dispatchEvent(
-							new CustomEvent('jobsAnimationSelected', {
-								detail: {
-									jobId: completedJobId,
-									label: poseName
-								}
-							})
-						);
-					}
-						
-					} catch (extractError) {
-						console.error('Frame processing failed:', extractError);
-						const errorMsg = extractError.message || 'Unknown extraction error';
-						generationError = 'Failed to process frames: ' + errorMsg;
-						progress = { ...progress, status: 'error', message: errorMsg };
-						
-						// Still add to completed jobs with the video URL so user can see something
-						const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
-						await completedJobs.addAnimation({
-							name: `${poseName} (video only)`,
-							frames: [], // Empty frames
-							videoUrl: data.videoUrl, // Store the video URL
-							pose: selectedPose,
-							fps: project.fps,
-							error: errorMsg
-						});
-						
-						// Mark job as failed but still accessible
-						if (queueJobId) {
-							jobQueue.failJob(queueJobId, `Extraction failed - video saved`);
-						}
-					}
-					
-					isGenerating = false;
-				}
-
-				if (canvasPadding > 0 && finalFrames.length > 0) {
-					const totalFrames = finalFrames.length;
-					progress = { ...progress, message: `Adding ${canvasPadding}px transparent padding (0/${totalFrames})...` };
-					if (queueJobId) jobQueue.updateJob(queueJobId, { message: `Adding ${canvasPadding}px canvas padding...` });
-					finalFrames = await addCanvasPadding(finalFrames, canvasPadding, (done, total) => {
-						progress = { ...progress, message: `Adding ${canvasPadding}px transparent padding (${done}/${total})...` };
-					});
-				}
-				
-				// If frames are directly included
-				if (data.frames && data.frames.length > 0) {
-					projectStore.update(p => ({
-						...p,
-						frames: data.frames,
-						prompt: prompt
-					}));
-				}
-				
-				// Stop polling on completion or error
-				if (data.status === 'completed' || data.status === 'error') {
-					if (progressPollInterval) {
-						clearInterval(progressPollInterval);
-						progressPollInterval = null;
-					}
-					if (data.status === 'error') {
-						generationError = data.message;
-					}
-					isGenerating = false;
-				}
-			}
-		} catch (error) {
-			console.error('Progress poll error:', error);
-		}
+	function effectiveMotion() {
+		const isRunningPreset = selectedPose.startsWith('run_');
+		const isIdlePreset = selectedPose === 'bust_idle_peaceful' || selectedPose === 'idle' || selectedPose.startsWith('idle_');
+		if (selectedPose === 'idle_battle_ready') return Math.max(82, Math.min(96, Number(motionAmount) || 88));
+		if (selectedPose === 'bust_idle_peaceful') return 20;
+		if (isIdlePreset) return Math.max(70, Math.min(90, Number(motionAmount) || 82));
+		if (isRunningPreset) return Math.max(88, Math.min(118, Number(motionAmount) || 100));
+		return motionAmount;
 	}
 
-	async function runRembgBatches(frames, frameIndexes, onProgress) {
-		const output = [...frames];
-		const batchSize = 4;
-		let rembgProcessed = 0;
-
-		for (let i = 0; i < frameIndexes.length; i += batchSize) {
-			const end = Math.min(i + batchSize, frameIndexes.length);
-			const indexBatch = frameIndexes.slice(i, end);
-			const batch = indexBatch.map((idx) => output[idx]);
-			const response = await fetch('/api/remove-background', {
+	/** One generation run (one seed): submit → wait → post-process → file. */
+	async function runOne({ runSeed, index, total, poseName, referenceForModel, endForRun, finalPrompt, modelForRun, lockedInterpolation, wanInput, totalFrameCount }) {
+		const label = total > 1 ? `${poseName} · seed ${runSeed}` : poseName;
+		const qid = jobQueue.addJob({ type: 'Animation', kind: 'animation', origin: 'animate', name: label, status: 'processing', message: 'Submitting...' });
+		const report = (message) => {
+			if (index === 0) progress = { ...progress, status: 'processing', message };
+			jobQueue.updateJob(qid, { message });
+		};
+		try {
+			const isRunningPreset = selectedPose.startsWith('run_');
+			const effectiveGuidanceScale = isRunningPreset && (guidanceScale == null || guidanceScale < 8) ? 8 : guidanceScale;
+			const response = await fetch('/api/generate-animation', {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ images: batch })
+				body: JSON.stringify({
+					referenceImage: referenceForModel,
+					endImage: endForRun,
+					prompt: finalPrompt,
+					pose: selectedPose,
+					frameCount: totalFrameCount,
+					duration,
+					motionAmount: effectiveMotion(),
+					fps: project.fps,
+					loop: shouldLoop || perfectLoop,
+					perfectLoop,
+					staticAssetMode: staticAssetLock,
+					model: modelForRun,
+					interpolate: lockedInterpolation,
+					guidanceScale: effectiveGuidanceScale,
+					seed: runSeed,
+					negativePrompt,
+					...(lockedInterpolation && {
+						flfDurationSeconds, flfInferenceSteps, flfGuidanceScale, flfGuidanceScale2, flfShift,
+						flfSeed: runSeed ?? flfSeed, flfNegativePrompt
+					})
+				})
 			});
 			const data = await response.json();
-			if (!response.ok) {
-				throw new Error(data?.error || 'rembg background removal failed');
-			}
-			if (!data?.images || !Array.isArray(data.images)) {
-				throw new Error('rembg returned invalid response');
-			}
+			if (!response.ok) throw new Error(data.error || 'Generation failed');
+			if (!data.jobId) throw new Error('No jobId returned from server');
 
-			for (let j = 0; j < indexBatch.length; j++) {
-				const frameIndex = indexBatch[j];
-				output[frameIndex] = data.images[j] || output[frameIndex];
-				rembgProcessed++;
-				if (onProgress) onProgress(rembgProcessed, frameIndexes.length, 'rembg');
-			}
-		}
-
-		return output;
-	}
-
-	async function removeBackgroundWithRembg(frames, onProgress) {
-		if (!USE_HYBRID_BG_REMOVAL) {
-			return runRembgBatches(frames, frames.map((_, i) => i), onProgress);
-		}
-
-		const total = frames.length;
-		const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
-		const output = await cleanupBackgrounds(
-			frames,
-			70,
-			(done, count) => {
-				if (onProgress) onProgress(done, count, 'chroma');
-			},
-			true,
-			{
-				chromaKeyHex: activeChroma,
-				chromaTolerance: CHROMA_KEY_TOLERANCE,
-				chromaOnly: true
-			}
-		);
-
-		const flaggedFrameIndexes = [];
-		for (let i = 0; i < output.length; i++) {
-			const artifact = await detectGreenArtifacts(output[i], {
-				chromaKeyHex: activeChroma,
-				edgeSpillThreshold: 0.03,
-				opaqueGreenThreshold: 0.005
+			const { videoUrl } = await waitForJob(data.jobId, {
+				onProgress: (pr) => {
+					if (index === 0) progress = pr;
+					jobQueue.updateJob(qid, {
+						progress: pr.totalFrames > 0 ? Math.round((pr.currentFrame / pr.totalFrames) * 100) : 0,
+						message: pr.message || 'Generating...'
+					});
+				}
 			});
-			if (artifact.isArtifact) flaggedFrameIndexes.push(i);
-		}
 
-		if (flaggedFrameIndexes.length === 0) {
-			return output;
-		}
+			let frames;
+			try {
+				frames = await finalizeVideo({
+					videoUrl,
+					targetFrameCount: totalFrameCount,
+					crop: wanInput?.crop,
+					original: wanInput?.original,
+					loopMode: perfectLoop ? 'perfect' : shouldLoop ? 'pingpong' : 'none',
+					removeBackground,
+					pixelate: { enabled: pixelateOutput, pixelSize, colorLevels },
+					canvasPadding,
+					onProgress: report
+				});
+			} catch (extractError) {
+				await completedJobs.addAnimation({ name: `${label} (video only)`, frames: [], videoUrl, pose: selectedPose, fps: project.fps, error: extractError.message });
+				throw new Error('Failed to process frames: ' + extractError.message);
+			}
 
-		console.log(`[GenerationPanel] BG cleanup fallback: ${flaggedFrameIndexes.length}/${total} frames sent to rembg`);
-		return runRembgBatches(output, flaggedFrameIndexes, onProgress);
+			const completedJobId = await completedJobs.addAnimation({ name: label, frames, pose: selectedPose, fps: project.fps, seed: runSeed });
+			if (index === 0) {
+				projectStore.update((pj) => ({ ...pj, frames, prompt: label }));
+				if (typeof window !== 'undefined') {
+					window.dispatchEvent(new CustomEvent('animationCompleted'));
+					window.dispatchEvent(new CustomEvent('jobsAnimationSelected', { detail: { jobId: completedJobId, label } }));
+				}
+			}
+			jobQueue.completeJob(qid, { frameCount: frames.length });
+			return frames;
+		} catch (err) {
+			jobQueue.failJob(qid, err.message);
+			throw err;
+		}
 	}
 
 	async function generateFrames() {
@@ -719,136 +350,68 @@
 			generationError = 'Reference image is required. Upload your sprite first.';
 			return;
 		}
-
 		const lockedInterpolation = staticAssetLock ? true : useInterpolation;
-		const lockedEndFrame = staticAssetLock
-			? (endFrame || project.firstFrame)
-			: endFrame;
-
+		const lockedEndFrame = staticAssetLock ? (endFrame || project.firstFrame) : endFrame;
 		if (lockedInterpolation && !lockedEndFrame) {
 			generationError = 'End frame is required for interpolation mode. Upload an end frame.';
+			return;
+		}
+		const posePrompt = prompt.trim();
+		if (!posePrompt) {
+			generationError = 'Enter an animation prompt. It will be sent to the model exactly as typed.';
 			return;
 		}
 
 		isGenerating = true;
 		generationError = null;
-		// When interpolating, use FLF duration (not the general slider) so frame extraction matches
-		const effectiveDuration = useInterpolation ? flfDurationSeconds : duration;
+		batchErrors = [];
 		const totalFrameCount = targetFrameCount;
-		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: `Starting ${effectiveDuration}s animation...` };
-		jobId = null;
-
-		// Add job to queue
-		const poseName = posePresets.find(p => p.id === selectedPose)?.name || selectedPose;
-		queueJobId = jobQueue.addJob({
-			type: 'Animation',
-			kind: 'animation',
-			origin: 'animate',
-			name: poseName,
-			status: 'processing',
-			message: `Starting ${effectiveDuration}s animation...`
-		});
-
-		// Clear existing frames
-		projectStore.update(p => ({ ...p, frames: [] }));
+		progress = { currentFrame: 0, totalFrames: totalFrameCount, status: 'starting', message: 'Preparing input...' };
+		const poseName = posePresets.find((pp) => pp.id === selectedPose)?.name || selectedPose;
+		projectStore.update((pj) => ({ ...pj, frames: [] }));
 
 		try {
 			const normalizedLongEdge = Number(inputLongEdge) || 1024;
 			const sourceImage = await clampImageLongEdge(project.firstFrame, normalizedLongEdge);
-			const sourceEndImage = lockedInterpolation && lockedEndFrame
-				? await clampImageLongEdge(lockedEndFrame, normalizedLongEdge)
-				: null;
+			const sourceEndImage = lockedInterpolation && lockedEndFrame ? await clampImageLongEdge(lockedEndFrame, normalizedLongEdge) : null;
+			const activeChroma = $activeAssetStore?.chromaKeyHex || CHROMA_KEY_HEX;
 
-			// Calculate frame count from effective duration and FPS
-			const requestedFrameCount = targetFrameCount;
-			
-			const posePrompt = prompt;
-			if (!posePrompt.trim()) {
-				throw new Error('Enter an animation prompt. It will be sent to Wan exactly as typed.');
+			// Paint the sprite large on a 16:9 chroma canvas so the model sees detail; crop back later.
+			let wanInput = null;
+			let referenceForModel = sourceImage;
+			const canvasMode = useWanCanvas && !lockedInterpolation;
+			if (canvasMode) {
+				wanInput = await prepareWanInput(sourceImage, { chromaHex: activeChroma });
+				referenceForModel = wanInput.dataUrl;
 			}
-			
-			// Use animation endpoint
-			const isRunningPreset = selectedPose.startsWith('run_');
-			const isIdlePreset = selectedPose === 'bust_idle_peaceful' || selectedPose === 'idle' || selectedPose.startsWith('idle_');
-			const effectiveMotionAmount = (() => {
-				if (selectedPose === 'idle_battle_ready') {
-					const raw = Number(motionAmount) || 88;
-					return Math.max(82, Math.min(96, raw));
-				}
-				if (selectedPose === 'bust_idle_peaceful') return 20;
-				if (isIdlePreset) {
-					const raw = Number(motionAmount) || 82;
-					return Math.max(70, Math.min(90, raw));
-				}
-				if (isRunningPreset) {
-					// Running gets unstable when motion is too low (stiff) or too high (chaotic).
-					const raw = Number(motionAmount) || 100;
-					return Math.max(88, Math.min(118, raw));
-				}
-				return motionAmount;
-			})();
-			const effectiveGuidanceScale =
-				isRunningPreset && (guidanceScale == null || guidanceScale < 8) ? 8 : guidanceScale;
-			const response = await fetch('/api/generate-animation', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({
-					referenceImage: sourceImage,
-					endImage: lockedInterpolation ? sourceEndImage : null,
-					prompt: posePrompt,
-					pose: selectedPose,
-					frameCount: requestedFrameCount,
-					duration: duration,
-					motionAmount: effectiveMotionAmount,
-					fps: project.fps,
-					loop: shouldLoop || perfectLoop,
-					perfectLoop,
-					staticAssetMode: staticAssetLock,
-					model: ACTIVE_MODEL_ID,
-					interpolate: lockedInterpolation,
-					// Standard advanced settings (non-FLF models)
-					guidanceScale: effectiveGuidanceScale,
-					seed: seed,
-					negativePrompt: negativePrompt,
-					// FLF-specific parameters (interpolation mode only)
-					...(lockedInterpolation && {
-						flfDurationSeconds: flfDurationSeconds,
-						flfInferenceSteps: flfInferenceSteps,
-						flfGuidanceScale: flfGuidanceScale,
-						flfGuidanceScale2: flfGuidanceScale2,
-						flfShift: flfShift,
-						flfSeed: flfSeed,
-						flfNegativePrompt: flfNegativePrompt
-					})
-				})
-			});
+			const finalPrompt = canvasMode ? buildWanPrompt(posePrompt, activeChroma) : posePrompt;
+			// Perfect loop: anchor first and last frame to the same image via Wan 2.7 FLF.
+			const modelForRun = perfectLoop && !lockedInterpolation ? 'wan27' : ACTIVE_MODEL_ID;
+			const endForRun = lockedInterpolation ? sourceEndImage : perfectLoop ? referenceForModel : null;
 
-			const data = await response.json();
+			const total = Math.max(1, Math.min(4, Number(seedCount) || 1));
+			const seeds = total > 1
+				? Array.from({ length: total }, () => Math.floor(Math.random() * 2147483647))
+				: [seed];
 
-			if (!response.ok) {
-				throw new Error(data.error || 'Generation failed');
+			const results = await Promise.allSettled(
+				seeds.map((runSeed, index) =>
+					runOne({ runSeed, index, total, poseName, referenceForModel, endForRun, finalPrompt, modelForRun, lockedInterpolation, wanInput, totalFrameCount })
+				)
+			);
+			const failures = results.filter((r) => r.status === 'rejected').map((r) => r.reason?.message || 'Failed');
+			batchErrors = failures;
+			if (failures.length === results.length) {
+				generationError = failures[0];
+				progress = { ...progress, status: 'error', message: failures[0] };
+			} else {
+				const ok = results.length - failures.length;
+				progress = { ...progress, status: 'completed', message: total > 1 ? `Done: ${ok}/${total} seeds ready in Jobs.` : 'Done! Frames ready.' };
 			}
-
-			jobId = data.jobId;
-			
-			if (!jobId) {
-				throw new Error('No jobId returned from server');
-			}
-
-			// Start polling
-			progressPollInterval = setInterval(pollProgress, 1000);
-			await pollProgress();
-			
 		} catch (error) {
 			generationError = error.message;
-			if (progressPollInterval) {
-				clearInterval(progressPollInterval);
-				progressPollInterval = null;
-			}
-			// Mark job as failed
-			if (queueJobId) {
-				jobQueue.failJob(queueJobId, error.message);
-			}
+			progress = { ...progress, status: 'error', message: error.message };
+		} finally {
 			isGenerating = false;
 		}
 	}
@@ -977,6 +540,24 @@
 			<label class="flex items-center gap-1 text-amber-700" title="For buildings/scenery. Locks object position and orientation."><input type="checkbox" bind:checked={staticAssetLock} class="w-3 h-3" />📌 Static Lock</label>
 		</div>
 	</div>
+
+	<div class="flex flex-wrap items-center gap-2 text-[11px] text-gray-700">
+		<label class="flex items-center gap-1" title="Generate several takes with different seeds and pick the best in Jobs">
+			🎲 Seeds
+			<select bind:value={seedCount} class="px-1 py-0.5 border rounded text-[11px]">
+				<option value={1}>1</option>
+				<option value={2}>2</option>
+				<option value={4}>4</option>
+			</select>
+		</label>
+		<label class="flex items-center gap-1" title="Paint the sprite large on a 832×480 chroma canvas, then crop back. Much sharper output.">
+			<input type="checkbox" bind:checked={useWanCanvas} class="w-3 h-3" />🖼 Canvas prep
+		</label>
+		<span class="ml-auto text-gray-500">≈ ${(costPerClipUsd * (perfectLoop && !useInterpolation ? 8 : 1) * Math.max(1, Number(seedCount) || 1)).toFixed(2)} per run</span>
+	</div>
+	{#if batchErrors.length > 0 && batchErrors.length < Number(seedCount)}
+		<p class="text-[10px] text-amber-700">{batchErrors.length} of {seedCount} seeds failed: {batchErrors[0]}</p>
+	{/if}
 
 	<!-- Primary action kept high in layout -->
 	<button

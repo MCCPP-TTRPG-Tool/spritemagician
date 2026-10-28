@@ -7,6 +7,8 @@
  */
 import { createHash } from 'node:crypto';
 import { approxJsonBytes } from '$lib/server/security.js';
+import * as db from './db.js';
+import { estimateRouteCost } from './models.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const MAX_STORED_RESPONSE_BYTES = 64 * 1024;
@@ -78,8 +80,13 @@ export async function failIdempotentRequest({ uid, routeKey, idempotencyKey, req
 	});
 }
 
-/** No-op locally. Kept so routes do not need to change. */
-export async function recordUsageEvent() {}
+/** Locally this only feeds the cost estimate shown in the UI. */
+export async function recordUsageEvent({ routeKey, success = true, statusCode = 200, metadata = {} } = {}) {
+	if (!routeKey || !success || statusCode >= 400) return;
+	if (['generate-animation', 'remove-background', 'upscale', 'live-portrait', 'generate-sprite', 'generate-frames', 'generate-character-sheet', 'generate-styled-character', 'edit-image', 'design-chat'].includes(routeKey)) {
+		try { recordSpend(routeKey, metadata, Number(metadata?.count) || 1); } catch (err) { console.warn('[usage]', err?.message); }
+	}
+}
 
 export async function registerRunpodJobOwnership({ uid, runpodId, routeKey = 'unknown', metadata = {} }) {
 	if (!uid || !isValidRunpodId(runpodId)) return;
@@ -90,4 +97,32 @@ export async function hasRunpodJobOwnership({ uid, runpodId }) {
 	if (!uid || !isValidRunpodId(runpodId)) return false;
 	const rec = runpodJobs.get(runpodId);
 	return !!rec && rec.expiresAt > Date.now();
+}
+
+// ── Spend tracking (estimates) ───────────────────────────────────────────
+
+const USAGE_COL = 'usage';
+const USAGE_ID = 'totals';
+
+export function getUsageTotals() {
+	return db.getDoc(USAGE_COL, USAGE_ID) || { id: USAGE_ID, spentUsd: 0, runs: 0, byRoute: {}, since: new Date().toISOString() };
+}
+
+export function resetUsageTotals() {
+	db.setDoc(USAGE_COL, USAGE_ID, { spentUsd: 0, runs: 0, byRoute: {}, since: new Date().toISOString() });
+}
+
+/** Add an estimated cost for a successful provider call. */
+export function recordSpend(routeKey, metadata = {}, count = 1) {
+	const cost = estimateRouteCost(routeKey, metadata) * count;
+	if (!cost) return;
+	const t = getUsageTotals();
+	const byRoute = { ...(t.byRoute || {}) };
+	byRoute[routeKey] = Number(((byRoute[routeKey] || 0) + cost).toFixed(4));
+	db.setDoc(USAGE_COL, USAGE_ID, {
+		spentUsd: Number(((t.spentUsd || 0) + cost).toFixed(4)),
+		runs: (t.runs || 0) + count,
+		byRoute,
+		since: t.since || new Date().toISOString()
+	});
 }

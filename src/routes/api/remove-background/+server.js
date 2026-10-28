@@ -153,7 +153,7 @@ export async function POST({ request, locals }) {
 			provider: 'replicate',
 			statusCode: 200,
 			requestBytes: payloadBytes,
-			metadata: { imageCount: images.length }
+			metadata: { imageCount: images.length, count: images.length }
 		});
 		return json(responseBody);
 

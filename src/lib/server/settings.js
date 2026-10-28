@@ -39,7 +39,14 @@ export const KEY_DEFINITIONS = [
 	{ name: 'RUNPOD_KONTEXT_IMAGE_ENDPOINT_ID', label: 'RunPod Kontext endpoint ID', group: 'Self-hosted (advanced)', secret: false },
 	{ name: 'RUNPOD_QWEN_IMAGE_ENDPOINT_ID', label: 'RunPod Qwen image endpoint ID', group: 'Self-hosted (advanced)', secret: false },
 	{ name: 'POSE_ENDPOINT_ID', label: 'RunPod pose endpoint ID', group: 'Self-hosted (advanced)', secret: false },
-	{ name: 'RUNPOD_WORKFLOW_FILE', label: 'RunPod workflow file', group: 'Self-hosted (advanced)', secret: false }
+	{ name: 'RUNPOD_WORKFLOW_FILE', label: 'RunPod workflow file', group: 'Self-hosted (advanced)', secret: false },
+	{
+		name: 'COMFYUI_URL',
+		label: 'ComfyUI server URL',
+		group: 'Local models (advanced)',
+		secret: false,
+		help: 'Run video generation on your own GPU. Default http://127.0.0.1:8188. Save an API-format workflow as <data dir>/workflows/wan-i2v.json using {{IMAGE}}, {{PROMPT}}, {{SEED}}, {{NUM_FRAMES}} placeholders, then pick the ComfyUI backend below.'
+	}
 ];
 
 const KEY_NAMES = new Set(KEY_DEFINITIONS.map((k) => k.name));

@@ -29,6 +29,8 @@
 	let showSettingsModal = $state(false);
 	let recentFiles = $state([]);
 	let replicateConfigured = $state(true);
+	let prefs = $state({});
+	let spentUsd = $state(0);
 	let showDesignConversationsInCenter = $state(false);
 	let isSavingStill = $state(false);
 	let rightPanelNote = $state('');
@@ -509,13 +511,23 @@
 			const data = await res.json();
 			const rep = data.keys?.find((k) => k.name === 'REPLICATE_API_TOKEN');
 			replicateConfigured = !!rep?.configured;
+			prefs = data.preferences || {};
+			if (appMode === '3d' && !prefs.show3D) appMode = 'home';
+			try {
+				const u = await (await fetch('/api/usage')).json();
+				spentUsd = Number(u.spentUsd) || 0;
+			} catch { /* ignore */ }
 			if (!replicateConfigured && !localStorage.getItem('spritemagician_settings_prompted')) {
 				localStorage.setItem('spritemagician_settings_prompted', '1');
 				showSettingsModal = true;
 			}
 		} catch { /* ignore */ }
 	}
-	onMount(loadHome);
+	onMount(() => {
+		loadHome();
+		window.addEventListener('smPreferencesChanged', (e) => { prefs = e.detail || {}; });
+		window.addEventListener('animationCompleted', loadHome);
+	});
 	$effect(() => {
 		if (!showSettingsModal) loadHome();
 	});
@@ -715,7 +727,7 @@
 				2D
 			</button>
 			<button
-				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === '3d' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'}"
+				class="px-4 py-1.5 text-sm font-medium transition-colors {appMode === '3d' ? 'bg-blue-50 text-blue-700' : 'bg-white text-gray-600 hover:bg-gray-50'} {prefs.show3D ? '' : 'hidden'}"
 				onclick={() => appMode = '3d'}
 			>
 				3D
@@ -733,7 +745,7 @@
 				onclick={openSettingsModal}
 				title="API keys and storage location"
 			>
-				⚙️ Settings{#if !replicateConfigured}<span class="ml-1 inline-block w-2 h-2 rounded-full bg-amber-500 align-middle" title="No Replicate token yet"></span>{/if}
+				⚙️ Settings{#if spentUsd > 0}<span class="ml-1 text-[10px] text-gray-500" title="Estimated spend this period">≈${spentUsd.toFixed(2)}</span>{/if}{#if !replicateConfigured}<span class="ml-1 inline-block w-2 h-2 rounded-full bg-amber-500 align-middle" title="No Replicate token yet"></span>{/if}
 			</button>
 		</div>
 	</header>

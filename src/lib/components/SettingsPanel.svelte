@@ -82,7 +82,28 @@
 
 	const hasChanges = $derived(Object.keys(drafts).length > 0);
 
-	onMount(load);
+	let usage = $state(null);
+	async function loadUsage() {
+		try {
+			const res = await fetch('/api/usage');
+			usage = await res.json();
+		} catch { /* ignore */ }
+	}
+	async function resetUsage() {
+		await fetch('/api/usage', { method: 'DELETE' });
+		await loadUsage();
+	}
+	async function setPref(name, value) {
+		const res = await fetch('/api/settings', {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ preferences: { [name]: value } })
+		});
+		settings = await res.json();
+		window.dispatchEvent(new CustomEvent('smPreferencesChanged', { detail: settings.preferences }));
+	}
+
+	onMount(() => { load(); loadUsage(); });
 </script>
 
 <div class="space-y-4 text-sm">
@@ -146,6 +167,34 @@
 				</div>
 			</div>
 		{/each}
+
+		<div class="rounded-lg border border-gray-200 p-3">
+			<p class="text-xs font-semibold text-gray-800">App</p>
+			<div class="mt-2 space-y-2 text-xs text-gray-700">
+				<label class="flex items-center justify-between gap-3">
+					<span>Video backend</span>
+					<select class="rounded border border-gray-300 px-2 py-1 text-xs" value={settings.preferences?.videoBackend || 'replicate'} onchange={(e) => setPref('videoBackend', e.currentTarget.value)}>
+						<option value="replicate">Replicate (cloud, pay per run)</option>
+						<option value="comfyui">ComfyUI (your own GPU)</option>
+					</select>
+				</label>
+				<label class="flex items-center justify-between gap-3">
+					<span>Show experimental 3D tab</span>
+					<input type="checkbox" checked={!!settings.preferences?.show3D} onchange={(e) => setPref('show3D', e.currentTarget.checked)} />
+				</label>
+			</div>
+		</div>
+
+		<div class="rounded-lg border border-gray-200 p-3">
+			<p class="text-xs font-semibold text-gray-800">Estimated spend</p>
+			{#if usage}
+				<p class="mt-1 text-sm font-semibold text-gray-900">${(usage.spentUsd || 0).toFixed(2)} <span class="text-[11px] font-normal text-gray-500">over {usage.runs || 0} runs since {new Date(usage.since).toLocaleDateString()}</span></p>
+				<p class="text-[11px] text-gray-500 mt-1">Rough estimate from public list prices. Your provider dashboards are the source of truth.</p>
+				<button class="mt-2 rounded border border-gray-300 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50" onclick={resetUsage}>Reset counter</button>
+			{:else}
+				<p class="text-xs text-gray-500 mt-1">Loading…</p>
+			{/if}
+		</div>
 
 		<div class="flex items-center gap-3">
 			<button

@@ -21,6 +21,8 @@ import { env } from '$lib/server/env.js';
 import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generationProgress.js';
 import { resolveForProvider } from '$lib/server/localFiles.js';
 import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
+import { getPreference } from '$lib/server/settings.js';
+import { runVideoWorkflow, uploadImage as comfyUpload } from '$lib/server/comfyui.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -269,6 +271,26 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 			return;
 		}
 
+		// ── Local ComfyUI backend (user-supplied workflow) ───────────────────
+		if (getPreference('videoBackend') === 'comfyui') {
+			setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Uploading to ComfyUI...' });
+			const imageName = await comfyUpload(referenceImage);
+			const seconds = Math.max(1, Math.min(7.5, frameCount / Math.max(1, fps)));
+			const videoUrl = await runVideoWorkflow({
+				vars: {
+					IMAGE: imageName,
+					PROMPT: rawPrompt,
+					SEED: seed ?? Math.floor(Math.random() * 2147483647),
+					NUM_FRAMES: Math.max(17, Math.round(seconds * 16)),
+					FPS: 16
+				},
+				onTick: (status) => setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `ComfyUI: ${status}...` })
+			});
+			setProgress(jobId, { currentFrame: frameCount, totalFrames: frameCount, status: 'completed', message: 'ComfyUI video ready! Extracting frames...', videoUrl, loop: true, frames: [] });
+			setTimeout(() => clearProgress(jobId), 120000);
+			return;
+		}
+
 		// ── Standard I2V via Replicate ──────────────────────────────────────
 		const model = MODELS[modelId] || MODELS.wan22;
 
@@ -405,12 +427,18 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan22') {
-			const wanFrames = Math.min(121, Math.max(81, frameCount));
+			// Wan 2.2 is trained at 16 fps. Generate natively and let the client
+			// subsample to the sprite's fps; asking for 8 fps here produces slow,
+			// drifting motion. 81 frames (~5 s) is the model's sweet spot.
+			const WAN_NATIVE_FPS = 16;
+			const seconds = Math.max(1, Math.min(7.5, frameCount / Math.max(1, fps)));
+			const wanFrames = Math.min(121, Math.max(81, Math.round(seconds * WAN_NATIVE_FPS)));
 			input = {
 				prompt: rawPrompt,
 				image: imageUrl,
 				num_frames: wanFrames,
-				frames_per_second: fps,
+				frames_per_second: WAN_NATIVE_FPS,
+				resolution: '480p',
 				...(seed !== null && { seed: seed })
 			};
 		} else if (modelId === 'wan25') {
@@ -643,6 +671,7 @@ export async function POST({ request, locals }) {
 			routeKey: 'generate-animation',
 			provider: 'replicate',
 			statusCode: 200,
+			metadata: { modelId: String(modelId || 'wan22') },
 			requestBytes: payloadBytes,
 			metadata: {
 				interpolate: !!isInterpolation,
