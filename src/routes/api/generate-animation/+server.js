@@ -22,7 +22,7 @@ import { setProgress, clearProgress, setProgressOwner } from '$lib/utils/generat
 import { resolveForProvider } from '$lib/server/localFiles.js';
 import { waitForPrediction, toReplicateInput } from '$lib/server/replicate.js';
 import { getPreference } from '$lib/server/settings.js';
-import { runVideoWorkflow, uploadImage as comfyUpload } from '$lib/server/comfyui.js';
+import { runVideoWorkflow, uploadImage as comfyUpload, snapFrameCount, loadWorkflow as loadComfyWorkflow } from '$lib/server/comfyui.js';
 import { approxJsonBytes, enforceRateLimit } from '$lib/server/security.js';
 import {
 	beginIdempotentRequest,
@@ -273,6 +273,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 
 		// ── Local ComfyUI backend (user-supplied workflow) ───────────────────
 		if (getPreference('videoBackend') === 'comfyui') {
+			loadComfyWorkflow(); // seeds the bundled template on first use and fails early if it is missing
 			setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: 'Uploading to ComfyUI...' });
 			const imageName = await comfyUpload(referenceImage);
 			const seconds = Math.max(1, Math.min(7.5, frameCount / Math.max(1, fps)));
@@ -281,7 +282,7 @@ async function processAnimationAsync(jobId, referenceImage, prompt, frameCount, 
 					IMAGE: imageName,
 					PROMPT: rawPrompt,
 					SEED: seed ?? Math.floor(Math.random() * 2147483647),
-					NUM_FRAMES: Math.max(17, Math.round(seconds * 16)),
+					NUM_FRAMES: snapFrameCount(seconds * 16),
 					FPS: 16
 				},
 				onTick: (status) => setProgress(jobId, { currentFrame: 0, totalFrames: frameCount, status: 'processing', message: `ComfyUI: ${status}...` })

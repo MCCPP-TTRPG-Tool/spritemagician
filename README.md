@@ -55,6 +55,34 @@ Keys entered in Settings are saved to `<data dir>/settings.json` on your machine
 variables (see `.env.example`) work as a fallback for terminal use. You are billed directly by
 each provider.
 
+## Run Wan 2.2 on your own GPU (free, optional)
+
+Video generation can run locally through [ComfyUI](https://github.com/comfyanonymous/ComfyUI)
+instead of Replicate. A ready-made workflow for **Wan 2.2 TI2V 5B** ships with the app; it
+runs on a 12 GB NVIDIA card (8 GB works with `--lowvram`, slowly).
+
+1. Install ComfyUI and update it to a 2025-08 or newer build (needed for the Wan 2.2 nodes).
+2. Download the three model files from
+   [Comfy-Org/Wan_2.2_ComfyUI_Repackaged](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged)
+   into ComfyUI's `models/` folder:
+
+   | File | Goes in |
+   |---|---|
+   | `wan2.2_ti2v_5B_fp16.safetensors` | `models/diffusion_models/` |
+   | `umt5_xxl_fp8_e4m3fn_scaled.safetensors` | `models/text_encoders/` |
+   | `wan2.2_vae.safetensors` | `models/vae/` |
+
+3. Start ComfyUI (it listens on `http://127.0.0.1:8188`).
+4. In Sprite Magician open **Settings → App → Video backend** and choose **ComfyUI**.
+
+The first local run copies the bundled workflow to `<data dir>/workflows/wan-i2v.json`. Edit
+that file to change resolution, steps, or swap in the 14B model; the app only needs the
+`{{IMAGE}}`, `{{PROMPT}}`, `{{SEED}}`, `{{NUM_FRAMES}}` and `{{FPS}}` placeholders to stay
+in place. To use a different graph, build it in ComfyUI, export with **Save (API format)**,
+put the placeholders in, and save it over that file.
+
+Everything else (sprite generation, upscaling, background removal) still uses Replicate.
+
 ## How data is stored
 
 ```

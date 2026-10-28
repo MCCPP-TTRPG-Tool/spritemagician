@@ -11,6 +11,8 @@ files:
 extraResources:
   - from: static/Example images
     to: example-images
+  - from: workflows
+    to: workflows
 asar: true
 asarUnpack:
   - build/**

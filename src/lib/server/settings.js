@@ -45,7 +45,7 @@ export const KEY_DEFINITIONS = [
 		label: 'ComfyUI server URL',
 		group: 'Local models (advanced)',
 		secret: false,
-		help: 'Run video generation on your own GPU. Default http://127.0.0.1:8188. Save an API-format workflow as <data dir>/workflows/wan-i2v.json using {{IMAGE}}, {{PROMPT}}, {{SEED}}, {{NUM_FRAMES}} placeholders, then pick the ComfyUI backend below.'
+		help: 'Run Wan 2.2 video generation on your own GPU through ComfyUI. Default http://127.0.0.1:8188. A working workflow is copied to <data dir>/workflows/wan-i2v.json on first use; see the README for the model files to download. Then pick the ComfyUI backend below.'
 	}
 ];
 

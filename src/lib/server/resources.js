@@ -21,3 +21,13 @@ export function getStaticDir() {
 	if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
 	return path.resolve(process.cwd(), 'static');
 }
+
+/** Bundled ComfyUI workflow templates (copied into <dataDir>/workflows on first use). */
+export function getBundledWorkflowsDir() {
+	const fromEnv = process.env.SPRITEMAGICIAN_RESOURCES_DIR?.trim();
+	if (fromEnv) {
+		const packaged = path.join(fromEnv, 'workflows');
+		if (fs.existsSync(packaged)) return packaged;
+	}
+	return path.resolve(process.cwd(), 'workflows');
+}

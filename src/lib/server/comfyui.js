@@ -17,6 +17,11 @@ import { randomUUID } from 'node:crypto';
 import { getDataDir } from './paths.js';
 import { env } from './settings.js';
 import { saveBuffer, parseDataUrl, extForMime } from './localFiles.js';
+import { getBundledWorkflowsDir } from './resources.js';
+
+function unreachable(err) {
+	return `Could not reach ComfyUI at ${comfyBaseUrl()} (${err?.cause?.code || err?.message || 'network error'}). Start ComfyUI, or check the server URL in Settings.`;
+}
 
 export function comfyBaseUrl() {
 	return (env.COMFYUI_URL || 'http://127.0.0.1:8188').replace(/\/+$/, '');
@@ -26,10 +31,30 @@ export function workflowPath(name = 'wan-i2v') {
 	return path.join(getDataDir(), 'workflows', `${name}.json`);
 }
 
-export function loadWorkflow(name = 'wan-i2v') {
+/**
+ * Ensure <dataDir>/workflows/<name>.json exists, seeding it from the bundled
+ * template the first time so users have something that works to edit.
+ */
+export function ensureWorkflow(name = 'wan-i2v') {
 	const p = workflowPath(name);
+	if (fs.existsSync(p)) return { path: p, created: false };
+	const bundled = path.join(getBundledWorkflowsDir(), name + '.json');
+	if (!fs.existsSync(bundled)) return { path: p, created: false };
+	fs.mkdirSync(path.dirname(p), { recursive: true });
+	fs.copyFileSync(bundled, p);
+	return { path: p, created: true };
+}
+
+/** Wan 2.x models need 4k+1 frames. */
+export function snapFrameCount(n, min = 17, max = 121) {
+	const clamped = Math.max(min, Math.min(max, Math.round(Number(n) || min)));
+	return Math.max(min, Math.round((clamped - 1) / 4) * 4 + 1);
+}
+
+export function loadWorkflow(name = 'wan-i2v') {
+	const p = ensureWorkflow(name).path;
 	if (!fs.existsSync(p)) {
-		throw new Error(`ComfyUI workflow not found. Export your workflow in API format and save it as ${p}`);
+		throw new Error('ComfyUI workflow not found. Export your workflow in API format and save it as ' + p);
 	}
 	return JSON.parse(fs.readFileSync(p, 'utf8'));
 }
@@ -57,7 +82,12 @@ export async function uploadImage(dataUrl) {
 	const form = new FormData();
 	form.append('image', new Blob([Buffer.from(parsed.base64, 'base64')], { type: parsed.mimeType }), name);
 	form.append('overwrite', 'true');
-	const res = await fetch(`${comfyBaseUrl()}/upload/image`, { method: 'POST', body: form });
+	let res;
+	try {
+		res = await fetch(`${comfyBaseUrl()}/upload/image`, { method: 'POST', body: form });
+	} catch (err) {
+		throw new Error(unreachable(err));
+	}
 	if (!res.ok) throw new Error(`ComfyUI upload failed (${res.status})`);
 	const data = await res.json();
 	return data.name || name;
@@ -72,12 +102,17 @@ export async function runVideoWorkflow({ workflow = 'wan-i2v', vars, signal, max
 	const prompt = substitute(loadWorkflow(workflow), vars);
 	const clientId = randomUUID();
 
-	const queued = await fetch(`${base}/prompt`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify({ prompt, client_id: clientId }),
-		signal
-	});
+	let queued;
+	try {
+		queued = await fetch(`${base}/prompt`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ prompt, client_id: clientId }),
+			signal
+		});
+	} catch (err) {
+		throw new Error(unreachable(err));
+	}
 	if (!queued.ok) throw new Error(`ComfyUI rejected the workflow (${queued.status}): ${(await queued.text()).slice(0, 300)}`);
 	const { prompt_id: promptId } = await queued.json();
 	if (!promptId) throw new Error('ComfyUI returned no prompt id');
